@@ -3,6 +3,8 @@ dist/
 target/
 **/target/
 main
+services/go/mojaloop/mojaloop
+services/go/notification-dispatcher/switchos-notification-dispatcher
 .env
 .env.*
 *.log
