@@ -1,8 +1,12 @@
 package main
 
-import "fmt"
+import (
+	"fmt"
+	"sync"
+)
 
 type TigerBeetleClient struct {
+	mu       sync.Mutex
 	balances map[string]uint64
 }
 
@@ -13,6 +17,8 @@ func NewTigerBeetleClient() *TigerBeetleClient {
 }
 
 func (tbc *TigerBeetleClient) CreatePayerAccount(payerID string) error {
+	tbc.mu.Lock()
+	defer tbc.mu.Unlock()
 	if _, ok := tbc.balances[payerID]; !ok {
 		tbc.balances[payerID] = 1_000_000
 	}
@@ -20,6 +26,8 @@ func (tbc *TigerBeetleClient) CreatePayerAccount(payerID string) error {
 }
 
 func (tbc *TigerBeetleClient) CreatePayeeAccount(payeeID string) error {
+	tbc.mu.Lock()
+	defer tbc.mu.Unlock()
 	if _, ok := tbc.balances[payeeID]; !ok {
 		tbc.balances[payeeID] = 0
 	}
@@ -27,6 +35,8 @@ func (tbc *TigerBeetleClient) CreatePayeeAccount(payeeID string) error {
 }
 
 func (tbc *TigerBeetleClient) GetAccountBalance(accountID string) (uint64, error) {
+	tbc.mu.Lock()
+	defer tbc.mu.Unlock()
 	balance, ok := tbc.balances[accountID]
 	if !ok {
 		return 0, fmt.Errorf("account not found")
@@ -51,14 +61,17 @@ func (tbc *TigerBeetleClient) ProcessMojaloopTransfer(transferID string, payerID
 	if err := tbc.CreatePayeeAccount(payeeID); err != nil {
 		return err
 	}
-	hasBalance, err := tbc.VerifyBalance(payerID, amount)
-	if err != nil {
-		return fmt.Errorf("failed to verify balance for %s: %w", transferID, err)
+
+	tbc.mu.Lock()
+	defer tbc.mu.Unlock()
+	payerBalance, ok := tbc.balances[payerID]
+	if !ok {
+		return fmt.Errorf("failed to verify balance for %s: account not found", transferID)
 	}
-	if !hasBalance {
+	if payerBalance < amount {
 		return fmt.Errorf("insufficient balance")
 	}
-	tbc.balances[payerID] -= amount
+	tbc.balances[payerID] = payerBalance - amount
 	tbc.balances[payeeID] += amount
 	return nil
 }

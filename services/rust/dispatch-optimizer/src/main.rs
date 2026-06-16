@@ -161,10 +161,11 @@ async fn main() {
         .route("/eta", post(estimate_eta))
         .with_state(Arc::new(AppState::default()));
 
+    let bind_host = std::env::var("BIND_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
     let addr: SocketAddr = std::env::var("PORT")
         .ok()
-        .and_then(|port| format!("0.0.0.0:{}", port).parse().ok())
-        .unwrap_or_else(|| "0.0.0.0:8090".parse().expect("valid default addr"));
+        .and_then(|port| format!("{}:{}", bind_host, port).parse().ok())
+        .unwrap_or_else(|| "127.0.0.1:8090".parse().expect("valid default addr"));
 
     info!("dispatch optimizer listening on {}", addr);
     let listener = tokio::net::TcpListener::bind(addr).await.expect("bind listener");

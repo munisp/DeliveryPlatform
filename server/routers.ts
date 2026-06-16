@@ -1,20 +1,38 @@
 import { z } from "zod";
+
 import { publicProcedure, protectedProcedure, router } from "./_core/trpc";
 import { systemRouter } from "./_core/systemRouter";
 import {
-  getAnalyticsSummary,
   getDriverMobilityWorkspace,
-  getDriverStats,
-  getMarketplaceOverview,
   getMerchantChannelWorkspace,
-  getOrderStats,
   getPhoneOrderingWorkspace,
   getServiceRecoveryWorkspace,
   getTablesideWorkspace,
   getWhiteLabelAppsWorkspace,
+  getAnalyticsSummary as getWorkspaceAnalyticsSummary,
+  getDriverStats as getWorkspaceDriverStats,
+  getMarketplaceOverview as getWorkspaceMarketplaceOverview,
+  getOrderStats as getWorkspaceOrderStats,
 } from "./lib/platformWorkspaces";
+import {
+  getLakehouseAnalyticsSummary,
+  getLakehouseDriverStats,
+  getLakehouseMarketplaceOverview,
+  getLakehouseOrderStats,
+  syncLakehouseFromPostgres,
+} from "./lib/lakehouse";
 
 const listInput = z.object({ limit: z.number().min(1).max(25).optional() }).optional();
+
+async function withLakehouseFallback<T>(loader: () => Promise<T>, fallback: () => T | Promise<T>) {
+  try {
+    await syncLakehouseFromPostgres();
+    return await loader();
+  } catch (error) {
+    console.warn("[SwitchOS] Falling back from lakehouse-backed analytics:", error);
+    return fallback();
+  }
+}
 
 export const appRouter = router({
   system: systemRouter,
@@ -24,10 +42,10 @@ export const appRouter = router({
   }),
 
   analytics: router({
-    summary: protectedProcedure.query(() => getAnalyticsSummary()),
-    orderStats: protectedProcedure.query(() => getOrderStats()),
-    driverStats: protectedProcedure.query(() => getDriverStats()),
-    marketplaceOverview: protectedProcedure.query(() => getMarketplaceOverview()),
+    summary: protectedProcedure.query(() => withLakehouseFallback(() => getLakehouseAnalyticsSummary(), () => getWorkspaceAnalyticsSummary())),
+    orderStats: protectedProcedure.query(() => withLakehouseFallback(() => getLakehouseOrderStats(), () => getWorkspaceOrderStats())),
+    driverStats: protectedProcedure.query(() => withLakehouseFallback(() => getLakehouseDriverStats(), () => getWorkspaceDriverStats())),
+    marketplaceOverview: protectedProcedure.query(() => withLakehouseFallback(() => getLakehouseMarketplaceOverview(), () => getWorkspaceMarketplaceOverview())),
   }),
 
   driverMobility: router({

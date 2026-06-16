@@ -165,6 +165,7 @@ async fn main() {
         .init();
 
     let port = env::var("PORT").unwrap_or_else(|_| "8101".to_string());
+    let bind_host = env::var("BIND_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
     let state = Arc::new(AppState {
         service_name: "pricing-engine".to_string(),
     });
@@ -178,7 +179,9 @@ async fn main() {
         .route("/quote-marketplace", post(quote_marketplace))
         .with_state(state);
 
-    let addr = SocketAddr::from(([0, 0, 0, 0], port.parse().unwrap_or(8101)));
+    let addr: SocketAddr = format!("{}:{}", bind_host, port)
+        .parse()
+        .unwrap_or_else(|_| SocketAddr::from(([127, 0, 0, 1], 8101)));
     info!("starting pricing engine on {}", addr);
 
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();

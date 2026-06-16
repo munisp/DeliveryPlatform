@@ -60,6 +60,14 @@ const trpcClient = trpc.createClient({
   ],
 });
 
+if (typeof window !== "undefined" && "serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/sw.js").catch((error) => {
+      console.error("[SwitchOS] Service worker registration failed", error);
+    });
+  });
+}
+
 createRoot(rootElement).render(
   <React.StrictMode>
     <trpc.Provider client={trpcClient} queryClient={queryClient}>

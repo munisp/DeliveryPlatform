@@ -9,6 +9,8 @@ export type SessionUser = {
   email?: string | null;
   role?: string | null;
   openId?: string | null;
+  tenantId?: string | null;
+  scopes?: string[];
 };
 
 export type TrpcContext = {
@@ -23,6 +25,8 @@ const t = initTRPC.context<TrpcContext>().create({
 
 export const router = t.router;
 export const publicProcedure = t.procedure;
+
+const OPERATOR_ROLES = new Set(["admin", "operator", "ops"]);
 
 const requireUser = t.middleware(({ ctx, next }) => {
   if (!ctx.user) {
@@ -40,4 +44,28 @@ const requireUser = t.middleware(({ ctx, next }) => {
   });
 });
 
-export const protectedProcedure = t.procedure.use(requireUser);
+const requireOperator = t.middleware(({ ctx, next }) => {
+  if (!ctx.user) {
+    throw new TRPCError({
+      code: "UNAUTHORIZED",
+      message: UNAUTHED_ERR_MSG,
+    });
+  }
+
+  const normalizedRole = `${ctx.user.role ?? ""}`.trim().toLowerCase();
+  if (!OPERATOR_ROLES.has(normalizedRole)) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "OPERATOR_ROLE_REQUIRED",
+    });
+  }
+
+  return next({
+    ctx: {
+      ...ctx,
+      user: ctx.user,
+    },
+  });
+});
+
+export const protectedProcedure = t.procedure.use(requireUser).use(requireOperator);

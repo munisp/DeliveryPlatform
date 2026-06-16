@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -14,14 +15,15 @@ import (
 )
 
 type MojaloopService struct {
-	httpClient    *http.Client
-	switchURL     string
-	participantID string
-	tigerBeetle   *TigerBeetleClient
-	transfersMu   sync.RWMutex
-	quotesMu      sync.RWMutex
-	transfers     map[string]Transfer
-	quotes        map[string]Quote
+	httpClient           *http.Client
+	switchURL            string
+	participantID        string
+	internalServiceToken string
+	tigerBeetle          *TigerBeetleClient
+	transfersMu          sync.RWMutex
+	quotesMu             sync.RWMutex
+	transfers            map[string]Transfer
+	quotes               map[string]Quote
 }
 
 type Transfer struct {
@@ -50,13 +52,6 @@ type Quote struct {
 	State         string    `json:"state"`
 }
 
-type Party struct {
-	PartyIDType string `json:"partyIdType"`
-	PartyID     string `json:"partyIdentifier"`
-	FSP         string `json:"fspId"`
-	Name        string `json:"name"`
-}
-
 type TransferInitiationPayload struct {
 	TransferID string  `json:"transferId"`
 	PayerFSP   string  `json:"payerFsp"`
@@ -76,12 +71,13 @@ type QuoteInitiationPayload struct {
 
 func NewMojaloopService(tigerBeetle *TigerBeetleClient) *MojaloopService {
 	return &MojaloopService{
-		httpClient:    &http.Client{Timeout: 30 * time.Second},
-		switchURL:     getEnv("MOJALOOP_SWITCH_URL", "http://localhost:4001"),
-		participantID: getEnv("MOJALOOP_PARTICIPANT_ID", "switchos"),
-		tigerBeetle:   tigerBeetle,
-		transfers:     make(map[string]Transfer),
-		quotes:        make(map[string]Quote),
+		httpClient:           &http.Client{Timeout: 30 * time.Second},
+		switchURL:            getEnv("MOJALOOP_SWITCH_URL", "http://localhost:4001"),
+		participantID:        getEnv("MOJALOOP_PARTICIPANT_ID", "switchos"),
+		internalServiceToken: getEnv("INTERNAL_SERVICE_TOKEN", "switchos-internal-dev-token-change-before-production"),
+		tigerBeetle:          tigerBeetle,
+		transfers:            make(map[string]Transfer),
+		quotes:               make(map[string]Quote),
 	}
 }
 
@@ -247,15 +243,36 @@ func fallbackString(value, defaultValue string) string {
 	return defaultValue
 }
 
-func healthHandler(w http.ResponseWriter, r *http.Request) {
+func (s *MojaloopService) requireInternalAccess(w http.ResponseWriter, r *http.Request) bool {
+	provided := strings.TrimSpace(r.Header.Get("X-Internal-Service-Token"))
+	if subtle.ConstantTimeCompare([]byte(provided), []byte(s.internalServiceToken)) != 1 {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return false
+	}
+	return true
+}
+
+func healthHandler(w http.ResponseWriter, _ *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "healthy", "service": "mojaloop"})
 }
 
 func (s *MojaloopService) handleTransferCallback(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.requireInternalAccess(w, r) {
+		return
+	}
+	defer r.Body.Close()
 	var transfer Transfer
 	if err := json.NewDecoder(r.Body).Decode(&transfer); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if transfer.TransferID == "" {
+		http.Error(w, "transferId is required", http.StatusBadRequest)
 		return
 	}
 	if transfer.CompletedTime.IsZero() && (transfer.State == "COMMITTED" || transfer.State == "SETTLED") {
@@ -267,9 +284,21 @@ func (s *MojaloopService) handleTransferCallback(w http.ResponseWriter, r *http.
 }
 
 func (s *MojaloopService) handleQuoteCallback(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.requireInternalAccess(w, r) {
+		return
+	}
+	defer r.Body.Close()
 	var quote Quote
 	if err := json.NewDecoder(r.Body).Decode(&quote); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if quote.QuoteID == "" {
+		http.Error(w, "quoteId is required", http.StatusBadRequest)
 		return
 	}
 	if quote.State == "" {
@@ -285,6 +314,10 @@ func (s *MojaloopService) handleInitiateTransferHTTP(w http.ResponseWriter, r *h
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	if !s.requireInternalAccess(w, r) {
+		return
+	}
+	defer r.Body.Close()
 	var payload TransferInitiationPayload
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -307,6 +340,10 @@ func (s *MojaloopService) handleRequestQuoteHTTP(w http.ResponseWriter, r *http.
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	if !s.requireInternalAccess(w, r) {
+		return
+	}
+	defer r.Body.Close()
 	var payload QuoteInitiationPayload
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -327,6 +364,9 @@ func (s *MojaloopService) handleRequestQuoteHTTP(w http.ResponseWriter, r *http.
 func (s *MojaloopService) handleGetTransferHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.requireInternalAccess(w, r) {
 		return
 	}
 	transferID := strings.TrimPrefix(r.URL.Path, "/transfers/")
@@ -352,6 +392,9 @@ func (s *MojaloopService) handleGetQuoteHTTP(w http.ResponseWriter, r *http.Requ
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	if !s.requireInternalAccess(w, r) {
+		return
+	}
 	quoteID := strings.TrimPrefix(r.URL.Path, "/quotes/")
 	if quoteID == "" || quoteID == "request" {
 		http.Error(w, "missing quote id", http.StatusBadRequest)
@@ -361,11 +404,12 @@ func (s *MojaloopService) handleGetQuoteHTTP(w http.ResponseWriter, r *http.Requ
 		_ = json.NewEncoder(w).Encode(quote)
 		return
 	}
-		http.Error(w, "quote not found", http.StatusNotFound)
+	http.Error(w, "quote not found", http.StatusNotFound)
 }
 
 func main() {
 	httpPort := getEnv("HTTP_PORT", "8086")
+	bindHost := getEnv("BIND_HOST", "127.0.0.1")
 
 	var tigerBeetleClient *TigerBeetleClient
 	if getEnv("TIGERBEETLE_ENABLED", "false") == "true" {
@@ -383,8 +427,9 @@ func main() {
 	mux.HandleFunc("/transfers/", service.handleGetTransferHTTP)
 	mux.HandleFunc("/quotes/", service.handleGetQuoteHTTP)
 
-	log.Printf("Mojaloop HTTP server listening on :%s", httpPort)
-	if err := http.ListenAndServe(":"+httpPort, mux); err != nil {
+	addr := bindHost + ":" + httpPort
+	log.Printf("Mojaloop HTTP server listening on %s", addr)
+	if err := http.ListenAndServe(addr, mux); err != nil {
 		log.Fatalf("Failed to serve HTTP: %v", err)
 	}
 }

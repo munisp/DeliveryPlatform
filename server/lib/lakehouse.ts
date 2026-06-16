@@ -1,8 +1,6 @@
-import { desc } from "drizzle-orm";
+import pg from "pg";
 
 import { ENV } from "../_core/env";
-import { getDb } from "../db";
-import { drivers, orders, transactions } from "../../drizzle/schema";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -48,11 +46,24 @@ type LakehouseAnalyticsSummary = {
 };
 
 const DEFAULT_SYNC_LIMIT = 500;
+const { Pool } = pg;
+let pool: pg.Pool | null = null;
+
+function getPool() {
+  if (!pool) {
+    pool = new Pool({
+      connectionString: ENV.databaseUrl,
+      ssl: ENV.databaseUrl.includes("sslmode=require") ? { rejectUnauthorized: false } : false,
+    });
+  }
+  return pool;
+}
 
 async function fetchLakehouse<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${ENV.lakehouseServiceUrl}${path}`, {
     headers: {
       "Content-Type": "application/json",
+      "X-Internal-Service-Token": ENV.internalServiceToken,
       ...(init?.headers ?? {}),
     },
     ...init,
@@ -81,113 +92,119 @@ function toIso(value: Date | string | null | undefined): string {
   return new Date(value).toISOString();
 }
 
-function normalizeOrderRow(row: typeof orders.$inferSelect): JsonRecord {
+function normalizeOrderRow(row: Record<string, unknown>): JsonRecord {
   return {
     order_id: row.id,
-    order_number: row.orderNumber,
-    customer_id: row.customerId,
-    vertical_id: row.verticalId,
-    provider_id: row.providerId,
-    driver_id: row.driverId,
+    order_number: row.order_number,
+    customer_id: row.customer_id,
+    vertical_id: row.vertical_id,
+    provider_id: row.provider_id,
+    driver_id: row.driver_id,
     status: row.status,
-    total_amount: toNumber(row.totalAmount),
-    platform_fee: toNumber(row.platformFee),
-    driver_fee: toNumber(row.driverFee),
-    pickup_latitude: toNumber(row.pickupLatitude),
-    pickup_longitude: toNumber(row.pickupLongitude),
-    delivery_latitude: toNumber(row.deliveryLatitude),
-    delivery_longitude: toNumber(row.deliveryLongitude),
-    scheduled_pickup_time: row.scheduledPickupTime ? toIso(row.scheduledPickupTime) : null,
-    actual_pickup_time: row.actualPickupTime ? toIso(row.actualPickupTime) : null,
-    actual_delivery_time: row.actualDeliveryTime ? toIso(row.actualDeliveryTime) : null,
-    estimated_delivery_time: row.estimatedDeliveryTime ? toIso(row.estimatedDeliveryTime) : null,
-    created_at: toIso(row.createdAt),
-    updated_at: toIso(row.updatedAt),
-    timestamp: toIso(row.updatedAt ?? row.createdAt),
-    date: toIso(row.createdAt).slice(0, 10),
+    total_amount: toNumber(row.total_amount),
+    platform_fee: toNumber(row.platform_fee),
+    driver_fee: toNumber(row.driver_fee),
+    pickup_latitude: toNumber(row.pickup_latitude),
+    pickup_longitude: toNumber(row.pickup_longitude),
+    delivery_latitude: toNumber(row.delivery_latitude),
+    delivery_longitude: toNumber(row.delivery_longitude),
+    scheduled_pickup_time: row.scheduled_pickup_time ? toIso(row.scheduled_pickup_time as string) : null,
+    actual_pickup_time: row.actual_pickup_time ? toIso(row.actual_pickup_time as string) : null,
+    actual_delivery_time: row.actual_delivery_time ? toIso(row.actual_delivery_time as string) : null,
+    estimated_delivery_time: row.estimated_delivery_time ? toIso(row.estimated_delivery_time as string) : null,
+    created_at: toIso(row.created_at as string),
+    updated_at: toIso((row.updated_at as string) ?? (row.created_at as string)),
+    timestamp: toIso((row.updated_at as string) ?? (row.created_at as string)),
+    date: toIso(row.created_at as string).slice(0, 10),
   };
 }
 
-function normalizeDriverRow(row: typeof drivers.$inferSelect): JsonRecord {
+function normalizeDriverRow(row: Record<string, unknown>): JsonRecord {
   return {
     driver_id: row.id,
     name: row.name,
     status: row.status,
-    vehicle_type: row.vehicleType,
-    current_latitude: toNumber(row.currentLatitude),
-    current_longitude: toNumber(row.currentLongitude),
+    vehicle_type: row.vehicle_type,
+    current_latitude: toNumber(row.current_latitude),
+    current_longitude: toNumber(row.current_longitude),
     rating: toNumber(row.rating),
-    total_orders: row.totalOrders,
-    created_at: toIso(row.createdAt),
-    updated_at: toIso(row.updatedAt),
-    timestamp: toIso(row.lastLocationUpdate ?? row.updatedAt ?? row.createdAt),
-    last_location_update: row.lastLocationUpdate ? toIso(row.lastLocationUpdate) : null,
-    date: toIso(row.updatedAt).slice(0, 10),
+    total_orders: toNumber(row.total_orders),
+    created_at: toIso(row.created_at as string),
+    updated_at: toIso((row.updated_at as string) ?? (row.created_at as string)),
+    timestamp: toIso((row.last_location_update as string) ?? (row.updated_at as string) ?? (row.created_at as string)),
+    last_location_update: row.last_location_update ? toIso(row.last_location_update as string) : null,
+    date: toIso((row.updated_at as string) ?? (row.created_at as string)).slice(0, 10),
   };
 }
 
-function normalizePaymentRow(row: typeof transactions.$inferSelect): JsonRecord {
+function normalizePaymentRow(row: Record<string, unknown>): JsonRecord {
   return {
     payment_id: row.id,
-    order_id: row.orderId,
-    customer_id: null,
+    order_id: row.order_id,
+    customer_id: row.customer_id ?? null,
     amount: toNumber(row.amount),
     currency: row.currency,
-    payment_method: row.paymentMethod,
+    payment_method: row.payment_method,
     status: row.status,
-    provider: row.recipientType,
-    transaction_id: row.transactionId,
-    created_at: toIso(row.createdAt),
-    updated_at: toIso(row.updatedAt),
-    timestamp: toIso(row.updatedAt ?? row.createdAt),
-    date: toIso(row.createdAt).slice(0, 10),
+    provider: row.recipient_type,
+    transaction_id: row.transaction_id,
+    created_at: toIso(row.created_at as string),
+    updated_at: toIso((row.updated_at as string) ?? (row.created_at as string)),
+    timestamp: toIso((row.updated_at as string) ?? (row.created_at as string)),
+    date: toIso(row.created_at as string).slice(0, 10),
   };
 }
 
-function buildMarketplaceEvents(orderRows: Array<typeof orders.$inferSelect>): JsonRecord[] {
+function buildMarketplaceEvents(orderRows: Array<Record<string, unknown>>): JsonRecord[] {
   const now = Date.now();
   return orderRows
-    .filter((row) => row.driverId !== null)
+    .filter((row) => row.driver_id !== null && row.driver_id !== undefined)
     .map((row) => ({
       event_type: "orders.driver_assigned",
       order_id: row.id,
-      driver_id: row.driverId,
-      vertical_id: row.verticalId,
-      timestamp: toIso(row.updatedAt ?? row.createdAt),
-      created_at: toIso(row.updatedAt ?? row.createdAt),
-      date: toIso(row.updatedAt ?? row.createdAt).slice(0, 10),
+      driver_id: row.driver_id,
+      vertical_id: row.vertical_id,
+      timestamp: toIso((row.updated_at as string) ?? (row.created_at as string)),
+      created_at: toIso((row.updated_at as string) ?? (row.created_at as string)),
+      date: toIso((row.updated_at as string) ?? (row.created_at as string)).slice(0, 10),
       replayed_at: new Date(now).toISOString(),
     }));
 }
 
 export async function syncLakehouseFromPostgres(limit = DEFAULT_SYNC_LIMIT): Promise<void> {
-  const db = await getDb();
-  if (!db) return;
+  const client = await getPool().connect();
+  try {
+    const [ordersResult, driversResult, paymentsResult] = await Promise.all([
+      client.query(`SELECT * FROM orders ORDER BY COALESCE(updated_at, created_at) DESC LIMIT $1`, [limit]),
+      client.query(`SELECT * FROM drivers ORDER BY COALESCE(updated_at, created_at) DESC LIMIT $1`, [limit]),
+      client.query(`SELECT * FROM transactions ORDER BY COALESCE(updated_at, created_at) DESC LIMIT $1`, [limit]),
+    ]);
 
-  const [orderRows, driverRows, paymentRows] = await Promise.all([
-    db.select().from(orders).orderBy(desc(orders.updatedAt)).limit(limit),
-    db.select().from(drivers).orderBy(desc(drivers.updatedAt)).limit(limit),
-    db.select().from(transactions).orderBy(desc(transactions.updatedAt)).limit(limit),
-  ]);
+    const orderRows = ordersResult.rows as Array<Record<string, unknown>>;
+    const driverRows = driversResult.rows as Array<Record<string, unknown>>;
+    const paymentRows = paymentsResult.rows as Array<Record<string, unknown>>;
 
-  await Promise.all([
-    fetchLakehouse("/ingest/orders", {
-      method: "POST",
-      body: JSON.stringify({ rows: orderRows.map(normalizeOrderRow) }),
-    }),
-    fetchLakehouse("/ingest/drivers", {
-      method: "POST",
-      body: JSON.stringify({ rows: driverRows.map(normalizeDriverRow) }),
-    }),
-    fetchLakehouse("/ingest/payments", {
-      method: "POST",
-      body: JSON.stringify({ rows: paymentRows.map(normalizePaymentRow) }),
-    }),
-    fetchLakehouse("/ingest/marketplace_events", {
-      method: "POST",
-      body: JSON.stringify({ rows: buildMarketplaceEvents(orderRows) }),
-    }),
-  ]);
+    await Promise.all([
+      fetchLakehouse("/ingest/orders", {
+        method: "POST",
+        body: JSON.stringify({ rows: orderRows.map(normalizeOrderRow) }),
+      }),
+      fetchLakehouse("/ingest/drivers", {
+        method: "POST",
+        body: JSON.stringify({ rows: driverRows.map(normalizeDriverRow) }),
+      }),
+      fetchLakehouse("/ingest/payments", {
+        method: "POST",
+        body: JSON.stringify({ rows: paymentRows.map(normalizePaymentRow) }),
+      }),
+      fetchLakehouse("/ingest/marketplace_events", {
+        method: "POST",
+        body: JSON.stringify({ rows: buildMarketplaceEvents(orderRows) }),
+      }),
+    ]);
+  } finally {
+    client.release();
+  }
 }
 
 export async function getLakehouseAnalyticsSummary(): Promise<LakehouseAnalyticsSummary> {

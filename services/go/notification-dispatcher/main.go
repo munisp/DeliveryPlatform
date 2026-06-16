@@ -82,6 +82,7 @@ type DispatchMetrics struct {
 
 var (
 	port = getEnv("PORT", "8099")
+	bindHost = getEnv("BIND_HOST", "127.0.0.1")
 
 	healthState = struct {
 		totalRequests     uint64
@@ -112,12 +113,12 @@ func main() {
 	mux.HandleFunc("/dispatch", dispatchHandler)
 
 	server := &http.Server{
-		Addr:              fmt.Sprintf(":%s", port),
+		Addr:              fmt.Sprintf("%s:%s", bindHost, port),
 		Handler:           loggingMiddleware(mux),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
-	log.Printf("Starting notification dispatcher on :%s", port)
+	log.Printf("Starting notification dispatcher on %s:%s", bindHost, port)
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatal(err)
 	}

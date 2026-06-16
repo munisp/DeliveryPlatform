@@ -172,13 +172,17 @@ func main() {
     if port == "" {
         port = "8112"
     }
+    bindHost := os.Getenv("BIND_HOST")
+    if bindHost == "" {
+        bindHost = "127.0.0.1"
+    }
 
     mux := http.NewServeMux()
     mux.HandleFunc("/health", healthHandler)
     mux.HandleFunc("/assess-launch", readinessHandler)
 
-    log.Printf("vertical provisioning service listening on :%s", port)
-    if err := http.ListenAndServe(":"+port, mux); err != nil {
+    log.Printf("vertical provisioning service listening on %s:%s", bindHost, port)
+    if err := http.ListenAndServe(bindHost+":"+port, mux); err != nil {
         log.Fatal(err)
     }
 }

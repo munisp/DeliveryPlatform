@@ -1,4 +1,6 @@
+import { useMutation } from "@tanstack/react-query";
 import { Link, Route, Switch } from "wouter";
+
 import DashboardLayout from "@/components/DashboardLayout";
 import Analytics from "@/pages/Analytics";
 import DriverMobility from "@/pages/DriverMobility";
@@ -51,6 +53,9 @@ function HomePage() {
             <Link href="/analytics" className="rounded-full border border-slate-700 px-5 py-3 text-sm font-medium text-slate-100 transition hover:border-slate-500 hover:bg-slate-900">
               Review analytics workspace
             </Link>
+            <Link href="/portal" className="rounded-full border border-cyan-400/30 bg-cyan-500/10 px-5 py-3 text-sm font-medium text-cyan-100 transition hover:bg-cyan-500/20">
+              Operator portal
+            </Link>
           </div>
         </div>
 
@@ -66,6 +71,67 @@ function HomePage() {
             </Link>
           ))}
         </div>
+      </div>
+    </div>
+  );
+}
+
+function PortalPage() {
+  const launchSession = useMutation({
+    mutationFn: async () => {
+      const response = await fetch("/api/auth/dev-session", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        credentials: "include",
+        body: JSON.stringify({ role: "admin" }),
+      });
+
+      if (!response.ok) {
+        const message = await response.text();
+        throw new Error(message || "Unable to establish operator session.");
+      }
+
+      return response.json() as Promise<{ redirect?: string }>;
+    },
+    onSuccess(payload) {
+      window.location.href = payload.redirect || "/dashboard";
+    },
+  });
+
+  return (
+    <div className="min-h-screen bg-slate-950 px-6 py-16 text-slate-100 lg:px-12">
+      <div className="mx-auto max-w-3xl space-y-6">
+        <div className="space-y-4">
+          <div className="text-sm uppercase tracking-[0.3em] text-cyan-300">Secure operator access</div>
+          <h1 className="text-4xl font-semibold tracking-tight">Portal access is now backed by signed sessions.</h1>
+          <p className="max-w-2xl text-lg leading-8 text-slate-300">
+            The audit remediation removed the previous unsigned cookie trust model. In local and non-production environments, you can still establish a signed operator session through this portal to validate the rebuilt dashboard and service-backed analytics flow.
+          </p>
+        </div>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Development operator session</CardTitle>
+            <CardDescription>
+              This bootstrap path is available only outside production. Production access should come from a real identity provider and verified sessions.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <button
+              type="button"
+              onClick={() => launchSession.mutate()}
+              disabled={launchSession.isPending}
+              className="inline-flex rounded-full bg-cyan-500 px-5 py-3 text-sm font-medium text-slate-950 transition hover:bg-cyan-400 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {launchSession.isPending ? "Establishing session..." : "Enter operator dashboard"}
+            </button>
+            {launchSession.isError ? (
+              <p className="text-sm text-rose-300">{launchSession.error.message}</p>
+            ) : null}
+          </CardContent>
+        </Card>
       </div>
     </div>
   );
@@ -156,6 +222,7 @@ export default function App() {
   return (
     <Switch>
       <Route path="/" component={HomePage} />
+      <Route path="/portal" component={PortalPage} />
       <Route path="/dashboard" component={DashboardPage} />
       <Route path="/analytics" component={Analytics} />
       <Route path="/driver-mobility" component={DriverMobility} />
