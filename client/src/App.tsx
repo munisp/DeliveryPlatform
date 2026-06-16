@@ -1,3 +1,4 @@
+import { FormEvent, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { Link, Route, Switch } from "wouter";
 
@@ -77,7 +78,34 @@ function HomePage() {
 }
 
 function PortalPage() {
-  const launchSession = useMutation({
+  const [email, setEmail] = useState("admin@switchos.local");
+  const [password, setPassword] = useState("ChangeMe123!");
+
+  const loginMutation = useMutation({
+    mutationFn: async ({ email, password }: { email: string; password: string }) => {
+      const response = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        credentials: "include",
+        body: JSON.stringify({ email, password }),
+      });
+
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const errorMessage = typeof payload?.error === "string" ? payload.error : "Unable to establish operator session.";
+        throw new Error(errorMessage);
+      }
+
+      return payload as { redirect?: string };
+    },
+    onSuccess(payload) {
+      window.location.href = payload.redirect || "/dashboard";
+    },
+  });
+
+  const devSessionMutation = useMutation({
     mutationFn: async () => {
       const response = await fetch("/api/auth/dev-session", {
         method: "POST",
@@ -88,47 +116,98 @@ function PortalPage() {
         body: JSON.stringify({ role: "admin" }),
       });
 
+      const payload = await response.json().catch(() => ({}));
       if (!response.ok) {
-        const message = await response.text();
-        throw new Error(message || "Unable to establish operator session.");
+        const errorMessage = typeof payload?.error === "string" ? payload.error : "Unable to establish development operator session.";
+        throw new Error(errorMessage);
       }
 
-      return response.json() as Promise<{ redirect?: string }>;
+      return payload as { redirect?: string };
     },
     onSuccess(payload) {
       window.location.href = payload.redirect || "/dashboard";
     },
   });
 
+  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    loginMutation.mutate({ email, password });
+  };
+
   return (
     <div className="min-h-screen bg-slate-950 px-6 py-16 text-slate-100 lg:px-12">
       <div className="mx-auto max-w-3xl space-y-6">
         <div className="space-y-4">
           <div className="text-sm uppercase tracking-[0.3em] text-cyan-300">Secure operator access</div>
-          <h1 className="text-4xl font-semibold tracking-tight">Portal access is now backed by signed sessions.</h1>
+          <h1 className="text-4xl font-semibold tracking-tight">Portal access now supports managed operator credentials.</h1>
           <p className="max-w-2xl text-lg leading-8 text-slate-300">
-            The audit remediation removed the previous unsigned cookie trust model. In local and non-production environments, you can still establish a signed operator session through this portal to validate the rebuilt dashboard and service-backed analytics flow.
+            The platform now supports persistent credential-backed operator login backed by signed sessions. For local recovery and validation environments, the seeded operator account remains available until an external identity provider is connected.
           </p>
         </div>
 
         <Card>
           <CardHeader>
-            <CardTitle>Development operator session</CardTitle>
+            <CardTitle>Operator sign in</CardTitle>
             <CardDescription>
-              This bootstrap path is available only outside production. Production access should come from a real identity provider and verified sessions.
+              Use the seeded operator account or the credentials provisioned in the deployment environment. Replace the default bootstrap password before production use.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <form className="space-y-4" onSubmit={handleSubmit}>
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-slate-200" htmlFor="operator-email">Email</label>
+                <input
+                  id="operator-email"
+                  type="email"
+                  autoComplete="username"
+                  value={email}
+                  onChange={(event) => setEmail(event.target.value)}
+                  className="w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-slate-100 outline-none transition focus:border-cyan-400"
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-slate-200" htmlFor="operator-password">Password</label>
+                <input
+                  id="operator-password"
+                  type="password"
+                  autoComplete="current-password"
+                  value={password}
+                  onChange={(event) => setPassword(event.target.value)}
+                  className="w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-slate-100 outline-none transition focus:border-cyan-400"
+                />
+              </div>
+              <button
+                type="submit"
+                disabled={loginMutation.isPending}
+                className="inline-flex rounded-full bg-cyan-500 px-5 py-3 text-sm font-medium text-slate-950 transition hover:bg-cyan-400 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {loginMutation.isPending ? "Signing in..." : "Enter operator dashboard"}
+              </button>
+            </form>
+            {loginMutation.isError ? (
+              <p className="text-sm text-rose-300">{loginMutation.error.message}</p>
+            ) : null}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Non-production fallback</CardTitle>
+            <CardDescription>
+              This fallback remains available only for local validation. It should be disabled in production in favor of managed credentials or an external identity provider.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <button
               type="button"
-              onClick={() => launchSession.mutate()}
-              disabled={launchSession.isPending}
-              className="inline-flex rounded-full bg-cyan-500 px-5 py-3 text-sm font-medium text-slate-950 transition hover:bg-cyan-400 disabled:cursor-not-allowed disabled:opacity-60"
+              onClick={() => devSessionMutation.mutate()}
+              disabled={devSessionMutation.isPending}
+              className="inline-flex rounded-full border border-cyan-400/30 bg-cyan-500/10 px-5 py-3 text-sm font-medium text-cyan-100 transition hover:bg-cyan-500/20 disabled:cursor-not-allowed disabled:opacity-60"
             >
-              {launchSession.isPending ? "Establishing session..." : "Enter operator dashboard"}
+              {devSessionMutation.isPending ? "Creating fallback session..." : "Use local validation session"}
             </button>
-            {launchSession.isError ? (
-              <p className="text-sm text-rose-300">{launchSession.error.message}</p>
+            {devSessionMutation.isError ? (
+              <p className="text-sm text-rose-300">{devSessionMutation.error.message}</p>
             ) : null}
           </CardContent>
         </Card>
@@ -163,40 +242,6 @@ function DashboardPage() {
             </Card>
           ))}
         </div>
-      </div>
-    </DashboardLayout>
-  );
-}
-
-function SimpleWorkspacePage({
-  title,
-  description,
-  bullets,
-}: {
-  title: string;
-  description: string;
-  bullets: string[];
-}) {
-  return (
-    <DashboardLayout>
-      <div className="space-y-6">
-        <div>
-          <h1 className="text-3xl font-semibold tracking-tight text-white">{title}</h1>
-          <p className="mt-2 max-w-3xl text-slate-400">{description}</p>
-        </div>
-        <Card>
-          <CardHeader>
-            <CardTitle>Implementation scope</CardTitle>
-            <CardDescription>This domain remains under active rebuild and is intentionally expressed as a connected roadmap rather than a fake finished CRUD surface.</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <ul className="space-y-3 text-sm leading-6 text-slate-300">
-              {bullets.map((bullet) => (
-                <li key={bullet} className="rounded-xl border border-slate-800 bg-slate-950/60 px-4 py-3">{bullet}</li>
-              ))}
-            </ul>
-          </CardContent>
-        </Card>
       </div>
     </DashboardLayout>
   );

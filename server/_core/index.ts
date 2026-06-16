@@ -7,6 +7,7 @@ import { COOKIE_NAME } from "../../shared/const";
 import { ENV } from "./env";
 import { getCookieOptions } from "./cookies";
 import { createSessionToken, getSessionUserFromRequest } from "./auth";
+import { authenticateOperator, ensureOperatorAuthStore } from "./operatorAuthStore";
 
 const app = express();
 const rateWindowMs = 60_000;
@@ -91,6 +92,25 @@ function rateLimit(limit: number): express.RequestHandler {
   };
 }
 
+async function issueOperatorSession(
+  res: express.Response,
+  operator: { id: number; name: string; email: string; role: string; tenantId: string | null },
+) {
+  const token = await createSessionToken({
+    sub: String(operator.id),
+    name: operator.name,
+    email: operator.email,
+    role: operator.role,
+    openId: ENV.ownerOpenId,
+    tenantId: operator.tenantId,
+    scopes: operator.role === "viewer"
+      ? ["platform:read", "analytics:read"]
+      : ["platform:read", "platform:write", "analytics:read"],
+  });
+
+  res.cookie(COOKIE_NAME, token, getCookieOptions());
+}
+
 app.disable("x-powered-by");
 app.set("trust proxy", 1);
 
@@ -112,6 +132,30 @@ app.get("/api/health", (_req, res) => {
   res.json({ ok: true, service: "switchos-operator-dashboard", timestamp: new Date().toISOString() });
 });
 
+app.post("/api/auth/login", rateLimit(20), async (req, res) => {
+  const email = `${req.body?.email ?? ""}`.trim().toLowerCase();
+  const password = `${req.body?.password ?? ""}`;
+
+  if (!email || !password) {
+    res.status(400).json({ error: "missing_credentials" });
+    return;
+  }
+
+  try {
+    const operator = await authenticateOperator(email, password);
+    if (!operator) {
+      res.status(401).json({ error: "invalid_credentials" });
+      return;
+    }
+
+    await issueOperatorSession(res, operator);
+    res.status(200).json({ ok: true, redirect: "/dashboard", operator: { email: operator.email, role: operator.role } });
+  } catch (error) {
+    console.error("[SwitchOS] Login failed", error);
+    res.status(500).json({ error: "login_failed" });
+  }
+});
+
 app.post("/api/auth/dev-session", rateLimit(10), async (req, res) => {
   if (ENV.isProduction) {
     res.status(404).json({ error: "not_found" });
@@ -120,17 +164,14 @@ app.post("/api/auth/dev-session", rateLimit(10), async (req, res) => {
 
   const requestedRole = `${req.body?.role ?? "admin"}`.trim().toLowerCase();
   const role = ["admin", "operator", "ops"].includes(requestedRole) ? requestedRole : "operator";
-  const token = await createSessionToken({
-    sub: "1",
-    name: "SwitchOS Dev Operator",
-    email: "dev-operator@switchos.local",
+  await issueOperatorSession(res, {
+    id: 1,
+    name: ENV.bootstrapOperatorName,
+    email: ENV.bootstrapOperatorEmail,
     role,
-    openId: ENV.ownerOpenId,
-    tenantId: "switchos-dev",
-    scopes: ["platform:read", "platform:write", "analytics:read"],
+    tenantId: ENV.bootstrapTenantId,
   });
 
-  res.cookie(COOKIE_NAME, token, getCookieOptions());
   res.status(200).json({ ok: true, role, redirect: "/dashboard" });
 });
 
@@ -159,6 +200,14 @@ app.get("*", (_req, res) => {
 });
 
 const port = Number(process.env.PORT || 3005);
-app.listen(port, ENV.bindHost, () => {
-  console.log(`[SwitchOS] API listening on http://${ENV.bindHost}:${port}`);
-});
+
+ensureOperatorAuthStore()
+  .then(() => {
+    app.listen(port, ENV.bindHost, () => {
+      console.log(`[SwitchOS] API listening on http://${ENV.bindHost}:${port}`);
+    });
+  })
+  .catch((error) => {
+    console.error("[SwitchOS] Failed to initialize operator auth store", error);
+    process.exit(1);
+  });

@@ -45,6 +45,25 @@ function getCookieSecret() {
   return "switchos-local-development-secret-change-before-production";
 }
 
+function getBootstrapOperatorPassword() {
+  const configured = process.env.BOOTSTRAP_OPERATOR_PASSWORD?.trim();
+  if (configured) {
+    if (
+      process.env.NODE_ENV === "production" &&
+      ["ChangeMe123!", "switchos-admin", "admin123"].includes(configured)
+    ) {
+      throw new Error("BOOTSTRAP_OPERATOR_PASSWORD must be rotated before running in production");
+    }
+    return configured;
+  }
+
+  if (process.env.NODE_ENV === "production") {
+    throw new Error("BOOTSTRAP_OPERATOR_PASSWORD is required in production");
+  }
+
+  return "ChangeMe123!";
+}
+
 function normalizeOAuthServerUrl() {
   const raw = process.env.OAUTH_SERVER_URL?.trim();
   if (raw) {
@@ -70,6 +89,11 @@ export const ENV = {
   allowedOrigins: process.env.ALLOWED_ORIGINS ?? DEFAULT_ALLOWED_ORIGINS,
   cspConnectSrc: process.env.CSP_CONNECT_SRC ?? DEFAULT_CSP_CONNECT_SRC,
   apiBodyLimit: process.env.API_BODY_LIMIT ?? "10mb",
+  bootstrapOperatorEmail: (process.env.BOOTSTRAP_OPERATOR_EMAIL ?? "admin@switchos.local").trim().toLowerCase(),
+  bootstrapOperatorName: process.env.BOOTSTRAP_OPERATOR_NAME ?? "SwitchOS Operator Admin",
+  bootstrapOperatorRole: process.env.BOOTSTRAP_OPERATOR_ROLE ?? "admin",
+  bootstrapOperatorPassword: getBootstrapOperatorPassword(),
+  bootstrapTenantId: process.env.BOOTSTRAP_TENANT_ID ?? "switchos-core",
   sessionIssuer: process.env.SESSION_ISSUER ?? "switchos.local",
   sessionAudience: process.env.SESSION_AUDIENCE ?? "switchos-operator-dashboard",
   internalServiceToken: process.env.INTERNAL_SERVICE_TOKEN ?? "switchos-internal-dev-token-change-before-production",

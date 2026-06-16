@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"crypto/subtle"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,8 +11,9 @@ import (
 	"net/http"
 	"os"
 	"strings"
-	"sync"
 	"time"
+
+	_ "github.com/lib/pq"
 )
 
 type MojaloopService struct {
@@ -20,10 +22,7 @@ type MojaloopService struct {
 	participantID        string
 	internalServiceToken string
 	tigerBeetle          *TigerBeetleClient
-	transfersMu          sync.RWMutex
-	quotesMu             sync.RWMutex
-	transfers            map[string]Transfer
-	quotes               map[string]Quote
+	db                   *sql.DB
 }
 
 type Transfer struct {
@@ -69,16 +68,68 @@ type QuoteInitiationPayload struct {
 	Currency      string  `json:"currency"`
 }
 
-func NewMojaloopService(tigerBeetle *TigerBeetleClient) *MojaloopService {
-	return &MojaloopService{
+func NewMojaloopService(tigerBeetle *TigerBeetleClient) (*MojaloopService, error) {
+	databaseURL := getEnv("DATABASE_URL", "postgresql://ubuntu:ubuntu@127.0.0.1:5432/switchos?sslmode=disable")
+	db, err := sql.Open("postgres", databaseURL)
+	if err != nil {
+		return nil, fmt.Errorf("open mojaloop database: %w", err)
+	}
+	if err := db.Ping(); err != nil {
+		return nil, fmt.Errorf("ping mojaloop database: %w", err)
+	}
+
+	service := &MojaloopService{
 		httpClient:           &http.Client{Timeout: 30 * time.Second},
 		switchURL:            getEnv("MOJALOOP_SWITCH_URL", "http://localhost:4001"),
 		participantID:        getEnv("MOJALOOP_PARTICIPANT_ID", "switchos"),
 		internalServiceToken: getEnv("INTERNAL_SERVICE_TOKEN", "switchos-internal-dev-token-change-before-production"),
 		tigerBeetle:          tigerBeetle,
-		transfers:            make(map[string]Transfer),
-		quotes:               make(map[string]Quote),
+		db:                   db,
 	}
+	if err := service.ensurePersistence(); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	return service, nil
+}
+
+func (s *MojaloopService) ensurePersistence() error {
+	statements := []string{
+		`CREATE TABLE IF NOT EXISTS mojaloop_transfers (
+			transfer_id TEXT PRIMARY KEY,
+			payer_fsp TEXT NOT NULL,
+			payee_fsp TEXT NOT NULL,
+			amount NUMERIC(18,2) NOT NULL,
+			currency TEXT NOT NULL,
+			ilp_packet TEXT NOT NULL,
+			condition TEXT NOT NULL,
+			expiration TIMESTAMPTZ NOT NULL,
+			state TEXT NOT NULL,
+			completed_time TIMESTAMPTZ,
+			fulfilment_value TEXT,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		)`,
+		`CREATE TABLE IF NOT EXISTS mojaloop_quotes (
+			quote_id TEXT PRIMARY KEY,
+			transaction_id TEXT NOT NULL,
+			payer_fsp TEXT NOT NULL,
+			payee_fsp TEXT NOT NULL,
+			amount NUMERIC(18,2) NOT NULL,
+			currency TEXT NOT NULL,
+			fees NUMERIC(18,2) NOT NULL,
+			expiration TIMESTAMPTZ NOT NULL,
+			state TEXT NOT NULL,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		)`,
+	}
+	for _, statement := range statements {
+		if _, err := s.db.Exec(statement); err != nil {
+			return fmt.Errorf("ensure mojaloop persistence schema: %w", err)
+		}
+	}
+	return nil
 }
 
 func (s *MojaloopService) initiateTransfer(payload TransferInitiationPayload) (map[string]any, error) {
@@ -101,7 +152,9 @@ func (s *MojaloopService) initiateTransfer(payload TransferInitiationPayload) (m
 		}
 	}
 
-	s.storeTransfer(transfer)
+	if err := s.storeTransfer(transfer); err != nil {
+		return nil, err
+	}
 	if err := s.sendToSwitch("POST", "/transfers", transfer); err != nil {
 		log.Printf("warning: failed to forward transfer to switch: %v", err)
 	}
@@ -126,7 +179,9 @@ func (s *MojaloopService) requestQuote(payload QuoteInitiationPayload) (map[stri
 		State:         "PENDING",
 	}
 
-	s.storeQuote(quote)
+	if err := s.storeQuote(quote); err != nil {
+		return nil, err
+	}
 	if err := s.sendToSwitch("POST", "/quotes", quote); err != nil {
 		log.Printf("warning: failed to forward quote to switch: %v", err)
 	}
@@ -187,30 +242,120 @@ func (s *MojaloopService) getFromSwitch(endpoint string, result interface{}) err
 	return json.NewDecoder(resp.Body).Decode(result)
 }
 
-func (s *MojaloopService) storeTransfer(transfer Transfer) {
-	s.transfersMu.Lock()
-	defer s.transfersMu.Unlock()
-	s.transfers[transfer.TransferID] = transfer
+func (s *MojaloopService) storeTransfer(transfer Transfer) error {
+	_, err := s.db.Exec(
+		`INSERT INTO mojaloop_transfers (
+			transfer_id, payer_fsp, payee_fsp, amount, currency, ilp_packet, condition, expiration, state, completed_time, fulfilment_value, created_at, updated_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,NOW(),NOW())
+		ON CONFLICT (transfer_id) DO UPDATE SET
+			payer_fsp = EXCLUDED.payer_fsp,
+			payee_fsp = EXCLUDED.payee_fsp,
+			amount = EXCLUDED.amount,
+			currency = EXCLUDED.currency,
+			ilp_packet = EXCLUDED.ilp_packet,
+			condition = EXCLUDED.condition,
+			expiration = EXCLUDED.expiration,
+			state = EXCLUDED.state,
+			completed_time = EXCLUDED.completed_time,
+			fulfilment_value = EXCLUDED.fulfilment_value,
+			updated_at = NOW()`,
+		transfer.TransferID,
+		transfer.PayerFSP,
+		transfer.PayeeFSP,
+		transfer.Amount,
+		transfer.Currency,
+		transfer.IlpPacket,
+		transfer.Condition,
+		transfer.Expiration,
+		transfer.State,
+		nullableTime(transfer.CompletedTime),
+		nullableString(transfer.FulfilmentValue),
+	)
+	if err != nil {
+		return fmt.Errorf("store transfer: %w", err)
+	}
+	return nil
 }
 
-func (s *MojaloopService) storeQuote(quote Quote) {
-	s.quotesMu.Lock()
-	defer s.quotesMu.Unlock()
-	s.quotes[quote.QuoteID] = quote
+func (s *MojaloopService) storeQuote(quote Quote) error {
+	_, err := s.db.Exec(
+		`INSERT INTO mojaloop_quotes (
+			quote_id, transaction_id, payer_fsp, payee_fsp, amount, currency, fees, expiration, state, created_at, updated_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NOW(),NOW())
+		ON CONFLICT (quote_id) DO UPDATE SET
+			transaction_id = EXCLUDED.transaction_id,
+			payer_fsp = EXCLUDED.payer_fsp,
+			payee_fsp = EXCLUDED.payee_fsp,
+			amount = EXCLUDED.amount,
+			currency = EXCLUDED.currency,
+			fees = EXCLUDED.fees,
+			expiration = EXCLUDED.expiration,
+			state = EXCLUDED.state,
+			updated_at = NOW()`,
+		quote.QuoteID,
+		quote.TransactionID,
+		quote.PayerFSP,
+		quote.PayeeFSP,
+		quote.Amount,
+		quote.Currency,
+		quote.Fees,
+		quote.Expiration,
+		quote.State,
+	)
+	if err != nil {
+		return fmt.Errorf("store quote: %w", err)
+	}
+	return nil
 }
 
 func (s *MojaloopService) getTransfer(id string) (Transfer, bool) {
-	s.transfersMu.RLock()
-	defer s.transfersMu.RUnlock()
-	transfer, ok := s.transfers[id]
-	return transfer, ok
+	row := s.db.QueryRow(`SELECT transfer_id, payer_fsp, payee_fsp, amount, currency, ilp_packet, condition, expiration, state, completed_time, fulfilment_value FROM mojaloop_transfers WHERE transfer_id = $1`, id)
+	var transfer Transfer
+	var completed sql.NullTime
+	var fulfilment sql.NullString
+	err := row.Scan(
+		&transfer.TransferID,
+		&transfer.PayerFSP,
+		&transfer.PayeeFSP,
+		&transfer.Amount,
+		&transfer.Currency,
+		&transfer.IlpPacket,
+		&transfer.Condition,
+		&transfer.Expiration,
+		&transfer.State,
+		&completed,
+		&fulfilment,
+	)
+	if err != nil {
+		return Transfer{}, false
+	}
+	if completed.Valid {
+		transfer.CompletedTime = completed.Time
+	}
+	if fulfilment.Valid {
+		transfer.FulfilmentValue = fulfilment.String
+	}
+	return transfer, true
 }
 
 func (s *MojaloopService) getQuote(id string) (Quote, bool) {
-	s.quotesMu.RLock()
-	defer s.quotesMu.RUnlock()
-	quote, ok := s.quotes[id]
-	return quote, ok
+	row := s.db.QueryRow(`SELECT quote_id, transaction_id, payer_fsp, payee_fsp, amount, currency, fees, expiration, state FROM mojaloop_quotes WHERE quote_id = $1`, id)
+	var quote Quote
+	err := row.Scan(
+		&quote.QuoteID,
+		&quote.TransactionID,
+		&quote.PayerFSP,
+		&quote.PayeeFSP,
+		&quote.Amount,
+		&quote.Currency,
+		&quote.Fees,
+		&quote.Expiration,
+		&quote.State,
+	)
+	if err != nil {
+		return Quote{}, false
+	}
+	return quote, true
 }
 
 func generateILPPacket(transferID, payeeFSP string, amount float64) string {
@@ -241,6 +386,21 @@ func fallbackString(value, defaultValue string) string {
 		return value
 	}
 	return defaultValue
+}
+
+func nullableTime(value time.Time) any {
+	if value.IsZero() {
+		return nil
+	}
+	return value
+}
+
+func nullableString(value string) any {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return nil
+	}
+	return trimmed
 }
 
 func (s *MojaloopService) requireInternalAccess(w http.ResponseWriter, r *http.Request) bool {
@@ -278,7 +438,10 @@ func (s *MojaloopService) handleTransferCallback(w http.ResponseWriter, r *http.
 	if transfer.CompletedTime.IsZero() && (transfer.State == "COMMITTED" || transfer.State == "SETTLED") {
 		transfer.CompletedTime = time.Now().UTC()
 	}
-	s.storeTransfer(transfer)
+	if err := s.storeTransfer(transfer); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "accepted"})
 }
@@ -304,7 +467,10 @@ func (s *MojaloopService) handleQuoteCallback(w http.ResponseWriter, r *http.Req
 	if quote.State == "" {
 		quote.State = "ACCEPTED"
 	}
-	s.storeQuote(quote)
+	if err := s.storeQuote(quote); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "accepted"})
 }
@@ -383,7 +549,10 @@ func (s *MojaloopService) handleGetTransferHTTP(w http.ResponseWriter, r *http.R
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	}
-	s.storeTransfer(transfer)
+	if err := s.storeTransfer(transfer); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	_ = json.NewEncoder(w).Encode(transfer)
 }
 
@@ -404,19 +573,38 @@ func (s *MojaloopService) handleGetQuoteHTTP(w http.ResponseWriter, r *http.Requ
 		_ = json.NewEncoder(w).Encode(quote)
 		return
 	}
-	http.Error(w, "quote not found", http.StatusNotFound)
+	var quote Quote
+	if err := s.getFromSwitch("/quotes/"+quoteID, &quote); err != nil {
+		http.Error(w, "quote not found", http.StatusNotFound)
+		return
+	}
+	if err := s.storeQuote(quote); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	_ = json.NewEncoder(w).Encode(quote)
 }
 
 func main() {
 	httpPort := getEnv("HTTP_PORT", "8086")
 	bindHost := getEnv("BIND_HOST", "127.0.0.1")
+	databaseURL := getEnv("DATABASE_URL", "postgresql://ubuntu:ubuntu@127.0.0.1:5432/switchos?sslmode=disable")
 
 	var tigerBeetleClient *TigerBeetleClient
-	if getEnv("TIGERBEETLE_ENABLED", "false") == "true" {
-		tigerBeetleClient = NewTigerBeetleClient()
+	var err error
+	if getEnv("TIGERBEETLE_ENABLED", "true") == "true" {
+		tigerBeetleClient, err = NewTigerBeetleClient(databaseURL)
+		if err != nil {
+			log.Fatalf("Failed to initialize TigerBeetle client: %v", err)
+		}
+		defer tigerBeetleClient.Close()
 	}
 
-	service := NewMojaloopService(tigerBeetleClient)
+	service, err := NewMojaloopService(tigerBeetleClient)
+	if err != nil {
+		log.Fatalf("Failed to initialize Mojaloop service: %v", err)
+	}
+	defer service.db.Close()
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", healthHandler)
