@@ -1,5 +1,6 @@
 import { publicProcedure, router } from "./trpc";
 import { ENV } from "./env";
+import { getPolicyIntegrationStatus } from "./policy";
 
 function configured(value: string | null | undefined) {
   return typeof value === "string" && value.trim().length > 0;
@@ -25,7 +26,8 @@ export const systemRouter = router({
       oidcIssuerUrl: ENV.oidcIssuerUrl || null,
       oidcClientId: ENV.oidcClientId || null,
       keycloakReady: ENV.enableExternalOidc && configured(ENV.oidcIssuerUrl),
-      permifyConfigured: configured(process.env.PERMIFY_ENDPOINT),
+      permifyConfigured: configured(ENV.permifyEndpoint),
+      policy: getPolicyIntegrationStatus(),
     },
     messaging: {
       kafkaBootstrapServers: process.env.KAFKA_BOOTSTRAP_SERVERS || null,
@@ -36,8 +38,8 @@ export const systemRouter = router({
       daprConfigured: configured(process.env.DAPR_HTTP_PORT),
       temporalAddress: process.env.TEMPORAL_ADDRESS || null,
       temporalConfigured: configured(process.env.TEMPORAL_ADDRESS),
-      redisUrl: process.env.REDIS_URL || null,
-      redisConfigured: configured(process.env.REDIS_URL),
+      redisUrl: ENV.redisUrl || null,
+      redisConfigured: configured(ENV.redisUrl),
       openSearchUrl: process.env.OPENSEARCH_URL || null,
       openSearchConfigured: configured(process.env.OPENSEARCH_URL),
     },

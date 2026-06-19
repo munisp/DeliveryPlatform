@@ -2,6 +2,7 @@ import { initTRPC, TRPCError } from "@trpc/server";
 import { IncomingMessage, ServerResponse } from "http";
 import superjson from "superjson";
 import { UNAUTHED_ERR_MSG } from "../../shared/const";
+import { checkPolicy } from "./policy";
 
 export type SessionUser = {
   id: number;
@@ -68,8 +69,12 @@ const requireOperator = t.middleware(({ ctx, next }) => {
   });
 });
 
-function requireScopes(requiredScopes: string[]) {
-  return t.middleware(({ ctx, next }) => {
+function requirePolicy(
+  permission: "read_platform" | "write_platform" | "read_analytics" | "write_analytics" | "read" | "operate" | "analytics",
+  resourceType: "tenant" | "workspace",
+  resourceResolver?: (ctx: TrpcContext) => string,
+) {
+  return t.middleware(async ({ ctx, next }) => {
     if (!ctx.user) {
       throw new TRPCError({
         code: "UNAUTHORIZED",
@@ -87,12 +92,32 @@ function requireScopes(requiredScopes: string[]) {
       });
     }
 
-    const scopes = new Set((ctx.user.scopes ?? []).map((scope) => scope.trim()));
-    const missing = requiredScopes.filter((scope) => !scopes.has(scope));
-    if (missing.length > 0) {
+    const resourceId = resourceResolver?.(ctx) ?? (ctx.user.tenantId || "switchos-core");
+
+    try {
+      const allowed = await checkPolicy({
+        subject: ctx.user,
+        permission,
+        resource: {
+          type: resourceType,
+          id: resourceId,
+        },
+      });
+
+      if (!allowed) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: `POLICY_DENIED:${permission}`,
+        });
+      }
+    } catch (error) {
+      if (error instanceof TRPCError) {
+        throw error;
+      }
       throw new TRPCError({
-        code: "FORBIDDEN",
-        message: `MISSING_SCOPES:${missing.join(",")}`,
+        code: "INTERNAL_SERVER_ERROR",
+        message: `POLICY_CHECK_FAILED:${permission}`,
+        cause: error,
       });
     }
 
@@ -106,5 +131,6 @@ function requireScopes(requiredScopes: string[]) {
 }
 
 export const protectedProcedure = t.procedure.use(requireUser).use(requireOperator);
-export const platformReadProcedure = protectedProcedure.use(requireScopes(["platform:read"]));
-export const analyticsReadProcedure = protectedProcedure.use(requireScopes(["analytics:read"]));
+export const platformReadProcedure = protectedProcedure.use(requirePolicy("read_platform", "tenant"));
+export const analyticsReadProcedure = protectedProcedure.use(requirePolicy("read_analytics", "tenant"));
+export const workspaceReadProcedure = protectedProcedure.use(requirePolicy("read", "workspace", () => "switchos-operator-workspaces"));

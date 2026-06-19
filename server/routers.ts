@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { analyticsReadProcedure, platformReadProcedure, publicProcedure, router } from "./_core/trpc";
+import { analyticsReadProcedure, publicProcedure, router, workspaceReadProcedure } from "./_core/trpc";
 import { systemRouter } from "./_core/systemRouter";
 import {
   getDriverMobilityWorkspace,
@@ -49,27 +49,27 @@ export const appRouter = router({
   }),
 
   driverMobility: router({
-    summary: platformReadProcedure.input(listInput).query(({ input }) => getDriverMobilityWorkspace(input?.limit)),
+    summary: workspaceReadProcedure.input(listInput).query(({ input }) => getDriverMobilityWorkspace(input?.limit)),
   }),
 
   tablesideOrdering: router({
-    summary: platformReadProcedure.input(listInput).query(({ input }) => getTablesideWorkspace(input?.limit)),
+    summary: workspaceReadProcedure.input(listInput).query(({ input }) => getTablesideWorkspace(input?.limit)),
   }),
 
   whiteLabelApps: router({
-    summary: platformReadProcedure.input(listInput).query(({ input }) => getWhiteLabelAppsWorkspace(input?.limit)),
+    summary: workspaceReadProcedure.input(listInput).query(({ input }) => getWhiteLabelAppsWorkspace(input?.limit)),
   }),
 
   merchantChannels: router({
-    workspace: platformReadProcedure.query(() => getMerchantChannelWorkspace()),
+    workspace: workspaceReadProcedure.query(() => getMerchantChannelWorkspace()),
   }),
 
   serviceRecovery: router({
-    workspace: platformReadProcedure.query(() => getServiceRecoveryWorkspace()),
+    workspace: workspaceReadProcedure.query(() => getServiceRecoveryWorkspace()),
   }),
 
   phoneOrdering: router({
-    workspace: platformReadProcedure.query(() => getPhoneOrderingWorkspace()),
+    workspace: workspaceReadProcedure.query(() => getPhoneOrderingWorkspace()),
   }),
 });
 

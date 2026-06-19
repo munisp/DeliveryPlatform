@@ -15,6 +15,7 @@ import {
   resolveUserFromExternalTokens,
 } from "./auth";
 import { authenticateOperator, ensureOperatorAuthStore } from "./operatorAuthStore";
+import { consumeRateLimit, getRateLimiterStatus } from "./rateLimiter";
 
 const OIDC_STATE_COOKIE = "switchos_oidc_state";
 const OIDC_NONCE_COOKIE = "switchos_oidc_nonce";
@@ -22,8 +23,6 @@ const OIDC_VERIFIER_COOKIE = "switchos_oidc_verifier";
 const OIDC_RETURN_TO_COOKIE = "switchos_oidc_return_to";
 
 const app = express();
-const rateWindowMs = 60_000;
-const rateLimitBuckets = new Map<string, { count: number; resetAt: number }>();
 const allowedOrigins = ENV.allowedOrigins
   .split(",")
   .map((origin) => origin.trim())
@@ -99,37 +98,26 @@ function applyCors(req: express.Request, res: express.Response) {
   }
 }
 
-function consumeRateLimitBucket(key: string, limit: number) {
-  const now = Date.now();
-  const existing = rateLimitBuckets.get(key);
-  if (!existing || existing.resetAt <= now) {
-    rateLimitBuckets.set(key, { count: 1, resetAt: now + rateWindowMs });
-    return { allowed: true, remaining: limit - 1, resetAt: now + rateWindowMs };
-  }
-
-  existing.count += 1;
-  rateLimitBuckets.set(key, existing);
-  return {
-    allowed: existing.count <= limit,
-    remaining: Math.max(0, limit - existing.count),
-    resetAt: existing.resetAt,
-  };
-}
-
 function rateLimit(limit: number): express.RequestHandler {
-  return (req, res, next) => {
-    const key = `${req.ip}:${req.path}`;
-    const bucket = consumeRateLimitBucket(key, limit);
-    res.setHeader("X-RateLimit-Limit", String(limit));
-    res.setHeader("X-RateLimit-Remaining", String(bucket.remaining));
-    res.setHeader("X-RateLimit-Reset", String(Math.ceil(bucket.resetAt / 1000)));
+  return async (req, res, next) => {
+    try {
+      const key = `${req.ip}:${req.path}`;
+      const bucket = await consumeRateLimit(key, limit);
+      res.setHeader("X-RateLimit-Limit", String(limit));
+      res.setHeader("X-RateLimit-Remaining", String(bucket.remaining));
+      res.setHeader("X-RateLimit-Reset", String(Math.ceil(bucket.resetAt / 1000)));
+      res.setHeader("X-RateLimit-Backend", bucket.mode);
 
-    if (!bucket.allowed) {
-      res.status(429).json({ error: "rate_limit_exceeded" });
-      return;
+      if (!bucket.allowed) {
+        res.status(429).json({ error: "rate_limit_exceeded" });
+        return;
+      }
+
+      next();
+    } catch (error) {
+      console.error("[SwitchOS] Rate limiter failure", error);
+      res.status(500).json({ error: "rate_limiter_unavailable" });
     }
-
-    next();
   };
 }
 
@@ -172,12 +160,14 @@ app.use(express.urlencoded({ extended: true, limit: ENV.apiBodyLimit }));
 
 app.get("/api/health", async (_req, res) => {
   const discovery = ENV.enableExternalOidc ? await getOidcDiscoveryDocument() : null;
+  const rateLimiter = await getRateLimiterStatus();
   res.json({
     ok: true,
     service: "switchos-operator-dashboard",
     timestamp: new Date().toISOString(),
     externalOidcEnabled: ENV.enableExternalOidc,
     oidcIssuer: (discovery?.issuer ?? ENV.oidcIssuerUrl) || null,
+    rateLimiter,
   });
 });
 
@@ -220,7 +210,7 @@ app.get("/api/auth/oidc/start", rateLimit(20), async (req, res) => {
   }
 });
 
-app.get("/api/auth/oidc/callback", rateLimit(20), async (req, res) => {
+app.get("/api/auth/oidc/callback", rateLimit(30), async (req, res) => {
   if (!ENV.enableExternalOidc) {
     res.status(404).json({ error: "external_oidc_disabled" });
     return;
@@ -228,61 +218,59 @@ app.get("/api/auth/oidc/callback", rateLimit(20), async (req, res) => {
 
   const state = typeof req.query.state === "string" ? req.query.state : "";
   const code = typeof req.query.code === "string" ? req.query.code : "";
-  const cookieState = `${req.cookies?.[OIDC_STATE_COOKIE] ?? ""}`;
-  const cookieNonce = `${req.cookies?.[OIDC_NONCE_COOKIE] ?? ""}`;
-  const cookieVerifier = `${req.cookies?.[OIDC_VERIFIER_COOKIE] ?? ""}`;
-  const returnTo = sanitizeReturnTo(`${req.cookies?.[OIDC_RETURN_TO_COOKIE] ?? "/dashboard"}`);
+  const storedState = req.cookies?.[OIDC_STATE_COOKIE];
+  const storedNonce = req.cookies?.[OIDC_NONCE_COOKIE];
+  const storedVerifier = req.cookies?.[OIDC_VERIFIER_COOKIE];
+  const returnTo = sanitizeReturnTo(req.cookies?.[OIDC_RETURN_TO_COOKIE]);
 
-  if (!state || !code || !cookieState || state !== cookieState || !cookieVerifier) {
+  if (!code || !state || !storedState || state !== storedState || !storedNonce || !storedVerifier) {
     clearOidcFlowCookies(res);
-    res.redirect(302, `/portal?error=${encodeURIComponent("oidc_state_mismatch")}`);
+    res.status(400).json({ error: "invalid_oidc_callback_state" });
     return;
   }
 
   try {
     const origin = getRequestOrigin(req);
-    const tokens = await resolveUserFromExternalTokens(
-      await import("./auth").then(({ exchangeAuthorizationCode }) => exchangeAuthorizationCode(code, cookieVerifier, origin)),
-      cookieNonce,
-    );
+    const identity = await resolveUserFromExternalTokens({
+      code,
+      nonce: storedNonce,
+      codeVerifier: storedVerifier,
+      origin,
+    });
 
-    if (!tokens) {
+    if (!identity?.email) {
       clearOidcFlowCookies(res);
-      res.redirect(302, `/portal?error=${encodeURIComponent("invalid_external_token")}`);
+      res.status(403).json({ error: "oidc_identity_missing_email" });
       return;
     }
 
     await issueOperatorSession(res, {
-      id: tokens.id,
-      name: tokens.name,
-      email: tokens.email ?? `${tokens.openId ?? tokens.id}@switchos.local`,
-      role: tokens.role ?? "viewer",
-      tenantId: tokens.tenantId,
+      id: Number(identity.id),
+      name: identity.name,
+      email: identity.email,
+      role: identity.role,
+      tenantId: identity.tenantId,
     });
     clearOidcFlowCookies(res);
     res.redirect(302, returnTo);
   } catch (error) {
-    console.error("[SwitchOS] OIDC callback failed", error);
+    console.error("[SwitchOS] Failed to complete OIDC callback", error);
     clearOidcFlowCookies(res);
-    res.redirect(302, `/portal?error=${encodeURIComponent("oidc_callback_failed")}`);
+    res.status(500).json({ error: "oidc_callback_failed" });
   }
 });
 
-app.post("/api/auth/login", rateLimit(20), async (req, res) => {
-  if (ENV.enableExternalOidc && ENV.isProduction) {
-    res.status(403).json({ error: "local_login_disabled" });
-    return;
-  }
-
-  const email = `${req.body?.email ?? ""}`.trim().toLowerCase();
-  const password = `${req.body?.password ?? ""}`;
-
-  if (!email || !password) {
-    res.status(400).json({ error: "missing_credentials" });
-    return;
-  }
-
+app.post("/api/auth/login", rateLimit(15), async (req, res) => {
   try {
+    await ensureOperatorAuthStore();
+    const email = `${req.body?.email ?? ""}`.trim().toLowerCase();
+    const password = `${req.body?.password ?? ""}`;
+
+    if (!email || !password) {
+      res.status(400).json({ error: "email_and_password_required" });
+      return;
+    }
+
     const operator = await authenticateOperator(email, password);
     if (!operator) {
       res.status(401).json({ error: "invalid_credentials" });
@@ -290,70 +278,46 @@ app.post("/api/auth/login", rateLimit(20), async (req, res) => {
     }
 
     await issueOperatorSession(res, operator);
-    res.status(200).json({ ok: true, redirect: "/dashboard", operator: { email: operator.email, role: operator.role } });
+    res.status(200).json({ ok: true, user: operator });
   } catch (error) {
-    console.error("[SwitchOS] Login failed", error);
+    console.error("[SwitchOS] Operator login failed", error);
     res.status(500).json({ error: "login_failed" });
   }
 });
 
-app.post("/api/auth/dev-session", rateLimit(10), async (req, res) => {
-  if (ENV.isProduction || ENV.enableExternalOidc) {
-    res.status(404).json({ error: "not_found" });
-    return;
-  }
-
-  const requestedRole = `${req.body?.role ?? "admin"}`.trim().toLowerCase();
-  const role = ["admin", "operator", "ops"].includes(requestedRole) ? requestedRole : "operator";
-  await issueOperatorSession(res, {
-    id: 1,
-    name: ENV.bootstrapOperatorName,
-    email: ENV.bootstrapOperatorEmail,
-    role,
-    tenantId: ENV.bootstrapTenantId,
-  });
-
-  res.status(200).json({ ok: true, role, redirect: "/dashboard" });
+app.post("/api/auth/logout", rateLimit(20), async (_req, res) => {
+  clearOidcFlowCookies(res);
+  res.clearCookie(COOKIE_NAME, getCookieOptions());
+  res.status(200).json({ ok: true });
 });
 
-app.post("/api/auth/logout", (_req, res) => {
-  res.clearCookie(COOKIE_NAME, getCookieOptions());
-  clearOidcFlowCookies(res);
-  res.setHeader("Cache-Control", "no-store");
-  res.status(200).json({ ok: true, logoutUrl: ENV.oidcLogoutUrl || null });
+app.use(async (req, _res, next) => {
+  try {
+    req.user = await getSessionUserFromRequest(req);
+  } catch (error) {
+    console.warn("[SwitchOS] Failed to resolve session user", error);
+    req.user = null;
+  }
+  next();
 });
 
 app.use(
   "/api/trpc",
-  rateLimit(120),
   createHTTPHandler({
     router: appRouter,
-    async createContext({ req, res }) {
+    createContext({ req, res }) {
       return {
         req,
         res,
-        user: await getSessionUserFromRequest(req.headers),
+        user: req.user ?? null,
       };
+    },
+    onError({ error, path }) {
+      console.error(`[SwitchOS] tRPC error on ${path ?? "unknown_path"}`, error);
     },
   }),
 );
 
-app.get("*", (_req, res) => {
-  res.setHeader("Cache-Control", ENV.cacheControlIndexHtml);
-  res.setHeader("Pragma", "no-cache");
-  res.setHeader("Expires", "0");
-  res.status(200).send("SwitchOS API is running.");
+app.listen(ENV.port, ENV.bindHost, () => {
+  console.log(`[SwitchOS] Operator edge listening on http://${ENV.bindHost}:${ENV.port}`);
 });
-
-const port = Number(process.env.PORT || 3005);
-
-ensureOperatorAuthStore()
-  .then(() => {
-    app.listen(port, ENV.bindHost, () => {
-      console.log(`[SwitchOS] API listening on http://${ENV.bindHost}:${port}`);
-    });
-  })
-  .catch((error) => {
-    console.error("[SwitchOS] Failed to initialize operator auth store", error);
-    process.exit(1);
-  });
