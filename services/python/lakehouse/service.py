@@ -2,93 +2,120 @@ from __future__ import annotations
 
 import json
 import os
-from collections import defaultdict
 from datetime import datetime, timezone
-from pathlib import Path
 from statistics import mean
 from typing import Any
 
+import psycopg
 from loguru import logger
 
 
 class LakehouseService:
     def __init__(self) -> None:
-        self.base_path = Path(os.getenv("LAKEHOUSE_PATH", "/tmp/switchos-lakehouse"))
-        self.table_paths: dict[str, Path] = {}
-        self.metadata: dict[str, dict[str, Any]] = {}
-        self.base_path.mkdir(parents=True, exist_ok=True)
+        self.database_url = os.getenv(
+            "DATABASE_URL",
+            "postgresql://ubuntu:ubuntu@127.0.0.1:5432/switchos?sslmode=disable",
+        )
+        self.schema_name = os.getenv("LAKEHOUSE_SCHEMA", "switchos_lakehouse")
 
     async def initialize(self) -> None:
-        logger.info("Lakehouse service using base path {}", self.base_path)
+        logger.info("Lakehouse service using PostgreSQL-backed schema {}", self.schema_name)
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(f"CREATE SCHEMA IF NOT EXISTS {self.schema_name}")
+                cur.execute(
+                    f"""
+                    CREATE TABLE IF NOT EXISTS {self.schema_name}.table_registry (
+                        table_name TEXT PRIMARY KEY,
+                        format TEXT NOT NULL,
+                        partition_by TEXT NOT NULL,
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    )
+                    """
+                )
+                cur.execute(
+                    f"""
+                    CREATE TABLE IF NOT EXISTS {self.schema_name}.events (
+                        id BIGSERIAL PRIMARY KEY,
+                        table_name TEXT NOT NULL,
+                        record_key TEXT,
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                        event_timestamp TIMESTAMPTZ NOT NULL,
+                        partition_value TEXT NOT NULL,
+                        payload JSONB NOT NULL
+                    )
+                    """
+                )
+                cur.execute(
+                    f"CREATE INDEX IF NOT EXISTS idx_{self.schema_name}_events_table_time ON {self.schema_name}.events (table_name, event_timestamp DESC)"
+                )
+                cur.execute(
+                    f"CREATE INDEX IF NOT EXISTS idx_{self.schema_name}_events_payload ON {self.schema_name}.events USING GIN (payload)"
+                )
+            conn.commit()
         for table_name in ("orders", "drivers", "payments", "marketplace_events"):
-            await self.create_table(table_name, partition_by="date", fmt="jsonl")
+            await self.create_table(table_name, partition_by="date", fmt="jsonb")
 
     async def cleanup(self) -> None:
         logger.info("Lakehouse service cleanup complete")
 
-    async def create_table(self, table_name: str, partition_by: str = "date", fmt: str = "jsonl") -> dict[str, Any]:
-        table_path = self.base_path / table_name
-        table_path.mkdir(parents=True, exist_ok=True)
-        self.table_paths[table_name] = table_path
-        self.metadata.setdefault(
-            table_name,
-            {
-                "table_name": table_name,
-                "format": fmt,
-                "partition_by": partition_by,
-                "created_at": datetime.now(timezone.utc).isoformat(),
-                "row_count": 0,
-            },
-        )
-        return self.metadata[table_name]
+    async def create_table(self, table_name: str, partition_by: str = "date", fmt: str = "jsonb") -> dict[str, Any]:
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    INSERT INTO {self.schema_name}.table_registry (table_name, format, partition_by, created_at, updated_at)
+                    VALUES (%s, %s, %s, NOW(), NOW())
+                    ON CONFLICT (table_name) DO UPDATE
+                    SET format = EXCLUDED.format,
+                        partition_by = EXCLUDED.partition_by,
+                        updated_at = NOW()
+                    RETURNING table_name, format, partition_by, created_at, updated_at
+                    """,
+                    (table_name, fmt, partition_by),
+                )
+                row = cur.fetchone()
+            conn.commit()
+        return self._registry_row_to_dict(row) if row else {}
 
     async def ingest_data(self, table_name: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
-        if table_name not in self.table_paths:
-            await self.create_table(table_name)
-
+        await self.create_table(table_name)
         if not rows:
             return {"success": True, "inserted": 0, "table_name": table_name}
 
-        partition_key = self.metadata[table_name].get("partition_by", "date")
-        grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
-        for row in rows:
-            timestamp_raw = row.get("timestamp") or row.get("created_at") or datetime.now(timezone.utc).isoformat()
-            timestamp = self._parse_timestamp(timestamp_raw)
-            row.setdefault("timestamp", timestamp.isoformat())
-            row.setdefault("created_at", timestamp.isoformat())
-            row.setdefault("date", timestamp.date().isoformat())
-            partition_value = row.get(partition_key) or timestamp.date().isoformat()
-            grouped[str(partition_value)].append(row)
-
         inserted = 0
-        for partition_value, partition_rows in grouped.items():
-            partition_dir = self.table_paths[table_name] / f"{partition_key}={partition_value}"
-            partition_dir.mkdir(parents=True, exist_ok=True)
-            output_file = partition_dir / "events.jsonl"
-            with output_file.open("a", encoding="utf-8") as handle:
-                for row in partition_rows:
-                    handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                partition_by = self._get_partition_by(cur, table_name)
+                for row in rows:
+                    timestamp_raw = row.get("timestamp") or row.get("created_at") or datetime.now(timezone.utc).isoformat()
+                    timestamp = self._parse_timestamp(timestamp_raw)
+                    row.setdefault("timestamp", timestamp.isoformat())
+                    row.setdefault("created_at", timestamp.isoformat())
+                    row.setdefault("date", timestamp.date().isoformat())
+                    partition_value = str(row.get(partition_by) or timestamp.date().isoformat())
+                    record_key = self._derive_record_key(table_name, row)
+                    cur.execute(
+                        f"""
+                        INSERT INTO {self.schema_name}.events (
+                            table_name, record_key, created_at, event_timestamp, partition_value, payload
+                        ) VALUES (%s, %s, NOW(), %s, %s, %s::jsonb)
+                        """,
+                        (table_name, record_key, timestamp, partition_value, json.dumps(row)),
+                    )
                     inserted += 1
-
-        self.metadata[table_name]["row_count"] = int(self.metadata[table_name].get("row_count", 0)) + inserted
-        self.metadata[table_name]["updated_at"] = datetime.now(timezone.utc).isoformat()
-        return {
-            "success": True,
-            "inserted": inserted,
-            "table_name": table_name,
-            "path": str(self.table_paths[table_name]),
-        }
+                cur.execute(
+                    f"UPDATE {self.schema_name}.table_registry SET updated_at = NOW() WHERE table_name = %s",
+                    (table_name,),
+                )
+            conn.commit()
+        return {"success": True, "inserted": inserted, "table_name": table_name, "backend": "postgresql"}
 
     async def query_data(self, table_name: str, limit: int = 100) -> dict[str, Any]:
-        if table_name not in self.table_paths:
-            return {"table_name": table_name, "rows": [], "row_count": 0}
-
-        rows = self._load_rows(table_name, limit=limit)
-        return {
-            "table_name": table_name,
-            "row_count": int(self.metadata.get(table_name, {}).get("row_count", len(rows))),
-            "rows": rows[:limit],
-        }
+        rows = self._load_rows(table_name, limit=max(1, limit))
+        row_count = self._count_rows(table_name)
+        return {"table_name": table_name, "row_count": row_count, "rows": rows[:limit]}
 
     async def get_analytics_summary(self) -> dict[str, Any]:
         orders = self._load_rows("orders", limit=5000)
@@ -101,6 +128,7 @@ class LakehouseService:
 
         return {
             "source": "lakehouse",
+            "backend": "postgresql",
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "order_stats": order_stats,
             "driver_stats": driver_stats,
@@ -108,27 +136,115 @@ class LakehouseService:
         }
 
     async def list_tables(self) -> list[dict[str, Any]]:
-        return [self.metadata[name] for name in sorted(self.metadata.keys())]
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT r.table_name, r.format, r.partition_by, r.created_at, r.updated_at,
+                           COALESCE(c.row_count, 0) AS row_count
+                    FROM {self.schema_name}.table_registry r
+                    LEFT JOIN (
+                        SELECT table_name, COUNT(*) AS row_count
+                        FROM {self.schema_name}.events
+                        GROUP BY table_name
+                    ) c ON c.table_name = r.table_name
+                    ORDER BY r.table_name ASC
+                    """
+                )
+                rows = cur.fetchall()
+        return [self._registry_listing_row_to_dict(row) for row in rows]
 
     async def get_table_metadata(self, table_name: str) -> dict[str, Any] | None:
-        return self.metadata.get(table_name)
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT r.table_name, r.format, r.partition_by, r.created_at, r.updated_at,
+                           COALESCE(c.row_count, 0) AS row_count
+                    FROM {self.schema_name}.table_registry r
+                    LEFT JOIN (
+                        SELECT table_name, COUNT(*) AS row_count
+                        FROM {self.schema_name}.events
+                        GROUP BY table_name
+                    ) c ON c.table_name = r.table_name
+                    WHERE r.table_name = %s
+                    """,
+                    (table_name,),
+                )
+                row = cur.fetchone()
+        return self._registry_listing_row_to_dict(row) if row else None
+
+    def _connect(self) -> psycopg.Connection:
+        return psycopg.connect(self.database_url)
+
+    def _get_partition_by(self, cur: psycopg.Cursor, table_name: str) -> str:
+        cur.execute(
+            f"SELECT partition_by FROM {self.schema_name}.table_registry WHERE table_name = %s",
+            (table_name,),
+        )
+        row = cur.fetchone()
+        if not row:
+            return "date"
+        return str(row[0] or "date")
 
     def _load_rows(self, table_name: str, limit: int = 100) -> list[dict[str, Any]]:
-        if table_name not in self.table_paths:
-            return []
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT payload
+                    FROM {self.schema_name}.events
+                    WHERE table_name = %s
+                    ORDER BY event_timestamp DESC, id DESC
+                    LIMIT %s
+                    """,
+                    (table_name, limit),
+                )
+                rows = cur.fetchall()
+        return [row[0] for row in rows]
 
-        rows: list[dict[str, Any]] = []
-        files = sorted(self.table_paths[table_name].rglob("*.jsonl"), reverse=True)
-        for jsonl_file in files:
-            with jsonl_file.open("r", encoding="utf-8") as handle:
-                for line in handle:
-                    try:
-                        rows.append(json.loads(line))
-                    except json.JSONDecodeError:
-                        continue
-                    if len(rows) >= limit:
-                        return rows[:limit]
-        return rows[:limit]
+    def _count_rows(self, table_name: str) -> int:
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"SELECT COUNT(*) FROM {self.schema_name}.events WHERE table_name = %s",
+                    (table_name,),
+                )
+                row = cur.fetchone()
+        return int(row[0]) if row else 0
+
+    def _derive_record_key(self, table_name: str, row: dict[str, Any]) -> str | None:
+        for key in (
+            "id",
+            "order_id",
+            "driver_id",
+            "payment_id",
+            "transaction_id",
+            "event_id",
+            "quote_id",
+        ):
+            if key in row and row[key] not in (None, ""):
+                return f"{table_name}:{row[key]}"
+        return None
+
+    def _registry_row_to_dict(self, row: Any) -> dict[str, Any]:
+        return {
+            "table_name": row[0],
+            "format": row[1],
+            "partition_by": row[2],
+            "created_at": row[3].isoformat() if row[3] else None,
+            "updated_at": row[4].isoformat() if row[4] else None,
+        }
+
+    def _registry_listing_row_to_dict(self, row: Any) -> dict[str, Any]:
+        return {
+            "table_name": row[0],
+            "format": row[1],
+            "partition_by": row[2],
+            "created_at": row[3].isoformat() if row[3] else None,
+            "updated_at": row[4].isoformat() if row[4] else None,
+            "row_count": int(row[5]),
+        }
 
     def _parse_timestamp(self, raw: Any) -> datetime:
         if isinstance(raw, datetime):
@@ -175,7 +291,7 @@ class LakehouseService:
         marketplace_events: list[dict[str, Any]],
     ) -> dict[str, Any]:
         now = datetime.now(timezone.utc)
-        open_statuses = {"pending", "confirmed", "assigned", "in_progress"}
+        open_statuses = {"pending", "confirmed", "assigned", "in_progress", "picked_up", "in_transit"}
         waiting_statuses = {"pending"}
 
         open_orders = [order for order in orders if str(order.get("status", "")).lower() in open_statuses]
@@ -190,21 +306,23 @@ class LakehouseService:
         ]
         busy_driver_rows = [driver for driver in drivers if str(driver.get("status", "")).lower() == "busy"]
 
-        zone_groups: dict[str, dict[str, Any]] = defaultdict(
-            lambda: {
-                "zone_key": "0",
-                "open_orders": 0,
-                "waiting_orders": 0,
-                "avg_wait_samples": [],
-                "available_drivers": 0,
-                "busy_drivers": 0,
-            }
-        )
+        zone_groups: dict[str, dict[str, Any]] = {}
+
+        def bucket_for(zone_key: str) -> dict[str, Any]:
+            if zone_key not in zone_groups:
+                zone_groups[zone_key] = {
+                    "zone_key": zone_key,
+                    "open_orders": 0,
+                    "waiting_orders": 0,
+                    "avg_wait_samples": [],
+                    "available_drivers": 0,
+                    "busy_drivers": 0,
+                }
+            return zone_groups[zone_key]
 
         for order in orders:
             zone_key = str(order.get("vertical_id") or order.get("zone_key") or 0)
-            bucket = zone_groups[zone_key]
-            bucket["zone_key"] = zone_key
+            bucket = bucket_for(zone_key)
             status = str(order.get("status", "")).lower()
             if status in open_statuses:
                 bucket["open_orders"] += 1
@@ -216,8 +334,7 @@ class LakehouseService:
 
         for driver in drivers:
             zone_key = str(driver.get("primary_vertical_id") or driver.get("vertical_id") or 0)
-            bucket = zone_groups[zone_key]
-            bucket["zone_key"] = zone_key
+            bucket = bucket_for(zone_key)
             status = str(driver.get("status", "")).lower()
             if status in {"online", "available"}:
                 bucket["available_drivers"] += 1
@@ -258,28 +375,14 @@ class LakehouseService:
             )
 
         hotspots.sort(key=lambda row: (row["pressure_ratio"], row["waiting_orders"], row["open_orders"]), reverse=True)
-        assignment_events_7d = 0
-        seven_days_ago = now.timestamp() - (7 * 24 * 60 * 60)
-        for event in marketplace_events:
-            event_type = str(event.get("event_type") or event.get("type") or "").lower()
-            event_timestamp = self._parse_timestamp(event.get("timestamp") or event.get("created_at"))
-            if event_timestamp.timestamp() >= seven_days_ago and event_type in {"assignment", "driver_assigned", "orders.driver_assigned"}:
-                assignment_events_7d += 1
-
-        if assignment_events_7d == 0:
-            assignment_events_7d = sum(1 for order in orders if order.get("driver_id") is not None)
+        recent_events = marketplace_events[:10]
 
         return {
-            "queue": {
-                "pending_orders": len(waiting_orders),
-                "avg_queue_minutes": round(mean(waiting_minutes), 2) if waiting_minutes else 0.0,
-            },
-            "drivers": {
-                "available_drivers": len(available_driver_rows),
-                "busy_drivers": len(busy_driver_rows),
-            },
-            "activity_signals": {
-                "assignment_events_7d": assignment_events_7d,
-            },
+            "open_orders": len(open_orders),
+            "waiting_orders": len(waiting_orders),
+            "avg_wait_minutes": round(mean(waiting_minutes), 2) if waiting_minutes else 0.0,
+            "available_drivers": len(available_driver_rows),
+            "busy_drivers": len(busy_driver_rows),
             "hotspots": hotspots[:8],
+            "recent_events": recent_events,
         }

@@ -1,6 +1,17 @@
-import { Menu, X, LayoutDashboard, BarChart3, CarFront, UtensilsCrossed, AppWindow, ShieldCheck, Store, PhoneCall } from "lucide-react";
 import { type ReactNode, useMemo, useState } from "react";
 import { useLocation } from "wouter";
+import {
+  AppWindow,
+  BarChart3,
+  CarFront,
+  LayoutDashboard,
+  Menu,
+  PhoneCall,
+  ShieldCheck,
+  Store,
+  UtensilsCrossed,
+  X,
+} from "lucide-react";
 
 const menuItems = [
   { icon: LayoutDashboard, label: "Control Center", path: "/dashboard" },
@@ -9,7 +20,7 @@ const menuItems = [
   { icon: UtensilsCrossed, label: "Tableside Commerce", path: "/tableside-commerce" },
   { icon: AppWindow, label: "White-Label Apps", path: "/white-label-apps" },
   { icon: Store, label: "Merchant Channels", path: "/merchant-channels" },
-  { icon: PhoneCall, label: "Phone Ordering", path: "/phone-ordering" },
+  { icon: PhoneCall, label: "Phone Ordering", path: "/phone-ordering-studio" },
   { icon: ShieldCheck, label: "Service Recovery", path: "/service-recovery" },
 ];
 
@@ -52,7 +63,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
           <div className="mb-6 rounded-2xl border border-cyan-500/20 bg-cyan-500/10 p-4">
             <div className="text-sm font-medium text-cyan-100">Operational focus</div>
             <p className="mt-2 text-sm leading-6 text-slate-300">
-              This rebuilt shell prioritizes the domains that were previously orphaned or summary-only and gives them a connected control plane.
+              These workspaces expose the currently connected operator domains with persisted backend signals, authenticated access, and production-oriented controls.
             </p>
           </div>
 
@@ -100,7 +111,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
               </div>
 
               <div className="rounded-full border border-slate-800 bg-slate-900 px-4 py-2 text-sm text-slate-300">
-                End-to-end rebuild in progress
+                Persisted operations enabled
               </div>
             </div>
           </header>

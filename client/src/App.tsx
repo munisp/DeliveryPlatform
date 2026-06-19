@@ -1,5 +1,5 @@
-import { FormEvent, useState } from "react";
-import { useMutation } from "@tanstack/react-query";
+import React, { FormEvent, useEffect, useMemo, useState } from "react";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link, Route, Switch } from "wouter";
 
 import DashboardLayout from "@/components/DashboardLayout";
@@ -12,16 +12,24 @@ import ServiceRecovery from "@/pages/ServiceRecovery";
 import PhoneOrderingStudio from "@/pages/PhoneOrderingStudio";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
+type AuthConfig = {
+  externalOidcEnabled: boolean;
+  oidcIssuer: string | null;
+  oidcClientId: string | null;
+  oidcLogoutUrl: string | null;
+  fallbackLoginEnabled: boolean;
+};
+
 const quickLinks = [
   {
     title: "Driver Mobility",
     href: "/driver-mobility",
-    description: "Dispatch pressure, driver supply operations, and assignment readiness for Uber-style mobility execution.",
+    description: "Dispatch pressure, driver supply operations, and assignment readiness for live mobility execution.",
   },
   {
     title: "Tableside Commerce",
     href: "/tableside-commerce",
-    description: "In-venue ordering, kitchen pacing, and hospitality execution for DoorDash-style merchant channels.",
+    description: "In-venue ordering, kitchen pacing, and hospitality execution for merchant dining channels.",
   },
   {
     title: "White-Label Apps",
@@ -31,9 +39,22 @@ const quickLinks = [
   {
     title: "Analytics",
     href: "/analytics",
-    description: "Lakehouse-aware marketplace analytics, supply hotspots, and operator response visibility.",
+    description: "Lakehouse-backed marketplace analytics, supply hotspots, and operator response visibility.",
   },
 ];
+
+async function fetchAuthConfig(): Promise<AuthConfig> {
+  const response = await fetch("/api/auth/config", {
+    credentials: "include",
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    throw new Error("Unable to load authentication configuration.");
+  }
+
+  return await response.json() as AuthConfig;
+}
 
 function HomePage() {
   return (
@@ -42,10 +63,10 @@ function HomePage() {
         <div className="space-y-4">
           <div className="text-sm uppercase tracking-[0.3em] text-cyan-300">SwitchOS</div>
           <h1 className="max-w-4xl text-4xl font-semibold tracking-tight lg:text-6xl">
-            Multi-vertical commerce, logistics, and operator tooling rebuilt around connected workflows.
+            Multi-vertical commerce, logistics, and operator tooling aligned around durable operational workflows.
           </h1>
           <p className="max-w-3xl text-lg leading-8 text-slate-300">
-            This recovery pass focuses on replacing orphaned and summary-only surfaces with connected operational workspaces for analytics, mobility, hospitality, and merchant-owned channels.
+            The operator experience now focuses on the actively connected workspaces that have real backend coverage for analytics, mobility, merchant channels, and recovery operations.
           </p>
           <div className="flex flex-wrap gap-3 pt-2">
             <Link href="/dashboard" className="rounded-full bg-cyan-500 px-5 py-3 text-sm font-medium text-slate-950 transition hover:bg-cyan-400">
@@ -80,6 +101,17 @@ function HomePage() {
 function PortalPage() {
   const [email, setEmail] = useState("admin@switchos.local");
   const [password, setPassword] = useState("ChangeMe123!");
+  const [externalToken, setExternalToken] = useState("");
+
+  const authConfigQuery = useQuery({
+    queryKey: ["auth-config"],
+    queryFn: fetchAuthConfig,
+    staleTime: 60_000,
+  });
+
+  const authConfig = authConfigQuery.data;
+  const externalEnabled = authConfig?.externalOidcEnabled ?? false;
+  const fallbackLoginEnabled = authConfig?.fallbackLoginEnabled ?? true;
 
   const loginMutation = useMutation({
     mutationFn: async ({ email, password }: { email: string; password: string }) => {
@@ -95,6 +127,30 @@ function PortalPage() {
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) {
         const errorMessage = typeof payload?.error === "string" ? payload.error : "Unable to establish operator session.";
+        throw new Error(errorMessage);
+      }
+
+      return payload as { redirect?: string };
+    },
+    onSuccess(payload) {
+      window.location.href = payload.redirect || "/dashboard";
+    },
+  });
+
+  const externalLoginMutation = useMutation({
+    mutationFn: async (accessToken: string) => {
+      const response = await fetch("/api/auth/external-session", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        credentials: "include",
+        body: JSON.stringify({ accessToken }),
+      });
+
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const errorMessage = typeof payload?.error === "string" ? payload.error : "Unable to establish external operator session.";
         throw new Error(errorMessage);
       }
 
@@ -134,83 +190,146 @@ function PortalPage() {
     loginMutation.mutate({ email, password });
   };
 
+  const handleExternalSubmit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    externalLoginMutation.mutate(externalToken.trim());
+  };
+
+  const authModeLabel = useMemo(() => {
+    if (externalEnabled) {
+      return "External identity is enabled for this environment.";
+    }
+    return "Local credential-backed sign-in remains available for environments that have not yet enabled external identity.";
+  }, [externalEnabled]);
+
   return (
     <div className="min-h-screen bg-slate-950 px-6 py-16 text-slate-100 lg:px-12">
       <div className="mx-auto max-w-3xl space-y-6">
         <div className="space-y-4">
           <div className="text-sm uppercase tracking-[0.3em] text-cyan-300">Secure operator access</div>
-          <h1 className="text-4xl font-semibold tracking-tight">Portal access now supports managed operator credentials.</h1>
+          <h1 className="text-4xl font-semibold tracking-tight">Operator portal</h1>
           <p className="max-w-2xl text-lg leading-8 text-slate-300">
-            The platform now supports persistent credential-backed operator login backed by signed sessions. For local recovery and validation environments, the seeded operator account remains available until an external identity provider is connected.
+            {authModeLabel}
           </p>
         </div>
 
-        <Card>
-          <CardHeader>
-            <CardTitle>Operator sign in</CardTitle>
-            <CardDescription>
-              Use the seeded operator account or the credentials provisioned in the deployment environment. Replace the default bootstrap password before production use.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <form className="space-y-4" onSubmit={handleSubmit}>
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-slate-200" htmlFor="operator-email">Email</label>
-                <input
-                  id="operator-email"
-                  type="email"
-                  autoComplete="username"
-                  value={email}
-                  onChange={(event) => setEmail(event.target.value)}
-                  className="w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-slate-100 outline-none transition focus:border-cyan-400"
-                />
-              </div>
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-slate-200" htmlFor="operator-password">Password</label>
-                <input
-                  id="operator-password"
-                  type="password"
-                  autoComplete="current-password"
-                  value={password}
-                  onChange={(event) => setPassword(event.target.value)}
-                  className="w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-slate-100 outline-none transition focus:border-cyan-400"
-                />
-              </div>
-              <button
-                type="submit"
-                disabled={loginMutation.isPending}
-                className="inline-flex rounded-full bg-cyan-500 px-5 py-3 text-sm font-medium text-slate-950 transition hover:bg-cyan-400 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {loginMutation.isPending ? "Signing in..." : "Enter operator dashboard"}
-              </button>
-            </form>
-            {loginMutation.isError ? (
-              <p className="text-sm text-rose-300">{loginMutation.error.message}</p>
-            ) : null}
-          </CardContent>
-        </Card>
+        {authConfigQuery.isError ? (
+          <Card>
+            <CardContent className="pt-6">
+              <p className="text-sm text-rose-300">Unable to load authentication configuration.</p>
+            </CardContent>
+          </Card>
+        ) : null}
 
-        <Card>
-          <CardHeader>
-            <CardTitle>Non-production fallback</CardTitle>
-            <CardDescription>
-              This fallback remains available only for local validation. It should be disabled in production in favor of managed credentials or an external identity provider.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <button
-              type="button"
-              onClick={() => devSessionMutation.mutate()}
-              disabled={devSessionMutation.isPending}
-              className="inline-flex rounded-full border border-cyan-400/30 bg-cyan-500/10 px-5 py-3 text-sm font-medium text-cyan-100 transition hover:bg-cyan-500/20 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {devSessionMutation.isPending ? "Creating fallback session..." : "Use local validation session"}
-            </button>
-            {devSessionMutation.isError ? (
-              <p className="text-sm text-rose-300">{devSessionMutation.error.message}</p>
-            ) : null}
-          </CardContent>
-        </Card>
+        {externalEnabled ? (
+          <Card>
+            <CardHeader>
+              <CardTitle>External OIDC session</CardTitle>
+              <CardDescription>
+                Submit a valid access token issued by the configured identity provider. This supports real external verification at the edge when the deployment has OIDC enabled.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="rounded-xl border border-cyan-400/20 bg-cyan-500/5 p-4 text-sm text-slate-300">
+                <p>Issuer: <span className="text-slate-100">{authConfig?.oidcIssuer || "Not configured"}</span></p>
+                <p>Client: <span className="text-slate-100">{authConfig?.oidcClientId || "Not configured"}</span></p>
+              </div>
+              <form className="space-y-4" onSubmit={handleExternalSubmit}>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium text-slate-200" htmlFor="external-access-token">Access token</label>
+                  <textarea
+                    id="external-access-token"
+                    value={externalToken}
+                    onChange={(event) => setExternalToken(event.target.value)}
+                    className="min-h-40 w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-slate-100 outline-none transition focus:border-cyan-400"
+                    placeholder="Paste a bearer token from the configured OIDC or Keycloak-compatible provider"
+                  />
+                </div>
+                <button
+                  type="submit"
+                  disabled={externalLoginMutation.isPending || !externalToken.trim()}
+                  className="inline-flex rounded-full bg-cyan-500 px-5 py-3 text-sm font-medium text-slate-950 transition hover:bg-cyan-400 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {externalLoginMutation.isPending ? "Verifying token..." : "Enter operator dashboard"}
+                </button>
+              </form>
+              {externalLoginMutation.isError ? (
+                <p className="text-sm text-rose-300">{externalLoginMutation.error.message}</p>
+              ) : null}
+            </CardContent>
+          </Card>
+        ) : null}
+
+        {fallbackLoginEnabled ? (
+          <Card>
+            <CardHeader>
+              <CardTitle>Managed operator sign in</CardTitle>
+              <CardDescription>
+                Use the seeded operator account or the credentials provisioned in the deployment environment. Replace the bootstrap password before any production exposure.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <form className="space-y-4" onSubmit={handleSubmit}>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium text-slate-200" htmlFor="operator-email">Email</label>
+                  <input
+                    id="operator-email"
+                    type="email"
+                    autoComplete="username"
+                    value={email}
+                    onChange={(event) => setEmail(event.target.value)}
+                    className="w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-slate-100 outline-none transition focus:border-cyan-400"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium text-slate-200" htmlFor="operator-password">Password</label>
+                  <input
+                    id="operator-password"
+                    type="password"
+                    autoComplete="current-password"
+                    value={password}
+                    onChange={(event) => setPassword(event.target.value)}
+                    className="w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-slate-100 outline-none transition focus:border-cyan-400"
+                  />
+                </div>
+                <button
+                  type="submit"
+                  disabled={loginMutation.isPending}
+                  className="inline-flex rounded-full bg-cyan-500 px-5 py-3 text-sm font-medium text-slate-950 transition hover:bg-cyan-400 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {loginMutation.isPending ? "Signing in..." : "Enter operator dashboard"}
+                </button>
+              </form>
+              {loginMutation.isError ? (
+                <p className="text-sm text-rose-300">{loginMutation.error.message}</p>
+              ) : null}
+            </CardContent>
+          </Card>
+        ) : null}
+
+        {!externalEnabled && fallbackLoginEnabled ? (
+          <Card>
+            <CardHeader>
+              <CardTitle>Non-production fallback</CardTitle>
+              <CardDescription>
+                This fallback remains available only for local validation. It should stay disabled whenever production OIDC is active.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <button
+                type="button"
+                onClick={() => devSessionMutation.mutate()}
+                disabled={devSessionMutation.isPending}
+                className="inline-flex rounded-full border border-cyan-400/30 bg-cyan-500/10 px-5 py-3 text-sm font-medium text-cyan-100 transition hover:bg-cyan-500/20 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {devSessionMutation.isPending ? "Creating fallback session..." : "Use local validation session"}
+              </button>
+              {devSessionMutation.isError ? (
+                <p className="text-sm text-rose-300">{devSessionMutation.error.message}</p>
+              ) : null}
+            </CardContent>
+          </Card>
+        ) : null}
       </div>
     </div>
   );
@@ -223,7 +342,7 @@ function DashboardPage() {
         <div>
           <h1 className="text-3xl font-semibold tracking-tight text-white">Control Center</h1>
           <p className="mt-2 max-w-3xl text-slate-400">
-            The operator shell has been narrowed to the currently connected domains so incomplete and orphaned modules do not masquerade as finished products.
+            The operator shell is focused on the connected domains that currently have verified backend coverage and persisted operational data.
           </p>
         </div>
 
@@ -253,7 +372,7 @@ function NotFoundPage() {
       <div className="space-y-4">
         <h1 className="text-3xl font-semibold text-white">Workspace not found</h1>
         <p className="max-w-2xl text-slate-400">
-          This route has not been restored yet. The control plane has been narrowed to the domains that currently have connected implementation coverage.
+          This route is outside the currently connected operator workspaces.
         </p>
         <Link href="/dashboard" className="inline-flex rounded-full border border-cyan-400/30 bg-cyan-500/10 px-4 py-2 text-sm font-medium text-cyan-100">
           Return to dashboard
@@ -274,8 +393,8 @@ export default function App() {
       <Route path="/tableside-commerce" component={TablesideCommerce} />
       <Route path="/white-label-apps" component={WhiteLabelApps} />
       <Route path="/merchant-channels" component={MerchantChannels} />
-      <Route path="/phone-ordering" component={PhoneOrderingStudio} />
       <Route path="/service-recovery" component={ServiceRecovery} />
+      <Route path="/phone-ordering-studio" component={PhoneOrderingStudio} />
       <Route component={NotFoundPage} />
     </Switch>
   );

@@ -1,16 +1,20 @@
 package main
 
 import (
+	"bytes"
+	"crypto/subtle"
+	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
 	"sort"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"time"
+
+	_ "github.com/lib/pq"
 )
 
 type Channel string
@@ -66,11 +70,6 @@ type DeadLetterRecord struct {
 	CreatedAt string            `json:"createdAt"`
 }
 
-type CachedDispatch struct {
-	Response  DispatchResponse
-	CreatedAt time.Time
-}
-
 type DispatchMetrics struct {
 	SuccessByChannel map[string]uint64 `json:"successByChannel"`
 	FailureByChannel map[string]uint64 `json:"failureByChannel"`
@@ -80,37 +79,59 @@ type DispatchMetrics struct {
 	LastLatencyMS    int64             `json:"lastLatencyMs"`
 }
 
-var (
-	port = getEnv("PORT", "8099")
-	bindHost = getEnv("BIND_HOST", "127.0.0.1")
+type Service struct {
+	db                   *sql.DB
+	httpClient           *http.Client
+	internalServiceToken string
+	smsProviderURL       string
+	emailProviderURL     string
+	pushProviderURL      string
+}
 
-	healthState = struct {
-		totalRequests     uint64
-		fallbackRequests  uint64
-		lastLatencyMS     int64
-		lastRequestAtUnix int64
-	}{}
-	metricsState = struct {
-		sync.Mutex
-		successByChannel map[string]uint64
-		failureByChannel map[string]uint64
-	}{
-		successByChannel: map[string]uint64{},
-		failureByChannel: map[string]uint64{},
-	}
-	deadLetters   = make([]DeadLetterRecord, 0, 32)
-	deadLettersMu sync.Mutex
-	cacheMu       sync.Mutex
-	dispatchCache = map[string]CachedDispatch{}
+type providerPayload struct {
+	RequestID    string            `json:"requestId"`
+	Type         string            `json:"type"`
+	Channel      string            `json:"channel"`
+	Recipient    Recipient         `json:"recipient"`
+	RenderedBody string            `json:"renderedBody"`
+	Metadata     map[string]string `json:"metadata,omitempty"`
+	Payload      map[string]any    `json:"payload,omitempty"`
+}
+
+var (
+	port     = getEnv("PORT", "8099")
+	bindHost = getEnv("BIND_HOST", "127.0.0.1")
 )
 
 func main() {
+	databaseURL := getEnv("DATABASE_URL", "postgresql://ubuntu:ubuntu@127.0.0.1:5432/switchos?sslmode=disable")
+	db, err := sql.Open("postgres", databaseURL)
+	if err != nil {
+		log.Fatalf("open database: %v", err)
+	}
+	defer db.Close()
+	if err := db.Ping(); err != nil {
+		log.Fatalf("ping database: %v", err)
+	}
+
+	service := &Service{
+		db:                   db,
+		httpClient:           &http.Client{Timeout: 20 * time.Second},
+		internalServiceToken: getEnv("INTERNAL_SERVICE_TOKEN", "switchos-internal-dev-token-change-before-production"),
+		smsProviderURL:       strings.TrimSpace(os.Getenv("SMS_PROVIDER_URL")),
+		emailProviderURL:     strings.TrimSpace(os.Getenv("EMAIL_PROVIDER_URL")),
+		pushProviderURL:      strings.TrimSpace(os.Getenv("PUSH_PROVIDER_URL")),
+	}
+	if err := service.ensureSchema(); err != nil {
+		log.Fatalf("ensure schema: %v", err)
+	}
+
 	mux := http.NewServeMux()
-	mux.HandleFunc("/metrics", metricsHandler)
-	mux.HandleFunc("/health", healthHandler)
-	mux.HandleFunc("/business-health", businessHealthHandler)
-	mux.HandleFunc("/dead-letters", deadLettersHandler)
-	mux.HandleFunc("/dispatch", dispatchHandler)
+	mux.HandleFunc("/metrics", service.metricsHandler)
+	mux.HandleFunc("/health", service.healthHandler)
+	mux.HandleFunc("/business-health", service.businessHealthHandler)
+	mux.HandleFunc("/dead-letters", service.deadLettersHandler)
+	mux.HandleFunc("/dispatch", service.dispatchHandler)
 
 	server := &http.Server{
 		Addr:              fmt.Sprintf("%s:%s", bindHost, port),
@@ -124,7 +145,67 @@ func main() {
 	}
 }
 
-func healthHandler(w http.ResponseWriter, _ *http.Request) {
+func (s *Service) ensureSchema() error {
+	statements := []string{
+		`CREATE TABLE IF NOT EXISTS notification_dispatches (
+			request_id TEXT PRIMARY KEY,
+			dispatch_type TEXT NOT NULL,
+			recipient_phone TEXT,
+			recipient_email TEXT,
+			recipient_name TEXT,
+			recipient_token TEXT,
+			payload_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+			metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+			channels_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+			response_json JSONB,
+			accepted BOOLEAN NOT NULL DEFAULT FALSE,
+			fallback_used BOOLEAN NOT NULL DEFAULT FALSE,
+			degraded_mode BOOLEAN NOT NULL DEFAULT FALSE,
+			duration_ms BIGINT NOT NULL DEFAULT 0,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		)`,
+		`CREATE TABLE IF NOT EXISTS notification_attempts (
+			id BIGSERIAL PRIMARY KEY,
+			request_id TEXT NOT NULL REFERENCES notification_dispatches(request_id) ON DELETE CASCADE,
+			channel TEXT NOT NULL,
+			provider TEXT NOT NULL,
+			success BOOLEAN NOT NULL DEFAULT FALSE,
+			attempt_count INT NOT NULL DEFAULT 1,
+			escalated_to TEXT,
+			message_id TEXT,
+			error_text TEXT,
+			rendered_body TEXT,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		)`,
+		`CREATE TABLE IF NOT EXISTS notification_dead_letters (
+			id BIGSERIAL PRIMARY KEY,
+			request_id TEXT NOT NULL,
+			reason TEXT NOT NULL,
+			dispatch_type TEXT NOT NULL,
+			channels_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+			metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		)`,
+	}
+	for _, statement := range statements {
+		if _, err := s.db.Exec(statement); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Service) requireInternalAccess(w http.ResponseWriter, r *http.Request) bool {
+	provided := strings.TrimSpace(r.Header.Get("X-Internal-Service-Token"))
+	if subtle.ConstantTimeCompare([]byte(provided), []byte(s.internalServiceToken)) != 1 {
+		respondError(w, http.StatusUnauthorized, "unauthorized")
+		return false
+	}
+	return true
+}
+
+func (s *Service) healthHandler(w http.ResponseWriter, _ *http.Request) {
 	respondJSON(w, http.StatusOK, map[string]any{
 		"status":    "ok",
 		"service":   "notification-dispatcher",
@@ -132,68 +213,93 @@ func healthHandler(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
-func metricsHandler(w http.ResponseWriter, _ *http.Request) {
-	metricsState.Lock()
-	defer metricsState.Unlock()
-	deadLettersMu.Lock()
-	deadLetterCount := len(deadLetters)
-	deadLettersMu.Unlock()
-	respondJSON(w, http.StatusOK, DispatchMetrics{
-		SuccessByChannel: cloneCounterMap(metricsState.successByChannel),
-		FailureByChannel: cloneCounterMap(metricsState.failureByChannel),
-		FallbackRequests: atomic.LoadUint64(&healthState.fallbackRequests),
-		DeadLetters:      uint64(deadLetterCount),
-		TotalRequests:    atomic.LoadUint64(&healthState.totalRequests),
-		LastLatencyMS:    atomic.LoadInt64(&healthState.lastLatencyMS),
-	})
-}
-
-func businessHealthHandler(w http.ResponseWriter, _ *http.Request) {
-	total := atomic.LoadUint64(&healthState.totalRequests)
-	fallbacks := atomic.LoadUint64(&healthState.fallbackRequests)
-	latency := atomic.LoadInt64(&healthState.lastLatencyMS)
-	lastRequestUnix := atomic.LoadInt64(&healthState.lastRequestAtUnix)
-	fallbackRate := 0.0
-	if total > 0 {
-		fallbackRate = float64(fallbacks) / float64(total)
-	}
-	status := "healthy"
-	if fallbackRate >= 0.25 || latency > 400 {
-		status = "degraded"
-	}
-	deadLettersMu.Lock()
-	deadLetterCount := len(deadLetters)
-	deadLettersMu.Unlock()
-	respondJSON(w, http.StatusOK, map[string]any{
-		"status":              status,
-		"service":             "notification-dispatcher",
-		"totalRequests":       total,
-		"fallbackRequests":    fallbacks,
-		"fallbackRate":        fallbackRate,
-		"lastLatencyMs":       latency,
-		"lastRequestAt":       time.Unix(lastRequestUnix, 0).UTC().Format(time.RFC3339),
-		"deadLetterCount":     deadLetterCount,
-		"latencyHealthy":      latency <= 400,
-		"fallbackRateHealthy": fallbackRate < 0.25,
-	})
-}
-
-func deadLettersHandler(w http.ResponseWriter, r *http.Request) {
+func (s *Service) metricsHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	deadLettersMu.Lock()
-	defer deadLettersMu.Unlock()
+	if !s.requireInternalAccess(w, r) {
+		return
+	}
+
+	metrics, err := s.loadMetrics()
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondJSON(w, http.StatusOK, metrics)
+}
+
+func (s *Service) businessHealthHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if !s.requireInternalAccess(w, r) {
+		return
+	}
+
+	metrics, err := s.loadMetrics()
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	fallbackRate := 0.0
+	if metrics.TotalRequests > 0 {
+		fallbackRate = float64(metrics.FallbackRequests) / float64(metrics.TotalRequests)
+	}
+	status := "healthy"
+	if fallbackRate >= 0.25 || metrics.LastLatencyMS > 400 || metrics.DeadLetters > 0 {
+		status = "degraded"
+	}
+
+	lastRequestAt, err := s.loadLastRequestTime()
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
 	respondJSON(w, http.StatusOK, map[string]any{
-		"count":   len(deadLetters),
-		"records": deadLetters,
+		"status":              status,
+		"service":             "notification-dispatcher",
+		"totalRequests":       metrics.TotalRequests,
+		"fallbackRequests":    metrics.FallbackRequests,
+		"fallbackRate":        fallbackRate,
+		"lastLatencyMs":       metrics.LastLatencyMS,
+		"lastRequestAt":       lastRequestAt,
+		"deadLetterCount":     metrics.DeadLetters,
+		"latencyHealthy":      metrics.LastLatencyMS <= 400,
+		"fallbackRateHealthy": fallbackRate < 0.25,
 	})
 }
 
-func dispatchHandler(w http.ResponseWriter, r *http.Request) {
+func (s *Service) deadLettersHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if !s.requireInternalAccess(w, r) {
+		return
+	}
+
+	records, err := s.loadDeadLetters()
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]any{
+		"count":   len(records),
+		"records": records,
+	})
+}
+
+func (s *Service) dispatchHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if !s.requireInternalAccess(w, r) {
 		return
 	}
 
@@ -202,7 +308,6 @@ func dispatchHandler(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, "invalid json payload")
 		return
 	}
-
 	if len(req.Channels) == 0 {
 		respondError(w, http.StatusBadRequest, "at least one channel is required")
 		return
@@ -216,47 +321,25 @@ func dispatchHandler(w http.ResponseWriter, r *http.Request) {
 		requestID = fmt.Sprintf("notif-%d", time.Now().UnixNano())
 	}
 
-	if cached, ok := getCachedDispatch(requestID); ok {
-		cached.Response.Idempotent = true
-		respondJSON(w, http.StatusOK, cached.Response)
+	if cached, ok, err := s.getStoredDispatch(requestID); err != nil {
+		respondError(w, http.StatusInternalServerError, err.Error())
+		return
+	} else if ok {
+		cached.Idempotent = true
+		respondJSON(w, http.StatusOK, cached)
 		return
 	}
 
-	start := time.Now()
-	results := make([]DispatchResult, 0, len(req.Channels))
-	resultsCh := make(chan DispatchResult, len(req.Channels))
-	var wg sync.WaitGroup
-
 	resolvedChannels := normalizeChannels(req.Channels)
-	for _, channel := range resolvedChannels {
-		wg.Add(1)
-		go func(ch Channel) {
-			defer wg.Done()
-			resultsCh <- dispatchWithFallback(ch, req)
-		}(channel)
-	}
-
-	wg.Wait()
-	close(resultsCh)
-
+	start := time.Now()
+	results := make([]DispatchResult, 0, len(resolvedChannels))
 	fallbackUsed := false
-	for result := range resultsCh {
-		status := "success"
-		if !result.Success {
-			status = "failure"
-			fallbackUsed = true
-			recordDeadLetter(DeadLetterRecord{
-				RequestID: requestID,
-				Reason:    result.Error,
-				Type:      req.Type,
-				Channels:  resolvedChannels,
-				Metadata:  req.Metadata,
-				CreatedAt: time.Now().UTC().Format(time.RFC3339),
-			})
-		} else if result.EscalatedTo != "" {
+
+	for _, channel := range resolvedChannels {
+		result := s.dispatchWithFallback(requestID, channel, req)
+		if !result.Success || result.EscalatedTo != "" {
 			fallbackUsed = true
 		}
-		incrementMetric(string(result.Channel), status)
 		results = append(results, result)
 	}
 
@@ -264,28 +347,41 @@ func dispatchHandler(w http.ResponseWriter, r *http.Request) {
 		return string(results[i].Channel) < string(results[j].Channel)
 	})
 
-	duration := time.Since(start).Milliseconds()
-	atomic.AddUint64(&healthState.totalRequests, 1)
-	atomic.StoreInt64(&healthState.lastLatencyMS, duration)
-	atomic.StoreInt64(&healthState.lastRequestAtUnix, time.Now().Unix())
-	if fallbackUsed {
-		atomic.AddUint64(&healthState.fallbackRequests, 1)
-	}
-
 	response := DispatchResponse{
-		Accepted:     true,
+		Accepted:     allSuccessful(results),
 		Results:      results,
-		DurationMS:   duration,
+		DurationMS:   time.Since(start).Milliseconds(),
 		RequestID:    requestID,
 		FallbackUsed: fallbackUsed,
-		DegradedMode: fallbackUsed,
+		DegradedMode: fallbackUsed || !allSuccessful(results),
 	}
-	storeCachedDispatch(requestID, response)
+
+	if err := s.storeDispatch(requestID, req, response); err != nil {
+		respondError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	for _, result := range results {
+		if err := s.storeAttempt(requestID, result); err != nil {
+			respondError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if !result.Success {
+			_ = s.storeDeadLetter(DeadLetterRecord{
+				RequestID: requestID,
+				Reason:    result.Error,
+				Type:      req.Type,
+				Channels:  resolvedChannels,
+				Metadata:  req.Metadata,
+				CreatedAt: time.Now().UTC().Format(time.RFC3339),
+			})
+		}
+	}
+
 	respondJSON(w, http.StatusOK, response)
 }
 
-func dispatchWithFallback(channel Channel, req DispatchRequest) DispatchResult {
-	primary := simulateDispatch(channel, req, 1)
+func (s *Service) dispatchWithFallback(requestID string, channel Channel, req DispatchRequest) DispatchResult {
+	primary := s.dispatchToProvider(requestID, channel, req, 1)
 	if primary.Success {
 		return primary
 	}
@@ -295,7 +391,7 @@ func dispatchWithFallback(channel Channel, req DispatchRequest) DispatchResult {
 		return primary
 	}
 
-	fallback := simulateDispatch(fallbackChannel, req, 2)
+	fallback := s.dispatchToProvider(requestID, fallbackChannel, req, 2)
 	if fallback.Success {
 		fallback.Channel = channel
 		fallback.EscalatedTo = string(fallbackChannel)
@@ -307,28 +403,86 @@ func dispatchWithFallback(channel Channel, req DispatchRequest) DispatchResult {
 	return primary
 }
 
-func simulateDispatch(channel Channel, req DispatchRequest, attempt int) DispatchResult {
-	messageID := fmt.Sprintf("%s-%d", channel, time.Now().UnixNano())
+func (s *Service) dispatchToProvider(requestID string, channel Channel, req DispatchRequest, attempt int) DispatchResult {
 	renderedBody := renderTemplate(req.Type, req.Payload, req.Recipient)
+	providerURL, providerName, recipientError := s.resolveProvider(channel, req.Recipient)
+	if recipientError != "" {
+		return DispatchResult{Success: false, Channel: channel, Error: recipientError, Provider: "unconfigured", AttemptCount: attempt, RenderedBody: renderedBody}
+	}
+	if providerURL == "" {
+		return DispatchResult{Success: false, Channel: channel, Error: fmt.Sprintf("provider not configured for %s", channel), Provider: providerName, AttemptCount: attempt, RenderedBody: renderedBody}
+	}
 
+	payload := providerPayload{
+		RequestID:    requestID,
+		Type:         req.Type,
+		Channel:      string(channel),
+		Recipient:    req.Recipient,
+		RenderedBody: renderedBody,
+		Metadata:     req.Metadata,
+		Payload:      req.Payload,
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return DispatchResult{Success: false, Channel: channel, Error: err.Error(), Provider: providerName, AttemptCount: attempt, RenderedBody: renderedBody}
+	}
+
+	httpReq, err := http.NewRequest(http.MethodPost, providerURL, bytes.NewReader(body))
+	if err != nil {
+		return DispatchResult{Success: false, Channel: channel, Error: err.Error(), Provider: providerName, AttemptCount: attempt, RenderedBody: renderedBody}
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("X-Internal-Service-Token", s.internalServiceToken)
+	httpReq.Header.Set("X-Request-Id", requestID)
+
+	resp, err := s.httpClient.Do(httpReq)
+	if err != nil {
+		return DispatchResult{Success: false, Channel: channel, Error: err.Error(), Provider: providerName, AttemptCount: attempt, RenderedBody: renderedBody}
+	}
+	defer resp.Body.Close()
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 300 {
+		message := strings.TrimSpace(string(respBody))
+		if message == "" {
+			message = fmt.Sprintf("provider returned status %d", resp.StatusCode)
+		}
+		return DispatchResult{Success: false, Channel: channel, Error: message, Provider: providerName, AttemptCount: attempt, RenderedBody: renderedBody}
+	}
+
+	messageID := fmt.Sprintf("%s-%d", channel, time.Now().UnixNano())
+	var providerResponse map[string]any
+	if len(respBody) > 0 {
+		_ = json.Unmarshal(respBody, &providerResponse)
+		if rawMessageID, ok := providerResponse["messageId"]; ok {
+			trimmed := strings.TrimSpace(fmt.Sprint(rawMessageID))
+			if trimmed != "" && trimmed != "<nil>" {
+				messageID = trimmed
+			}
+		}
+	}
+
+	return DispatchResult{Success: true, Channel: channel, MessageID: messageID, Provider: providerName, AttemptCount: attempt, RenderedBody: renderedBody}
+}
+
+func (s *Service) resolveProvider(channel Channel, recipient Recipient) (string, string, string) {
 	switch channel {
 	case ChannelSMS:
-		if strings.TrimSpace(req.Recipient.Phone) == "" {
-			return DispatchResult{Success: false, Channel: channel, Error: "missing phone recipient", Provider: "go-dispatcher", AttemptCount: attempt}
+		if strings.TrimSpace(recipient.Phone) == "" {
+			return "", "sms-webhook", "missing phone recipient"
 		}
-		return DispatchResult{Success: true, Channel: channel, MessageID: messageID, Provider: "twilio-compatible", AttemptCount: attempt, RenderedBody: renderedBody}
+		return s.smsProviderURL, "sms-webhook", ""
 	case ChannelEmail:
-		if strings.TrimSpace(req.Recipient.Email) == "" {
-			return DispatchResult{Success: false, Channel: channel, Error: "missing email recipient", Provider: "go-dispatcher", AttemptCount: attempt}
+		if strings.TrimSpace(recipient.Email) == "" {
+			return "", "email-webhook", "missing email recipient"
 		}
-		return DispatchResult{Success: true, Channel: channel, MessageID: messageID, Provider: "ses-compatible", AttemptCount: attempt, RenderedBody: renderedBody}
+		return s.emailProviderURL, "email-webhook", ""
 	case ChannelPush:
-		if strings.TrimSpace(req.Recipient.Token) == "" {
-			return DispatchResult{Success: false, Channel: channel, Error: "missing push token", Provider: "go-dispatcher", AttemptCount: attempt}
+		if strings.TrimSpace(recipient.Token) == "" {
+			return "", "push-webhook", "missing push token"
 		}
-		return DispatchResult{Success: true, Channel: channel, MessageID: messageID, Provider: "fcm-compatible", AttemptCount: attempt, RenderedBody: renderedBody}
+		return s.pushProviderURL, "push-webhook", ""
 	default:
-		return DispatchResult{Success: false, Channel: channel, Error: "unsupported channel", Provider: "go-dispatcher", AttemptCount: attempt}
+		return "", "unsupported", "unsupported channel"
 	}
 }
 
@@ -406,51 +560,158 @@ func normalizeChannels(channels []Channel) []Channel {
 	return resolved
 }
 
-func incrementMetric(channel string, status string) {
-	metricsState.Lock()
-	defer metricsState.Unlock()
-	if status == "success" {
-		metricsState.successByChannel[channel]++
-	} else {
-		metricsState.failureByChannel[channel]++
+func allSuccessful(results []DispatchResult) bool {
+	if len(results) == 0 {
+		return false
 	}
+	for _, result := range results {
+		if !result.Success {
+			return false
+		}
+	}
+	return true
 }
 
-func cloneCounterMap(source map[string]uint64) map[string]uint64 {
-	cloned := make(map[string]uint64, len(source))
-	for key, value := range source {
-		cloned[key] = value
-	}
-	return cloned
+func (s *Service) storeDispatch(requestID string, req DispatchRequest, response DispatchResponse) error {
+	payloadJSON, _ := json.Marshal(req.Payload)
+	metadataJSON, _ := json.Marshal(req.Metadata)
+	channelsJSON, _ := json.Marshal(req.Channels)
+	responseJSON, _ := json.Marshal(response)
+	_, err := s.db.Exec(
+		`INSERT INTO notification_dispatches (
+			request_id, dispatch_type, recipient_phone, recipient_email, recipient_name, recipient_token, payload_json, metadata_json, channels_json, response_json, accepted, fallback_used, degraded_mode, duration_ms, created_at, updated_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb,$9::jsonb,$10::jsonb,$11,$12,$13,$14,NOW(),NOW())`,
+		requestID,
+		req.Type,
+		nullIfEmpty(req.Recipient.Phone),
+		nullIfEmpty(req.Recipient.Email),
+		nullIfEmpty(req.Recipient.Name),
+		nullIfEmpty(req.Recipient.Token),
+		string(payloadJSON),
+		string(metadataJSON),
+		string(channelsJSON),
+		string(responseJSON),
+		response.Accepted,
+		response.FallbackUsed,
+		response.DegradedMode,
+		response.DurationMS,
+	)
+	return err
 }
 
-func recordDeadLetter(record DeadLetterRecord) {
-	deadLettersMu.Lock()
-	defer deadLettersMu.Unlock()
-	if len(deadLetters) >= 100 {
-		deadLetters = deadLetters[1:]
-	}
-	deadLetters = append(deadLetters, record)
+func (s *Service) storeAttempt(requestID string, result DispatchResult) error {
+	_, err := s.db.Exec(
+		`INSERT INTO notification_attempts (
+			request_id, channel, provider, success, attempt_count, escalated_to, message_id, error_text, rendered_body, created_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NOW())`,
+		requestID,
+		string(result.Channel),
+		result.Provider,
+		result.Success,
+		result.AttemptCount,
+		nullIfEmpty(result.EscalatedTo),
+		nullIfEmpty(result.MessageID),
+		nullIfEmpty(result.Error),
+		nullIfEmpty(result.RenderedBody),
+	)
+	return err
 }
 
-func getCachedDispatch(requestID string) (CachedDispatch, bool) {
-	cacheMu.Lock()
-	defer cacheMu.Unlock()
-	cached, ok := dispatchCache[requestID]
-	if !ok {
-		return CachedDispatch{}, false
-	}
-	if time.Since(cached.CreatedAt) > 30*time.Minute {
-		delete(dispatchCache, requestID)
-		return CachedDispatch{}, false
-	}
-	return cached, true
+func (s *Service) storeDeadLetter(record DeadLetterRecord) error {
+	channelsJSON, _ := json.Marshal(record.Channels)
+	metadataJSON, _ := json.Marshal(record.Metadata)
+	_, err := s.db.Exec(
+		`INSERT INTO notification_dead_letters (request_id, reason, dispatch_type, channels_json, metadata_json, created_at)
+		 VALUES ($1,$2,$3,$4::jsonb,$5::jsonb,$6::timestamptz)`,
+		record.RequestID,
+		record.Reason,
+		record.Type,
+		string(channelsJSON),
+		string(metadataJSON),
+		record.CreatedAt,
+	)
+	return err
 }
 
-func storeCachedDispatch(requestID string, response DispatchResponse) {
-	cacheMu.Lock()
-	defer cacheMu.Unlock()
-	dispatchCache[requestID] = CachedDispatch{Response: response, CreatedAt: time.Now().UTC()}
+func (s *Service) getStoredDispatch(requestID string) (DispatchResponse, bool, error) {
+	var raw string
+	err := s.db.QueryRow(`SELECT response_json::text FROM notification_dispatches WHERE request_id = $1`, requestID).Scan(&raw)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return DispatchResponse{}, false, nil
+		}
+		return DispatchResponse{}, false, err
+	}
+	var response DispatchResponse
+	if err := json.Unmarshal([]byte(raw), &response); err != nil {
+		return DispatchResponse{}, false, err
+	}
+	return response, true, nil
+}
+
+func (s *Service) loadMetrics() (DispatchMetrics, error) {
+	metrics := DispatchMetrics{
+		SuccessByChannel: map[string]uint64{},
+		FailureByChannel: map[string]uint64{},
+	}
+
+	rows, err := s.db.Query(`SELECT channel, success, COUNT(*) FROM notification_attempts GROUP BY channel, success`)
+	if err != nil {
+		return metrics, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var channel string
+		var success bool
+		var count uint64
+		if err := rows.Scan(&channel, &success, &count); err != nil {
+			return metrics, err
+		}
+		if success {
+			metrics.SuccessByChannel[channel] = count
+		} else {
+			metrics.FailureByChannel[channel] = count
+		}
+	}
+
+	_ = s.db.QueryRow(`SELECT COUNT(*), COALESCE(SUM(CASE WHEN fallback_used THEN 1 ELSE 0 END), 0), COALESCE(MAX(duration_ms), 0) FROM notification_dispatches`).Scan(&metrics.TotalRequests, &metrics.FallbackRequests, &metrics.LastLatencyMS)
+	_ = s.db.QueryRow(`SELECT COUNT(*) FROM notification_dead_letters`).Scan(&metrics.DeadLetters)
+	return metrics, nil
+}
+
+func (s *Service) loadLastRequestTime() (string, error) {
+	var ts sql.NullTime
+	if err := s.db.QueryRow(`SELECT MAX(created_at) FROM notification_dispatches`).Scan(&ts); err != nil {
+		return "", err
+	}
+	if !ts.Valid {
+		return "", nil
+	}
+	return ts.Time.UTC().Format(time.RFC3339), nil
+}
+
+func (s *Service) loadDeadLetters() ([]DeadLetterRecord, error) {
+	rows, err := s.db.Query(`SELECT request_id, reason, dispatch_type, channels_json::text, metadata_json::text, created_at FROM notification_dead_letters ORDER BY created_at DESC LIMIT 100`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	records := make([]DeadLetterRecord, 0)
+	for rows.Next() {
+		var record DeadLetterRecord
+		var channelsRaw string
+		var metadataRaw string
+		var createdAt time.Time
+		if err := rows.Scan(&record.RequestID, &record.Reason, &record.Type, &channelsRaw, &metadataRaw, &createdAt); err != nil {
+			return nil, err
+		}
+		_ = json.Unmarshal([]byte(channelsRaw), &record.Channels)
+		_ = json.Unmarshal([]byte(metadataRaw), &record.Metadata)
+		record.CreatedAt = createdAt.UTC().Format(time.RFC3339)
+		records = append(records, record)
+	}
+	return records, nil
 }
 
 func loggingMiddleware(next http.Handler) http.Handler {
@@ -470,6 +731,14 @@ func respondJSON(w http.ResponseWriter, status int, payload any) {
 
 func respondError(w http.ResponseWriter, status int, message string) {
 	respondJSON(w, status, map[string]any{"error": message})
+}
+
+func nullIfEmpty(value string) any {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return nil
+	}
+	return trimmed
 }
 
 func getEnv(key, fallback string) string {

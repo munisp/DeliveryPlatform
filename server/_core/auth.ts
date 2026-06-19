@@ -1,5 +1,5 @@
 import cookie from "cookie";
-import { SignJWT, jwtVerify } from "jose";
+import { createRemoteJWKSet, jwtVerify, SignJWT } from "jose";
 
 import { COOKIE_NAME } from "../../shared/const";
 import { ENV } from "./env";
@@ -18,13 +18,42 @@ type SessionClaims = {
   scopes?: string[];
 };
 
+type DiscoveryDocument = {
+  issuer?: string;
+  jwks_uri?: string;
+  end_session_endpoint?: string;
+};
+
+let remoteJwksPromise: Promise<ReturnType<typeof createRemoteJWKSet> | null> | null = null;
+let discoveryDocumentPromise: Promise<DiscoveryDocument | null> | null = null;
+
 function getSessionKey() {
   return encoder.encode(ENV.cookieSecret);
 }
 
 function normalizeScopes(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  return value.filter((scope): scope is string => typeof scope === "string" && scope.trim().length > 0);
+  if (Array.isArray(value)) {
+    return value.filter((scope): scope is string => typeof scope === "string" && scope.trim().length > 0);
+  }
+  if (typeof value === "string") {
+    return value.split(" ").map((scope) => scope.trim()).filter(Boolean);
+  }
+  return [];
+}
+
+function normalizeRole(payload: Record<string, unknown>) {
+  if (typeof payload.role === "string" && payload.role.trim()) return payload.role;
+
+  const realmAccess = payload.realm_access;
+  if (realmAccess && typeof realmAccess === "object" && Array.isArray((realmAccess as { roles?: unknown[] }).roles)) {
+    const roles = (realmAccess as { roles?: unknown[] }).roles ?? [];
+    const lowered = roles.map((role) => `${role}`.toLowerCase());
+    if (lowered.includes("admin")) return "admin";
+    if (lowered.includes("operator") || lowered.includes("ops")) return "operator";
+    return lowered[0] ?? "viewer";
+  }
+
+  return "viewer";
 }
 
 function toSessionUser(payload: Record<string, unknown>): SessionUser | null {
@@ -34,19 +63,64 @@ function toSessionUser(payload: Record<string, unknown>): SessionUser | null {
   }
 
   const numericId = Number(subject);
-  if (!Number.isFinite(numericId) || numericId <= 0) {
+  const fallbackId = Number.parseInt(subject.replace(/\D/g, "").slice(0, 9) || "0", 10);
+  const resolvedId = Number.isFinite(numericId) && numericId > 0 ? numericId : fallbackId;
+  if (!Number.isFinite(resolvedId) || resolvedId <= 0) {
     return null;
   }
 
   return {
-    id: numericId,
-    name: typeof payload.name === "string" && payload.name.trim().length > 0 ? payload.name : "Operator",
+    id: resolvedId,
+    name: typeof payload.name === "string" && payload.name.trim().length > 0
+      ? payload.name
+      : typeof payload.preferred_username === "string" && payload.preferred_username.trim().length > 0
+        ? payload.preferred_username
+        : "Operator",
     email: typeof payload.email === "string" ? payload.email : null,
-    role: typeof payload.role === "string" ? payload.role : "viewer",
-    openId: typeof payload.openId === "string" ? payload.openId : null,
-    tenantId: typeof payload.tenantId === "string" ? payload.tenantId : null,
-    scopes: normalizeScopes(payload.scopes),
+    role: normalizeRole(payload),
+    openId: typeof payload.openId === "string"
+      ? payload.openId
+      : typeof payload.preferred_username === "string"
+        ? payload.preferred_username
+        : subject,
+    tenantId: typeof payload.tenantId === "string"
+      ? payload.tenantId
+      : typeof payload.azp === "string"
+        ? payload.azp
+        : null,
+    scopes: normalizeScopes(payload.scopes ?? payload.scope),
   };
+}
+
+async function getDiscoveryDocument(): Promise<DiscoveryDocument | null> {
+  if (!ENV.enableExternalOidc || !ENV.oidcIssuerUrl) return null;
+  if (!discoveryDocumentPromise) {
+    discoveryDocumentPromise = (async () => {
+      const discoveryUrl = ENV.oidcDiscoveryUrl || `${ENV.oidcIssuerUrl}/.well-known/openid-configuration`;
+      const response = await fetch(discoveryUrl, { headers: { accept: "application/json" } });
+      if (!response.ok) {
+        throw new Error(`Failed to load OIDC discovery document: ${response.status}`);
+      }
+      return await response.json() as DiscoveryDocument;
+    })().catch((error) => {
+      console.error("[SwitchOS] OIDC discovery failed", error);
+      return null;
+    });
+  }
+  return discoveryDocumentPromise;
+}
+
+async function getRemoteJwks() {
+  if (!ENV.enableExternalOidc || !ENV.oidcIssuerUrl) return null;
+  if (!remoteJwksPromise) {
+    remoteJwksPromise = (async () => {
+      const discovery = await getDiscoveryDocument();
+      const jwksUrl = discovery?.jwks_uri;
+      if (!jwksUrl) return null;
+      return createRemoteJWKSet(new URL(jwksUrl));
+    })();
+  }
+  return remoteJwksPromise;
 }
 
 export async function createSessionToken(user: SessionClaims) {
@@ -80,6 +154,24 @@ export async function verifySessionToken(token: string): Promise<SessionUser | n
   }
 }
 
+export async function verifyExternalAccessToken(token: string): Promise<SessionUser | null> {
+  if (!ENV.enableExternalOidc || !ENV.oidcIssuerUrl) return null;
+  try {
+    const jwks = await getRemoteJwks();
+    if (!jwks) return null;
+    const discovery = await getDiscoveryDocument();
+    const issuer = discovery?.issuer ?? ENV.oidcIssuerUrl;
+    const { payload } = await jwtVerify(token, jwks, {
+      issuer,
+      audience: ENV.oidcAudience || ENV.oidcClientId,
+    });
+    return toSessionUser(payload as Record<string, unknown>);
+  } catch (error) {
+    console.warn("[SwitchOS] External access token verification failed", error);
+    return null;
+  }
+}
+
 export async function getSessionUserFromRequest(headers: Record<string, string | string[] | undefined>) {
   const authHeader = headers.authorization;
   const bearer = typeof authHeader === "string" && authHeader.startsWith("Bearer ")
@@ -87,8 +179,11 @@ export async function getSessionUserFromRequest(headers: Record<string, string |
     : "";
 
   if (bearer) {
-    const user = await verifySessionToken(bearer);
-    if (user) return user;
+    const externalUser = await verifyExternalAccessToken(bearer);
+    if (externalUser) return externalUser;
+
+    const localUser = await verifySessionToken(bearer);
+    if (localUser) return localUser;
   }
 
   const cookieHeader = typeof headers.cookie === "string" ? headers.cookie : undefined;
@@ -97,4 +192,8 @@ export async function getSessionUserFromRequest(headers: Record<string, string |
   const raw = parsed[COOKIE_NAME];
   if (!raw) return null;
   return verifySessionToken(raw);
+}
+
+export async function getOidcDiscoveryDocument() {
+  return getDiscoveryDocument();
 }

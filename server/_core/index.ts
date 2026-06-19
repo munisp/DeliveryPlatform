@@ -1,3 +1,4 @@
+import cookieParser from "cookie-parser";
 import express from "express";
 import { createHTTPHandler } from "@trpc/server/adapters/standalone";
 import { randomUUID } from "crypto";
@@ -6,7 +7,12 @@ import { appRouter } from "../routers";
 import { COOKIE_NAME } from "../../shared/const";
 import { ENV } from "./env";
 import { getCookieOptions } from "./cookies";
-import { createSessionToken, getSessionUserFromRequest } from "./auth";
+import {
+  createSessionToken,
+  getOidcDiscoveryDocument,
+  getSessionUserFromRequest,
+  verifyExternalAccessToken,
+} from "./auth";
 import { authenticateOperator, ensureOperatorAuthStore } from "./operatorAuthStore";
 
 const app = express();
@@ -27,7 +33,7 @@ function isAllowedOrigin(origin: string) {
   return allowedOrigins.includes(origin);
 }
 
-function setSecurityHeaders(res: express.Response) {
+function setSecurityHeaders(req: express.Request, res: express.Response) {
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("X-Frame-Options", "DENY");
   res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
@@ -45,6 +51,15 @@ function setSecurityHeaders(res: express.Response) {
       "form-action 'self'",
     ].join("; "),
   );
+
+  const acceptHeader = `${req.headers.accept ?? ""}`;
+  if (req.path === "/" || acceptHeader.includes("text/html")) {
+    res.setHeader("Cache-Control", ENV.cacheControlIndexHtml);
+    res.setHeader("Pragma", "no-cache");
+    res.setHeader("Expires", "0");
+  } else if (req.path.startsWith("/api/")) {
+    res.setHeader("Cache-Control", "no-store");
+  }
 }
 
 function applyCors(req: express.Request, res: express.Response) {
@@ -113,10 +128,11 @@ async function issueOperatorSession(
 
 app.disable("x-powered-by");
 app.set("trust proxy", 1);
+app.use(cookieParser());
 
 app.use((req, res, next) => {
   res.setHeader("X-Request-Id", randomUUID());
-  setSecurityHeaders(res);
+  setSecurityHeaders(req, res);
   applyCors(req, res);
   if (req.method === "OPTIONS") {
     res.status(204).end();
@@ -128,11 +144,67 @@ app.use((req, res, next) => {
 app.use(express.json({ limit: ENV.apiBodyLimit }));
 app.use(express.urlencoded({ extended: true, limit: ENV.apiBodyLimit }));
 
-app.get("/api/health", (_req, res) => {
-  res.json({ ok: true, service: "switchos-operator-dashboard", timestamp: new Date().toISOString() });
+app.get("/api/health", async (_req, res) => {
+  const discovery = ENV.enableExternalOidc ? await getOidcDiscoveryDocument() : null;
+  res.json({
+    ok: true,
+    service: "switchos-operator-dashboard",
+    timestamp: new Date().toISOString(),
+    externalOidcEnabled: ENV.enableExternalOidc,
+    oidcIssuer: (discovery?.issuer ?? ENV.oidcIssuerUrl) || null,
+  });
+});
+
+app.get("/api/auth/config", async (_req, res) => {
+  const discovery = ENV.enableExternalOidc ? await getOidcDiscoveryDocument() : null;
+  res.status(200).json({
+    externalOidcEnabled: ENV.enableExternalOidc,
+    oidcIssuer: (discovery?.issuer ?? ENV.oidcIssuerUrl) || null,
+    oidcClientId: ENV.oidcClientId || null,
+    oidcLogoutUrl: (discovery?.end_session_endpoint ?? ENV.oidcLogoutUrl) || null,
+    fallbackLoginEnabled: !ENV.enableExternalOidc || !ENV.isProduction,
+  });
+});
+
+app.post("/api/auth/external-session", rateLimit(20), async (req, res) => {
+  if (!ENV.enableExternalOidc) {
+    res.status(404).json({ error: "external_oidc_disabled" });
+    return;
+  }
+
+  const accessToken = `${req.body?.accessToken ?? ""}`.trim();
+  if (!accessToken) {
+    res.status(400).json({ error: "missing_access_token" });
+    return;
+  }
+
+  try {
+    const user = await verifyExternalAccessToken(accessToken);
+    if (!user) {
+      res.status(401).json({ error: "invalid_external_token" });
+      return;
+    }
+
+    await issueOperatorSession(res, {
+      id: user.id,
+      name: user.name,
+      email: user.email ?? `${user.openId ?? user.id}@switchos.local`,
+      role: user.role,
+      tenantId: user.tenantId,
+    });
+    res.status(200).json({ ok: true, redirect: "/dashboard", operator: { email: user.email, role: user.role } });
+  } catch (error) {
+    console.error("[SwitchOS] External login failed", error);
+    res.status(500).json({ error: "external_login_failed" });
+  }
 });
 
 app.post("/api/auth/login", rateLimit(20), async (req, res) => {
+  if (ENV.enableExternalOidc && ENV.isProduction) {
+    res.status(403).json({ error: "local_login_disabled" });
+    return;
+  }
+
   const email = `${req.body?.email ?? ""}`.trim().toLowerCase();
   const password = `${req.body?.password ?? ""}`;
 
@@ -157,7 +229,7 @@ app.post("/api/auth/login", rateLimit(20), async (req, res) => {
 });
 
 app.post("/api/auth/dev-session", rateLimit(10), async (req, res) => {
-  if (ENV.isProduction) {
+  if (ENV.isProduction || ENV.enableExternalOidc) {
     res.status(404).json({ error: "not_found" });
     return;
   }
@@ -177,7 +249,8 @@ app.post("/api/auth/dev-session", rateLimit(10), async (req, res) => {
 
 app.post("/api/auth/logout", (_req, res) => {
   res.clearCookie(COOKIE_NAME, getCookieOptions());
-  res.status(200).json({ ok: true });
+  res.setHeader("Cache-Control", "no-store");
+  res.status(200).json({ ok: true, logoutUrl: ENV.oidcLogoutUrl || null });
 });
 
 app.use(
@@ -196,6 +269,9 @@ app.use(
 );
 
 app.get("*", (_req, res) => {
+  res.setHeader("Cache-Control", ENV.cacheControlIndexHtml);
+  res.setHeader("Pragma", "no-cache");
+  res.setHeader("Expires", "0");
   res.status(200).send("SwitchOS API is running.");
 });
 

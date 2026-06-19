@@ -1,4 +1,4 @@
-module switchos-notification-dispatcher
+module switchos-vertical-provisioning
 
 go 1.22
 

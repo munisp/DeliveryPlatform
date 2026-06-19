@@ -77,6 +77,17 @@ function normalizeOAuthServerUrl() {
   return "http://localhost:3010";
 }
 
+function normalizeOptionalUrl(name: string) {
+  const raw = process.env[name]?.trim();
+  if (!raw) return "";
+  return raw.replace(/\/$/, "");
+}
+
+function parseBoolean(value: string | undefined, fallback: boolean) {
+  if (value == null || value.trim() === "") return fallback;
+  return value.trim().toLowerCase() === "true";
+}
+
 export const ENV = {
   appId: getRequiredEnv("VITE_APP_ID", "switchos-operator-dashboard"),
   cookieSecret: getCookieSecret(),
@@ -107,4 +118,11 @@ export const ENV = {
   lakehousePath: process.env.LAKEHOUSE_PATH ?? "/tmp/switchos-lakehouse",
   verticalProvisioningUrl: process.env.VERTICAL_PROVISIONING_URL ?? "http://127.0.0.1:8112",
   intakeOrchestratorUrl: process.env.INTAKE_ORCHESTRATOR_URL ?? "http://127.0.0.1:8113",
+  oidcIssuerUrl: normalizeOptionalUrl("OIDC_ISSUER_URL"),
+  oidcAudience: (process.env.OIDC_AUDIENCE ?? "switchos-operator-dashboard").trim(),
+  oidcClientId: (process.env.OIDC_CLIENT_ID ?? "switchos-operator-dashboard").trim(),
+  oidcLogoutUrl: normalizeOptionalUrl("OIDC_LOGOUT_URL"),
+  oidcDiscoveryUrl: normalizeOptionalUrl("OIDC_DISCOVERY_URL"),
+  enableExternalOidc: parseBoolean(process.env.ENABLE_EXTERNAL_OIDC, false),
+  cacheControlIndexHtml: process.env.CACHE_CONTROL_INDEX_HTML ?? "no-cache, no-store, must-revalidate",
 };

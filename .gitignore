@@ -5,6 +5,8 @@ target/
 main
 services/go/mojaloop/mojaloop
 services/go/notification-dispatcher/switchos-notification-dispatcher
+services/go/vertical-provisioning/switchos-vertical-provisioning
+*.test
 .env
 .env.*
 *.log

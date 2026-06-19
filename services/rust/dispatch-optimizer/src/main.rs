@@ -1,12 +1,22 @@
-use axum::{extract::State, http::StatusCode, routing::{get, post}, Json, Router};
+use axum::{
+    extract::State,
+    http::{HeaderMap, StatusCode},
+    routing::{get, post},
+    Json, Router,
+};
 use serde::{Deserialize, Serialize};
-use std::{cmp::Ordering, net::SocketAddr, sync::Arc};
+use std::{cmp::Ordering, env, net::SocketAddr, sync::Arc};
+use tokio_postgres::{Client, NoTls};
 use tracing::{info, Level};
 
-#[derive(Clone, Default)]
-struct AppState;
+#[derive(Clone)]
+struct AppState {
+    service_name: String,
+    database_url: String,
+    internal_service_token: String,
+}
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 struct DispatchRequest {
     order_id: Option<i64>,
     trip_mode: Option<String>,
@@ -18,12 +28,12 @@ struct DispatchRequest {
     drivers: Vec<DriverInput>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 struct TripRadarRequest {
     orders: Vec<TripRadarOrder>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 struct TripRadarOrder {
     order_id: i64,
     demand_level: Option<f64>,
@@ -32,14 +42,14 @@ struct TripRadarOrder {
     multi_stop: Option<bool>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 struct BatchRequest {
     orders: Vec<BatchOrder>,
     max_batch_distance_km: Option<f64>,
     max_batch_size: Option<u32>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 struct BatchOrder {
     order_id: i64,
     zone_key: Option<String>,
@@ -49,7 +59,7 @@ struct BatchOrder {
     priority_level: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 struct EtaRequest {
     distance_km: f64,
     merchant_prep_minutes: f64,
@@ -59,7 +69,7 @@ struct EtaRequest {
     priority_delivery: Option<bool>,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 struct DriverInput {
     driver_id: i64,
     name: Option<String>,
@@ -153,13 +163,26 @@ async fn main() {
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
 
+    let database_url = env::var("DATABASE_URL")
+        .unwrap_or_else(|_| "postgresql://ubuntu:ubuntu@127.0.0.1:5432/switchos?sslmode=disable".to_string());
+    let internal_service_token = env::var("INTERNAL_SERVICE_TOKEN")
+        .unwrap_or_else(|_| "switchos-internal-dev-token-change-before-production".to_string());
+
+    if let Err(error) = ensure_schema(&database_url).await {
+        panic!("failed to initialize dispatch optimizer schema: {error}");
+    }
+
     let app = Router::new()
         .route("/health", get(health))
         .route("/optimize", post(optimize_dispatch))
         .route("/trip-radar", post(trip_radar))
         .route("/batch-orders", post(batch_orders))
         .route("/eta", post(estimate_eta))
-        .with_state(Arc::new(AppState::default()));
+        .with_state(Arc::new(AppState {
+            service_name: "switchos-dispatch-optimizer".to_string(),
+            database_url,
+            internal_service_token,
+        }));
 
     let bind_host = std::env::var("BIND_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
     let addr: SocketAddr = std::env::var("PORT")
@@ -180,22 +203,40 @@ async fn health() -> Json<HealthResponse> {
 }
 
 async fn optimize_dispatch(
-    State(_state): State<Arc<AppState>>,
-    Json(request): Json<DispatchRequest>,
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(mut request): Json<DispatchRequest>,
 ) -> Result<Json<DispatchResponse>, (StatusCode, String)> {
+    require_internal_access(&headers, &state)?;
+    let client = open_db(&state.database_url).await?;
+
+    if request.drivers.is_empty() {
+        request.drivers = load_candidate_drivers(&client).await?;
+    }
     if request.drivers.is_empty() {
         return Err((StatusCode::BAD_REQUEST, "at least one driver is required".to_string()));
     }
 
-    let demand = request.demand_level.unwrap_or(1.0).max(0.1);
-    let supply = request.supply_level.unwrap_or(1.0).max(0.1);
+    let demand = match request.demand_level {
+        Some(value) => value.max(0.1),
+        None => load_open_demand(&client).await?.max(0.1),
+    };
+    let supply = match request.supply_level {
+        Some(value) => value.max(0.1),
+        None => load_available_supply(&client).await?.max(0.1),
+    };
     let ratio = demand / supply;
-    let long_trip_minutes = request.long_trip_minutes.unwrap_or(0.0);
-    let multi_stop = request.multi_stop.unwrap_or(false);
+    let long_trip_minutes = request.long_trip_minutes.unwrap_or(estimate_long_trip_from_db(&client, request.order_id).await?);
+    let multi_stop = request.multi_stop.unwrap_or(order_has_complexity(&client, request.order_id).await?);
 
-    let trip_mode = request.trip_mode.as_deref().unwrap_or("standard");
-    let priority_level = request.priority_level.as_deref().unwrap_or("standard");
-    let _order_id = request.order_id.unwrap_or_default();
+    let trip_mode = request.trip_mode.clone().unwrap_or_else(|| {
+        if long_trip_minutes >= 60.0 {
+            "long_haul".to_string()
+        } else {
+            "standard".to_string()
+        }
+    });
+    let priority_level = request.priority_level.clone().unwrap_or_else(|| "standard".to_string());
 
     let strategy = if ratio > 1.25 || long_trip_minutes >= 60.0 || trip_mode == "long_haul" {
         "broadcast_trip_radar"
@@ -233,20 +274,19 @@ async fn optimize_dispatch(
             score_driver(
                 driver,
                 strategy,
-                trip_mode,
+                &trip_mode,
                 surge_multiplier,
                 long_trip_premium,
                 multi_stop_surcharge,
-                priority_level,
+                &priority_level,
             )
         })
         .collect();
 
     ranked.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(Ordering::Equal));
-
     let recommended = ranked.first();
 
-    Ok(Json(DispatchResponse {
+    let response = DispatchResponse {
         strategy: strategy.to_string(),
         supply_demand_ratio: round2(ratio),
         surge_multiplier,
@@ -255,26 +295,37 @@ async fn optimize_dispatch(
         recommended_driver_id: recommended.map(|d| d.driver_id),
         recommended_driver_name: recommended.and_then(|d| d.name.clone()),
         ranked_candidates: ranked,
-    }))
+    };
+
+    persist_run(&client, "optimize", &request, &response, request.order_id).await?;
+    Ok(Json(response))
 }
 
 async fn trip_radar(
-    State(_state): State<Arc<AppState>>,
-    Json(request): Json<TripRadarRequest>,
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(mut request): Json<TripRadarRequest>,
 ) -> Result<Json<TripRadarResponse>, (StatusCode, String)> {
+    require_internal_access(&headers, &state)?;
+    let client = open_db(&state.database_url).await?;
+
+    if request.orders.is_empty() {
+        request.orders = load_trip_radar_orders(&client).await?;
+    }
     if request.orders.is_empty() {
         return Err((StatusCode::BAD_REQUEST, "at least one order is required".to_string()));
     }
 
+    let supply = load_available_supply(&client).await?.max(0.1);
+    let request_snapshot = request.orders.clone();
     let highlighted_orders = request
         .orders
         .into_iter()
         .map(|order| {
             let demand = order.demand_level.unwrap_or(1.0).max(0.1);
-            let supply = order.supply_level.unwrap_or(1.0).max(0.1);
+            let ratio = demand / order.supply_level.unwrap_or(supply).max(0.1);
             let long_trip = order.long_trip_minutes.unwrap_or(0.0) >= 60.0;
             let multi_stop = order.multi_stop.unwrap_or(false);
-            let ratio = demand / supply;
             let publish_to_radar = ratio > 1.2 || long_trip || multi_stop;
             let payout_multiplier: f64 = 1.0_f64
                 + if ratio > 1.5 {
@@ -301,29 +352,41 @@ async fn trip_radar(
                 reason: "Trips with constrained supply, long travel time, or multi-stop complexity benefit from radar-style marketplace exposure.".to_string(),
             }
         })
-        .collect();
+        .collect::<Vec<_>>();
 
-    Ok(Json(TripRadarResponse {
+    let response = TripRadarResponse {
         strategy: "trip_radar_marketplace_dispatch".to_string(),
         highlighted_orders,
-    }))
+    };
+    persist_run(&client, "trip_radar", &TripRadarRequest { orders: request_snapshot }, &response, None).await?;
+    Ok(Json(response))
 }
 
 async fn batch_orders(
-    State(_state): State<Arc<AppState>>,
-    Json(request): Json<BatchRequest>,
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(mut request): Json<BatchRequest>,
 ) -> Result<Json<BatchResponse>, (StatusCode, String)> {
+    require_internal_access(&headers, &state)?;
+    let client = open_db(&state.database_url).await?;
+
+    if request.orders.is_empty() {
+        request.orders = load_batchable_orders(&client).await?;
+    }
     if request.orders.is_empty() {
         return Err((StatusCode::BAD_REQUEST, "at least one order is required".to_string()));
     }
 
     let max_batch_distance = request.max_batch_distance_km.unwrap_or(8.0).max(1.0);
     let max_batch_size = request.max_batch_size.unwrap_or(3).max(1) as usize;
+    let request_snapshot = request.orders.clone();
     let mut orders = request.orders;
     orders.sort_by(|a, b| {
         let zone_a = a.zone_key.clone().unwrap_or_else(|| "default".to_string());
         let zone_b = b.zone_key.clone().unwrap_or_else(|| "default".to_string());
-        zone_a.cmp(&zone_b).then_with(|| a.distance_km.partial_cmp(&b.distance_km).unwrap_or(Ordering::Equal))
+        zone_a
+            .cmp(&zone_b)
+            .then_with(|| a.distance_km.partial_cmp(&b.distance_km).unwrap_or(Ordering::Equal))
     });
 
     let mut recommendations = Vec::new();
@@ -363,22 +426,29 @@ async fn batch_orders(
         }
     }
 
-    Ok(Json(BatchResponse {
+    let response = BatchResponse {
         strategy: "same_zone_batching".to_string(),
         recommended_batches: recommendations,
         unbatched_order_ids: unbatched,
-    }))
+    };
+    persist_run(&client, "batch_orders", &BatchRequest { orders: request_snapshot, max_batch_distance_km: request.max_batch_distance_km, max_batch_size: request.max_batch_size }, &response, None).await?;
+    Ok(Json(response))
 }
 
 async fn estimate_eta(
-    State(_state): State<Arc<AppState>>,
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Json(request): Json<EtaRequest>,
 ) -> Result<Json<EtaResponse>, (StatusCode, String)> {
+    require_internal_access(&headers, &state)?;
+    let client = open_db(&state.database_url).await?;
+
     if request.distance_km < 0.0 || request.merchant_prep_minutes < 0.0 {
         return Err((StatusCode::BAD_REQUEST, "invalid eta request".to_string()));
     }
 
-    let driver_eta = request.driver_eta_minutes.unwrap_or(7.0).max(0.0);
+    let historical_driver_eta = load_recent_driver_eta(&client).await?.unwrap_or(7.0);
+    let driver_eta = request.driver_eta_minutes.unwrap_or(historical_driver_eta).max(0.0);
     let stack_count = request.stacked_orders.unwrap_or(1).max(1);
     let batching_delay = if stack_count > 1 { (stack_count - 1) * 6 } else { 0 };
     let weather_delay = match request.weather_condition.as_deref() {
@@ -389,7 +459,11 @@ async fn estimate_eta(
     let priority_credit = if request.priority_delivery.unwrap_or(false) { 5 } else { 0 };
 
     let travel_minutes = (request.distance_km * 4.2).round() as u32;
-    let base_eta = request.merchant_prep_minutes.round() as u32 + driver_eta.round() as u32 + travel_minutes + batching_delay + weather_delay;
+    let base_eta = request.merchant_prep_minutes.round() as u32
+        + driver_eta.round() as u32
+        + travel_minutes
+        + batching_delay
+        + weather_delay;
     let eta_minutes = base_eta.saturating_sub(priority_credit).max(12);
     let confidence_band = if weather_delay >= 8 || stack_count >= 3 {
         "moderate"
@@ -397,13 +471,15 @@ async fn estimate_eta(
         "high"
     };
 
-    Ok(Json(EtaResponse {
+    let response = EtaResponse {
         eta_minutes,
         confidence_band: confidence_band.to_string(),
         batching_delay_minutes: batching_delay,
         dispatch_ready_in_minutes: (request.merchant_prep_minutes.round() as u32).max(driver_eta.round() as u32),
         customer_message: "ETA reflects merchant prep, courier approach time, distance, batching load, and weather pressure.".to_string(),
-    }))
+    };
+    persist_run(&client, "eta", &request, &response, None).await?;
+    Ok(Json(response))
 }
 
 fn build_batch_recommendation(orders: &[BatchOrder], sequence: usize) -> BatchRecommendation {
@@ -412,7 +488,9 @@ fn build_batch_recommendation(orders: &[BatchOrder], sequence: usize) -> BatchRe
         .and_then(|item| item.zone_key.clone())
         .unwrap_or_else(|| "default".to_string());
     let total_distance_km = orders.iter().map(|item| item.distance_km).sum::<f64>();
-    let has_priority = orders.iter().any(|item| matches!(item.priority_level.as_deref(), Some("vip") | Some("urgent")));
+    let has_priority = orders
+        .iter()
+        .any(|item| matches!(item.priority_level.as_deref(), Some("vip") | Some("urgent")));
     BatchRecommendation {
         batch_id: format!("batch-{}-{}", zone_key, sequence),
         zone_key,
@@ -497,6 +575,286 @@ fn score_driver(
         cherry_pick_risk: cherry_pick_risk.to_string(),
         reason,
     }
+}
+
+async fn open_db(database_url: &str) -> Result<Client, (StatusCode, String)> {
+    let (client, connection) = tokio_postgres::connect(database_url, NoTls)
+        .await
+        .map_err(internal_error)?;
+    tokio::spawn(async move {
+        if let Err(error) = connection.await {
+            tracing::error!("dispatch optimizer postgres connection error: {}", error);
+        }
+    });
+    Ok(client)
+}
+
+async fn ensure_schema(database_url: &str) -> Result<(), String> {
+    let client = open_db(database_url).await.map_err(|(_, message)| message)?;
+    client
+        .batch_execute(
+            r#"
+            CREATE TABLE IF NOT EXISTS dispatch_optimizer_runs (
+                id BIGSERIAL PRIMARY KEY,
+                endpoint TEXT NOT NULL,
+                order_id BIGINT,
+                request_json JSONB NOT NULL,
+                response_json JSONB NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            );
+            "#,
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+fn require_internal_access(headers: &HeaderMap, state: &AppState) -> Result<(), (StatusCode, String)> {
+    let provided = headers
+        .get("x-internal-service-token")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("")
+        .trim();
+    if subtle_equal(provided, &state.internal_service_token) {
+        Ok(())
+    } else {
+        Err((StatusCode::UNAUTHORIZED, "unauthorized".to_string()))
+    }
+}
+
+fn subtle_equal(a: &str, b: &str) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    a.as_bytes()
+        .iter()
+        .zip(b.as_bytes().iter())
+        .fold(0u8, |acc, (left, right)| acc | (left ^ right))
+        == 0
+}
+
+async fn load_candidate_drivers(client: &Client) -> Result<Vec<DriverInput>, (StatusCode, String)> {
+    let rows = client
+        .query(
+            r#"
+            SELECT
+                id,
+                name,
+                COALESCE(acceptance_rate::float8, 80.0) AS acceptance_rate,
+                COALESCE(completion_rate::float8, 95.0) AS completion_rate,
+                CASE
+                    WHEN COALESCE(active_orders, 0) >= 3 THEN 90.0
+                    WHEN COALESCE(active_orders, 0) >= 1 THEN 60.0
+                    ELSE 30.0
+                END AS utilization_rate,
+                CASE
+                    WHEN current_location ILIKE '%airport%' THEN 3.0
+                    WHEN current_location IS NOT NULL AND current_location <> '' THEN 6.0
+                    ELSE 10.0
+                END AS distance_km,
+                CASE
+                    WHEN COALESCE(active_orders, 0) = 0 THEN 18.0
+                    ELSE 4.0
+                END AS idle_minutes,
+                0 AS recent_rejections,
+                CASE WHEN availability = 'available' AND status = 'online' THEN false ELSE true END AS on_trip,
+                CASE
+                    WHEN rating::float8 >= 4.85 THEN 'platinum'
+                    WHEN rating::float8 >= 4.7 THEN 'gold'
+                    WHEN rating::float8 >= 4.5 THEN 'silver'
+                    ELSE 'bronze'
+                END AS tier
+            FROM drivers
+            WHERE status = 'online'
+            ORDER BY rating::float8 DESC NULLS LAST, completed_deliveries DESC NULLS LAST
+            LIMIT 50
+            "#,
+            &[],
+        )
+        .await
+        .map_err(internal_error)?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| DriverInput {
+            driver_id: row.get("id"),
+            name: Some(row.get::<_, String>("name")),
+            tier: Some(row.get::<_, String>("tier")),
+            acceptance_rate: Some(row.get::<_, f64>("acceptance_rate")),
+            completion_rate: Some(row.get::<_, f64>("completion_rate")),
+            utilization_rate: Some(row.get::<_, f64>("utilization_rate")),
+            distance_km: Some(row.get::<_, f64>("distance_km")),
+            idle_minutes: Some(row.get::<_, f64>("idle_minutes")),
+            recent_rejections: Some(row.get::<_, i32>("recent_rejections")),
+            on_trip: Some(row.get::<_, bool>("on_trip")),
+        })
+        .collect())
+}
+
+async fn load_open_demand(client: &Client) -> Result<f64, (StatusCode, String)> {
+    let row = client
+        .query_one(
+            "SELECT COUNT(*)::float8 AS count FROM orders WHERE status IN ('pending', 'confirmed', 'assigned', 'picked_up', 'in_transit')",
+            &[],
+        )
+        .await
+        .map_err(internal_error)?;
+    Ok(row.get::<_, f64>("count").max(1.0))
+}
+
+async fn load_available_supply(client: &Client) -> Result<f64, (StatusCode, String)> {
+    let row = client
+        .query_one(
+            "SELECT COUNT(*)::float8 AS count FROM drivers WHERE status = 'online' AND COALESCE(availability, 'available') = 'available'",
+            &[],
+        )
+        .await
+        .map_err(internal_error)?;
+    Ok(row.get::<_, f64>("count").max(1.0))
+}
+
+async fn estimate_long_trip_from_db(client: &Client, order_id: Option<i64>) -> Result<f64, (StatusCode, String)> {
+    let Some(order_id) = order_id else {
+        return Ok(0.0);
+    };
+    let row = client
+        .query_opt(
+            "SELECT pickup_address, delivery_address FROM orders WHERE id = $1",
+            &[&order_id],
+        )
+        .await
+        .map_err(internal_error)?;
+    if let Some(row) = row {
+        let pickup: Option<String> = row.get("pickup_address");
+        let delivery: Option<String> = row.get("delivery_address");
+        let trip_complexity = pickup.unwrap_or_default().len() as f64 + delivery.unwrap_or_default().len() as f64;
+        if trip_complexity > 120.0 {
+            return Ok(70.0);
+        }
+        if trip_complexity > 60.0 {
+            return Ok(42.0);
+        }
+    }
+    Ok(0.0)
+}
+
+async fn order_has_complexity(client: &Client, order_id: Option<i64>) -> Result<bool, (StatusCode, String)> {
+    let Some(order_id) = order_id else {
+        return Ok(false);
+    };
+    let row = client
+        .query_opt("SELECT notes FROM orders WHERE id = $1", &[&order_id])
+        .await
+        .map_err(internal_error)?;
+    Ok(row
+        .and_then(|row| row.get::<_, Option<String>>("notes"))
+        .map(|notes| {
+            let normalized = notes.to_lowercase();
+            normalized.contains("multi") || normalized.contains("stop") || normalized.contains("batch")
+        })
+        .unwrap_or(false))
+}
+
+async fn load_trip_radar_orders(client: &Client) -> Result<Vec<TripRadarOrder>, (StatusCode, String)> {
+    let demand = load_open_demand(client).await?;
+    let supply = load_available_supply(client).await?;
+    let rows = client
+        .query(
+            "SELECT id, notes FROM orders WHERE status IN ('pending', 'confirmed', 'assigned') ORDER BY updated_at DESC LIMIT 20",
+            &[],
+        )
+        .await
+        .map_err(internal_error)?;
+    Ok(rows
+        .into_iter()
+        .map(|row| {
+            let notes: Option<String> = row.get("notes");
+            let normalized = notes.unwrap_or_default().to_lowercase();
+            TripRadarOrder {
+                order_id: row.get("id"),
+                demand_level: Some(demand),
+                supply_level: Some(supply),
+                long_trip_minutes: Some(if normalized.contains("airport") { 65.0 } else { 25.0 }),
+                multi_stop: Some(normalized.contains("multi") || normalized.contains("stop")),
+            }
+        })
+        .collect())
+}
+
+async fn load_batchable_orders(client: &Client) -> Result<Vec<BatchOrder>, (StatusCode, String)> {
+    let rows = client
+        .query(
+            r#"
+            SELECT id, COALESCE(delivery_address, pickup_address, 'default') AS location_hint, COALESCE(notes, '') AS notes
+            FROM orders
+            WHERE status IN ('pending', 'confirmed', 'assigned')
+            ORDER BY updated_at DESC
+            LIMIT 30
+            "#,
+            &[],
+        )
+        .await
+        .map_err(internal_error)?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| {
+            let location_hint: String = row.get("location_hint");
+            let notes: String = row.get("notes");
+            let normalized_notes = notes.to_lowercase();
+            let zone_key = location_hint
+                .split(',')
+                .next()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty());
+            BatchOrder {
+                order_id: row.get("id"),
+                zone_key,
+                distance_km: if location_hint.to_lowercase().contains("airport") { 7.5 } else { 3.2 },
+                prep_minutes: Some(if normalized_notes.contains("prep") { 24.0 } else { 14.0 }),
+                regulated_items: Some(normalized_notes.contains("regulated") || normalized_notes.contains("pharmacy")),
+                priority_level: Some(if normalized_notes.contains("vip") || normalized_notes.contains("urgent") {
+                    "urgent".to_string()
+                } else {
+                    "standard".to_string()
+                }),
+            }
+        })
+        .collect())
+}
+
+async fn load_recent_driver_eta(client: &Client) -> Result<Option<f64>, (StatusCode, String)> {
+    let row = client
+        .query_one(
+            "SELECT AVG((response_json->>'dispatch_ready_in_minutes')::float8) AS avg_eta FROM dispatch_optimizer_runs WHERE endpoint = 'eta'",
+            &[],
+        )
+        .await
+        .map_err(internal_error)?;
+    Ok(row.get::<_, Option<f64>>("avg_eta"))
+}
+
+async fn persist_run<T: Serialize, U: Serialize>(
+    client: &Client,
+    endpoint: &str,
+    request: &T,
+    response: &U,
+    order_id: Option<i64>,
+) -> Result<(), (StatusCode, String)> {
+    let request_json = serde_json::to_value(request).map_err(internal_error)?;
+    let response_json = serde_json::to_value(response).map_err(internal_error)?;
+    client
+        .execute(
+            "INSERT INTO dispatch_optimizer_runs (endpoint, order_id, request_json, response_json) VALUES ($1, $2, $3, $4)",
+            &[&endpoint, &order_id, &request_json, &response_json],
+        )
+        .await
+        .map_err(internal_error)?;
+    Ok(())
+}
+
+fn internal_error<E: std::fmt::Display>(error: E) -> (StatusCode, String) {
+    (StatusCode::INTERNAL_SERVER_ERROR, error.to_string())
 }
 
 fn round2(value: f64) -> f64 {

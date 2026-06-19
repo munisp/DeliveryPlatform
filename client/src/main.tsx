@@ -8,6 +8,14 @@ import { trpc } from "@/lib/trpc";
 import { UNAUTHED_ERR_MSG } from "@shared/const";
 import { getLoginUrl } from "./const";
 
+declare const __APP_BUILD_VERSION__: string;
+
+declare global {
+  interface Window {
+    __APP_BUILD_VERSION__?: string;
+  }
+}
+
 const rootElement = document.getElementById("root");
 
 if (!rootElement) {
@@ -15,7 +23,9 @@ if (!rootElement) {
 }
 
 const queryClient = new QueryClient();
-
+const buildVersion = window.__APP_BUILD_VERSION__ && window.__APP_BUILD_VERSION__ !== "__APP_BUILD_VERSION__"
+  ? window.__APP_BUILD_VERSION__
+  : __APP_BUILD_VERSION__;
 const PUBLIC_PATHS = new Set(["/", "/portal"]);
 
 const isPublicRoute = () => {
@@ -54,6 +64,7 @@ const trpcClient = trpc.createClient({
         return globalThis.fetch(input, {
           ...(init ?? {}),
           credentials: "include",
+          cache: "no-store",
         });
       },
     }),
@@ -61,10 +72,20 @@ const trpcClient = trpc.createClient({
 });
 
 if (typeof window !== "undefined" && "serviceWorker" in navigator) {
-  window.addEventListener("load", () => {
-    navigator.serviceWorker.register("/sw.js").catch((error) => {
+  window.addEventListener("load", async () => {
+    try {
+      const registration = await navigator.serviceWorker.register(`/sw.js?v=${encodeURIComponent(buildVersion)}`);
+      if (registration.waiting) {
+        registration.waiting.postMessage({ type: "SKIP_WAITING" });
+      }
+      navigator.serviceWorker.addEventListener("message", (event) => {
+        if (event.data?.type === "SW_VERSION_ACTIVATED" && event.data.version !== buildVersion) {
+          window.location.reload();
+        }
+      });
+    } catch (error) {
       console.error("[SwitchOS] Service worker registration failed", error);
-    });
+    }
   });
 }
 
