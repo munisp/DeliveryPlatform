@@ -1,4 +1,5 @@
 import cookie from "cookie";
+import { createHash, randomBytes } from "crypto";
 import { createRemoteJWKSet, jwtVerify, SignJWT } from "jose";
 
 import { COOKIE_NAME } from "../../shared/const";
@@ -20,8 +21,20 @@ type SessionClaims = {
 
 type DiscoveryDocument = {
   issuer?: string;
+  authorization_endpoint?: string;
+  token_endpoint?: string;
+  userinfo_endpoint?: string;
   jwks_uri?: string;
   end_session_endpoint?: string;
+};
+
+type OidcTokens = {
+  access_token?: string;
+  id_token?: string;
+  refresh_token?: string;
+  token_type?: string;
+  expires_in?: number;
+  scope?: string;
 };
 
 let remoteJwksPromise: Promise<ReturnType<typeof createRemoteJWKSet> | null> | null = null;
@@ -29,6 +42,17 @@ let discoveryDocumentPromise: Promise<DiscoveryDocument | null> | null = null;
 
 function getSessionKey() {
   return encoder.encode(ENV.cookieSecret);
+}
+
+function inferDefaultScopes(role: string) {
+  const normalizedRole = role.trim().toLowerCase();
+  if (normalizedRole === "admin") {
+    return ["platform:read", "platform:write", "analytics:read", "analytics:write"];
+  }
+  if (["operator", "ops"].includes(normalizedRole)) {
+    return ["platform:read", "platform:write", "analytics:read"];
+  }
+  return ["platform:read", "analytics:read"];
 }
 
 function normalizeScopes(value: unknown): string[] {
@@ -69,6 +93,9 @@ function toSessionUser(payload: Record<string, unknown>): SessionUser | null {
     return null;
   }
 
+  const role = normalizeRole(payload);
+  const explicitScopes = normalizeScopes(payload.scopes ?? payload.scope);
+
   return {
     id: resolvedId,
     name: typeof payload.name === "string" && payload.name.trim().length > 0
@@ -77,7 +104,7 @@ function toSessionUser(payload: Record<string, unknown>): SessionUser | null {
         ? payload.preferred_username
         : "Operator",
     email: typeof payload.email === "string" ? payload.email : null,
-    role: normalizeRole(payload),
+    role,
     openId: typeof payload.openId === "string"
       ? payload.openId
       : typeof payload.preferred_username === "string"
@@ -88,7 +115,7 @@ function toSessionUser(payload: Record<string, unknown>): SessionUser | null {
       : typeof payload.azp === "string"
         ? payload.azp
         : null,
-    scopes: normalizeScopes(payload.scopes ?? payload.scope),
+    scopes: explicitScopes.length > 0 ? explicitScopes : inferDefaultScopes(role),
   };
 }
 
@@ -123,6 +150,109 @@ async function getRemoteJwks() {
   return remoteJwksPromise;
 }
 
+function randomUrlSafe(length = 32) {
+  return randomBytes(length).toString("base64url");
+}
+
+function sha256Base64Url(value: string) {
+  return createHash("sha256").update(value).digest("base64url");
+}
+
+export function buildOidcFlowState() {
+  const verifier = randomUrlSafe(48);
+  const state = randomUrlSafe(24);
+  const nonce = randomUrlSafe(24);
+  const challenge = sha256Base64Url(verifier);
+  return { verifier, state, nonce, challenge };
+}
+
+export function getOidcRedirectUri(origin: string) {
+  return `${origin.replace(/\/$/, "")}${ENV.oidcRedirectPath}`;
+}
+
+export async function buildOidcAuthorizationUrl(origin: string, returnTo = "/dashboard") {
+  const discovery = await getDiscoveryDocument();
+  const authorizationEndpoint = discovery?.authorization_endpoint;
+  if (!authorizationEndpoint) {
+    throw new Error("OIDC authorization endpoint is not available");
+  }
+
+  const flow = buildOidcFlowState();
+  const url = new URL(authorizationEndpoint);
+  url.searchParams.set("client_id", ENV.oidcClientId);
+  url.searchParams.set("redirect_uri", getOidcRedirectUri(origin));
+  url.searchParams.set("response_type", "code");
+  url.searchParams.set("scope", ENV.oidcScope);
+  url.searchParams.set("state", flow.state);
+  url.searchParams.set("nonce", flow.nonce);
+  url.searchParams.set("code_challenge", flow.challenge);
+  url.searchParams.set("code_challenge_method", "S256");
+
+  return {
+    authorizationUrl: url.toString(),
+    state: flow.state,
+    nonce: flow.nonce,
+    verifier: flow.verifier,
+    returnTo,
+  };
+}
+
+async function verifyExternalJwt(token: string, expectedNonce?: string): Promise<SessionUser | null> {
+  if (!ENV.enableExternalOidc || !ENV.oidcIssuerUrl) return null;
+  try {
+    const jwks = await getRemoteJwks();
+    if (!jwks) return null;
+    const discovery = await getDiscoveryDocument();
+    const issuer = discovery?.issuer ?? ENV.oidcIssuerUrl;
+    const { payload } = await jwtVerify(token, jwks, {
+      issuer,
+      audience: ENV.oidcAudience || ENV.oidcClientId,
+    });
+
+    if (expectedNonce && payload.nonce && payload.nonce !== expectedNonce) {
+      return null;
+    }
+    return toSessionUser(payload as Record<string, unknown>);
+  } catch (error) {
+    console.warn("[SwitchOS] External JWT verification failed", error);
+    return null;
+  }
+}
+
+export async function exchangeAuthorizationCode(code: string, verifier: string, origin: string): Promise<OidcTokens> {
+  const discovery = await getDiscoveryDocument();
+  const tokenEndpoint = discovery?.token_endpoint;
+  if (!tokenEndpoint) {
+    throw new Error("OIDC token endpoint is not available");
+  }
+
+  const body = new URLSearchParams();
+  body.set("grant_type", "authorization_code");
+  body.set("client_id", ENV.oidcClientId);
+  if (ENV.oidcClientSecret) {
+    body.set("client_secret", ENV.oidcClientSecret);
+  }
+  body.set("code", code);
+  body.set("code_verifier", verifier);
+  body.set("redirect_uri", getOidcRedirectUri(origin));
+
+  const response = await fetch(tokenEndpoint, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      Accept: "application/json",
+    },
+    body: body.toString(),
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`OIDC token exchange failed: ${response.status} ${text}`);
+  }
+
+  return await response.json() as OidcTokens;
+}
+
 export async function createSessionToken(user: SessionClaims) {
   const subject = user.sub.trim();
   return new SignJWT({
@@ -155,21 +285,23 @@ export async function verifySessionToken(token: string): Promise<SessionUser | n
 }
 
 export async function verifyExternalAccessToken(token: string): Promise<SessionUser | null> {
-  if (!ENV.enableExternalOidc || !ENV.oidcIssuerUrl) return null;
-  try {
-    const jwks = await getRemoteJwks();
-    if (!jwks) return null;
-    const discovery = await getDiscoveryDocument();
-    const issuer = discovery?.issuer ?? ENV.oidcIssuerUrl;
-    const { payload } = await jwtVerify(token, jwks, {
-      issuer,
-      audience: ENV.oidcAudience || ENV.oidcClientId,
-    });
-    return toSessionUser(payload as Record<string, unknown>);
-  } catch (error) {
-    console.warn("[SwitchOS] External access token verification failed", error);
-    return null;
+  return verifyExternalJwt(token);
+}
+
+export async function verifyExternalIdToken(token: string, expectedNonce?: string): Promise<SessionUser | null> {
+  return verifyExternalJwt(token, expectedNonce);
+}
+
+export async function resolveUserFromExternalTokens(tokens: OidcTokens, expectedNonce?: string): Promise<SessionUser | null> {
+  if (tokens.id_token) {
+    const fromIdToken = await verifyExternalIdToken(tokens.id_token, expectedNonce);
+    if (fromIdToken) return fromIdToken;
   }
+  if (tokens.access_token) {
+    const fromAccessToken = await verifyExternalAccessToken(tokens.access_token);
+    if (fromAccessToken) return fromAccessToken;
+  }
+  return null;
 }
 
 export async function getSessionUserFromRequest(headers: Record<string, string | string[] | undefined>) {

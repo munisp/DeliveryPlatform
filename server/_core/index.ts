@@ -8,12 +8,18 @@ import { COOKIE_NAME } from "../../shared/const";
 import { ENV } from "./env";
 import { getCookieOptions } from "./cookies";
 import {
+  buildOidcAuthorizationUrl,
   createSessionToken,
   getOidcDiscoveryDocument,
   getSessionUserFromRequest,
-  verifyExternalAccessToken,
+  resolveUserFromExternalTokens,
 } from "./auth";
 import { authenticateOperator, ensureOperatorAuthStore } from "./operatorAuthStore";
+
+const OIDC_STATE_COOKIE = "switchos_oidc_state";
+const OIDC_NONCE_COOKIE = "switchos_oidc_nonce";
+const OIDC_VERIFIER_COOKIE = "switchos_oidc_verifier";
+const OIDC_RETURN_TO_COOKIE = "switchos_oidc_return_to";
 
 const app = express();
 const rateWindowMs = 60_000;
@@ -31,6 +37,26 @@ function readOrigin(originHeader?: string) {
 function isAllowedOrigin(origin: string) {
   if (!origin) return false;
   return allowedOrigins.includes(origin);
+}
+
+function getRequestOrigin(req: express.Request) {
+  const forwardedProto = `${req.headers["x-forwarded-proto"] ?? req.protocol ?? "http"}`.split(",")[0]?.trim() || "http";
+  const forwardedHost = `${req.headers["x-forwarded-host"] ?? req.get("host") ?? "localhost:3005"}`.split(",")[0]?.trim() || "localhost:3005";
+  return `${forwardedProto}://${forwardedHost}`;
+}
+
+function sanitizeReturnTo(returnTo: string | undefined) {
+  if (!returnTo) return "/dashboard";
+  if (!returnTo.startsWith("/") || returnTo.startsWith("//")) return "/dashboard";
+  return returnTo;
+}
+
+function clearOidcFlowCookies(res: express.Response) {
+  const options = { ...getCookieOptions(), maxAge: 0 };
+  res.clearCookie(OIDC_STATE_COOKIE, options);
+  res.clearCookie(OIDC_NONCE_COOKIE, options);
+  res.clearCookie(OIDC_VERIFIER_COOKIE, options);
+  res.clearCookie(OIDC_RETURN_TO_COOKIE, options);
 }
 
 function setSecurityHeaders(req: express.Request, res: express.Response) {
@@ -162,40 +188,83 @@ app.get("/api/auth/config", async (_req, res) => {
     oidcIssuer: (discovery?.issuer ?? ENV.oidcIssuerUrl) || null,
     oidcClientId: ENV.oidcClientId || null,
     oidcLogoutUrl: (discovery?.end_session_endpoint ?? ENV.oidcLogoutUrl) || null,
+    oidcStartPath: ENV.enableExternalOidc ? "/api/auth/oidc/start" : null,
     fallbackLoginEnabled: !ENV.enableExternalOidc || !ENV.isProduction,
   });
 });
 
-app.post("/api/auth/external-session", rateLimit(20), async (req, res) => {
+app.get("/api/auth/oidc/start", rateLimit(20), async (req, res) => {
   if (!ENV.enableExternalOidc) {
     res.status(404).json({ error: "external_oidc_disabled" });
     return;
   }
 
-  const accessToken = `${req.body?.accessToken ?? ""}`.trim();
-  if (!accessToken) {
-    res.status(400).json({ error: "missing_access_token" });
+  try {
+    const returnTo = sanitizeReturnTo(typeof req.query.returnTo === "string" ? req.query.returnTo : undefined);
+    const origin = getRequestOrigin(req);
+    const authorization = await buildOidcAuthorizationUrl(origin, returnTo);
+    const transientCookieOptions = {
+      ...getCookieOptions(),
+      maxAge: 1000 * 60 * 10,
+      sameSite: "lax" as const,
+    };
+
+    res.cookie(OIDC_STATE_COOKIE, authorization.state, transientCookieOptions);
+    res.cookie(OIDC_NONCE_COOKIE, authorization.nonce, transientCookieOptions);
+    res.cookie(OIDC_VERIFIER_COOKIE, authorization.verifier, transientCookieOptions);
+    res.cookie(OIDC_RETURN_TO_COOKIE, authorization.returnTo, transientCookieOptions);
+    res.redirect(302, authorization.authorizationUrl);
+  } catch (error) {
+    console.error("[SwitchOS] Failed to start OIDC login", error);
+    res.status(500).json({ error: "oidc_start_failed" });
+  }
+});
+
+app.get("/api/auth/oidc/callback", rateLimit(20), async (req, res) => {
+  if (!ENV.enableExternalOidc) {
+    res.status(404).json({ error: "external_oidc_disabled" });
+    return;
+  }
+
+  const state = typeof req.query.state === "string" ? req.query.state : "";
+  const code = typeof req.query.code === "string" ? req.query.code : "";
+  const cookieState = `${req.cookies?.[OIDC_STATE_COOKIE] ?? ""}`;
+  const cookieNonce = `${req.cookies?.[OIDC_NONCE_COOKIE] ?? ""}`;
+  const cookieVerifier = `${req.cookies?.[OIDC_VERIFIER_COOKIE] ?? ""}`;
+  const returnTo = sanitizeReturnTo(`${req.cookies?.[OIDC_RETURN_TO_COOKIE] ?? "/dashboard"}`);
+
+  if (!state || !code || !cookieState || state !== cookieState || !cookieVerifier) {
+    clearOidcFlowCookies(res);
+    res.redirect(302, `/portal?error=${encodeURIComponent("oidc_state_mismatch")}`);
     return;
   }
 
   try {
-    const user = await verifyExternalAccessToken(accessToken);
-    if (!user) {
-      res.status(401).json({ error: "invalid_external_token" });
+    const origin = getRequestOrigin(req);
+    const tokens = await resolveUserFromExternalTokens(
+      await import("./auth").then(({ exchangeAuthorizationCode }) => exchangeAuthorizationCode(code, cookieVerifier, origin)),
+      cookieNonce,
+    );
+
+    if (!tokens) {
+      clearOidcFlowCookies(res);
+      res.redirect(302, `/portal?error=${encodeURIComponent("invalid_external_token")}`);
       return;
     }
 
     await issueOperatorSession(res, {
-      id: user.id,
-      name: user.name,
-      email: user.email ?? `${user.openId ?? user.id}@switchos.local`,
-      role: user.role,
-      tenantId: user.tenantId,
+      id: tokens.id,
+      name: tokens.name,
+      email: tokens.email ?? `${tokens.openId ?? tokens.id}@switchos.local`,
+      role: tokens.role ?? "viewer",
+      tenantId: tokens.tenantId,
     });
-    res.status(200).json({ ok: true, redirect: "/dashboard", operator: { email: user.email, role: user.role } });
+    clearOidcFlowCookies(res);
+    res.redirect(302, returnTo);
   } catch (error) {
-    console.error("[SwitchOS] External login failed", error);
-    res.status(500).json({ error: "external_login_failed" });
+    console.error("[SwitchOS] OIDC callback failed", error);
+    clearOidcFlowCookies(res);
+    res.redirect(302, `/portal?error=${encodeURIComponent("oidc_callback_failed")}`);
   }
 });
 
@@ -249,6 +318,7 @@ app.post("/api/auth/dev-session", rateLimit(10), async (req, res) => {
 
 app.post("/api/auth/logout", (_req, res) => {
   res.clearCookie(COOKIE_NAME, getCookieOptions());
+  clearOidcFlowCookies(res);
   res.setHeader("Cache-Control", "no-store");
   res.status(200).json({ ok: true, logoutUrl: ENV.oidcLogoutUrl || null });
 });

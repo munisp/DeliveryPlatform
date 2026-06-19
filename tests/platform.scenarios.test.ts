@@ -45,10 +45,28 @@ function createContext(user: {
   tenantId?: string | null;
   scopes?: string[];
 } | null) {
+  if (!user) {
+    return {
+      req: new IncomingMessage(null as never),
+      res: new ServerResponse({} as never),
+      user: null,
+    };
+  }
+
+  const normalizedRole = `${user.role ?? "viewer"}`.trim().toLowerCase();
+  const defaultScopes = normalizedRole === "admin"
+    ? ["platform:read", "platform:write", "analytics:read", "analytics:write"]
+    : ["operator", "ops"].includes(normalizedRole)
+      ? ["platform:read", "platform:write", "analytics:read"]
+      : ["platform:read", "analytics:read"];
+
   return {
     req: new IncomingMessage(null as never),
     res: new ServerResponse({} as never),
-    user,
+    user: {
+      ...user,
+      scopes: user.scopes ?? defaultScopes,
+    },
   };
 }
 
@@ -87,6 +105,32 @@ describe("SwitchOS platform scenario workflows", () => {
   it("rejects protected workflows for non-operator viewer roles", async () => {
     const caller = appRouter.createCaller(createContext({ id: 2, name: "Viewer", email: "viewer@switchos.local", role: "viewer" }));
     await expect(caller.driverMobility.summary()).rejects.toMatchObject<Partial<TRPCError>>({ code: "FORBIDDEN" });
+  });
+
+  it("rejects analytics workflows for operators missing analytics scope", async () => {
+    const caller = appRouter.createCaller(
+      createContext({
+        id: 21,
+        name: "Scoped Operator",
+        email: "scoped-ops@switchos.local",
+        role: "operator",
+        scopes: ["platform:read"],
+      }),
+    );
+    await expect(caller.analytics.summary()).rejects.toMatchObject<Partial<TRPCError>>({ code: "FORBIDDEN" });
+  });
+
+  it("rejects workspace workflows for operators missing platform read scope", async () => {
+    const caller = appRouter.createCaller(
+      createContext({
+        id: 22,
+        name: "Analytics Only",
+        email: "analytics-only@switchos.local",
+        role: "operator",
+        scopes: ["analytics:read"],
+      }),
+    );
+    await expect(caller.merchantChannels.workspace()).rejects.toMatchObject<Partial<TRPCError>>({ code: "FORBIDDEN" });
   });
 
   it("serves analytics from the lakehouse-backed path when synchronization succeeds", async () => {

@@ -1,0 +1,13 @@
+apisix:
+  node_listen: 9080
+  enable_admin: true
+  enable_control: true
+  config_center: yaml
+
+deployment:
+  role: traditional
+  role_traditional:
+    config_provider: yaml
+
+nginx_config:
+  error_log_level: warn

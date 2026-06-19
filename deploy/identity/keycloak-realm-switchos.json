@@ -1,0 +1,95 @@
+{
+  "realm": "switchos",
+  "enabled": true,
+  "registrationAllowed": false,
+  "resetPasswordAllowed": true,
+  "rememberMe": true,
+  "clients": [
+    {
+      "clientId": "switchos-operator-dashboard",
+      "name": "SwitchOS Operator Dashboard",
+      "enabled": true,
+      "publicClient": false,
+      "secret": "change-me-before-production",
+      "redirectUris": [
+        "http://localhost:3005/api/auth/oidc/callback",
+        "http://127.0.0.1:3005/api/auth/oidc/callback",
+        "http://localhost:9080/api/auth/oidc/callback",
+        "http://127.0.0.1:9080/api/auth/oidc/callback"
+      ],
+      "webOrigins": [
+        "http://localhost:3005",
+        "http://127.0.0.1:3005",
+        "http://localhost:9080",
+        "http://127.0.0.1:9080"
+      ],
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true,
+      "attributes": {
+        "post.logout.redirect.uris": "+"
+      },
+      "protocol": "openid-connect",
+      "defaultClientScopes": [
+        "web-origins",
+        "roles",
+        "profile",
+        "email"
+      ]
+    }
+  ],
+  "roles": {
+    "realm": [
+      {
+        "name": "admin",
+        "description": "Full operator administration"
+      },
+      {
+        "name": "operator",
+        "description": "Operational access to active platform workspaces"
+      },
+      {
+        "name": "ops",
+        "description": "Operational support role"
+      },
+      {
+        "name": "viewer",
+        "description": "Read-only role with limited access"
+      }
+    ]
+  },
+  "users": [
+    {
+      "username": "switchos.admin",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "SwitchOS",
+      "lastName": "Admin",
+      "email": "admin@switchos.local",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "ChangeMe123!",
+          "temporary": true
+        }
+      ],
+      "realmRoles": ["admin"]
+    },
+    {
+      "username": "switchos.operator",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "SwitchOS",
+      "lastName": "Operator",
+      "email": "operator@switchos.local",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "ChangeMe123!",
+          "temporary": true
+        }
+      ],
+      "realmRoles": ["operator"]
+    }
+  ]
+}

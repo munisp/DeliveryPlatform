@@ -121,8 +121,12 @@ export const ENV = {
   oidcIssuerUrl: normalizeOptionalUrl("OIDC_ISSUER_URL"),
   oidcAudience: (process.env.OIDC_AUDIENCE ?? "switchos-operator-dashboard").trim(),
   oidcClientId: (process.env.OIDC_CLIENT_ID ?? "switchos-operator-dashboard").trim(),
+  oidcClientSecret: process.env.OIDC_CLIENT_SECRET?.trim() ?? "",
+  oidcScope: (process.env.OIDC_SCOPE ?? "openid profile email offline_access").trim(),
   oidcLogoutUrl: normalizeOptionalUrl("OIDC_LOGOUT_URL"),
   oidcDiscoveryUrl: normalizeOptionalUrl("OIDC_DISCOVERY_URL"),
+  oidcRedirectPath: process.env.OIDC_REDIRECT_PATH ?? "/api/auth/oidc/callback",
+  oidcPostLogoutPath: process.env.OIDC_POST_LOGOUT_PATH ?? "/portal",
   enableExternalOidc: parseBoolean(process.env.ENABLE_EXTERNAL_OIDC, false),
   cacheControlIndexHtml: process.env.CACHE_CONTROL_INDEX_HTML ?? "no-cache, no-store, must-revalidate",
 };

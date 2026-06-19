@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { publicProcedure, protectedProcedure, router } from "./_core/trpc";
+import { analyticsReadProcedure, platformReadProcedure, publicProcedure, router } from "./_core/trpc";
 import { systemRouter } from "./_core/systemRouter";
 import {
   getDriverMobilityWorkspace,
@@ -42,34 +42,34 @@ export const appRouter = router({
   }),
 
   analytics: router({
-    summary: protectedProcedure.query(() => withLakehouseFallback(() => getLakehouseAnalyticsSummary(), () => getWorkspaceAnalyticsSummary())),
-    orderStats: protectedProcedure.query(() => withLakehouseFallback(() => getLakehouseOrderStats(), () => getWorkspaceOrderStats())),
-    driverStats: protectedProcedure.query(() => withLakehouseFallback(() => getLakehouseDriverStats(), () => getWorkspaceDriverStats())),
-    marketplaceOverview: protectedProcedure.query(() => withLakehouseFallback(() => getLakehouseMarketplaceOverview(), () => getWorkspaceMarketplaceOverview())),
+    summary: analyticsReadProcedure.query(() => withLakehouseFallback(() => getLakehouseAnalyticsSummary(), () => getWorkspaceAnalyticsSummary())),
+    orderStats: analyticsReadProcedure.query(() => withLakehouseFallback(() => getLakehouseOrderStats(), () => getWorkspaceOrderStats())),
+    driverStats: analyticsReadProcedure.query(() => withLakehouseFallback(() => getLakehouseDriverStats(), () => getWorkspaceDriverStats())),
+    marketplaceOverview: analyticsReadProcedure.query(() => withLakehouseFallback(() => getLakehouseMarketplaceOverview(), () => getWorkspaceMarketplaceOverview())),
   }),
 
   driverMobility: router({
-    summary: protectedProcedure.input(listInput).query(({ input }) => getDriverMobilityWorkspace(input?.limit)),
+    summary: platformReadProcedure.input(listInput).query(({ input }) => getDriverMobilityWorkspace(input?.limit)),
   }),
 
   tablesideOrdering: router({
-    summary: protectedProcedure.input(listInput).query(({ input }) => getTablesideWorkspace(input?.limit)),
+    summary: platformReadProcedure.input(listInput).query(({ input }) => getTablesideWorkspace(input?.limit)),
   }),
 
   whiteLabelApps: router({
-    summary: protectedProcedure.input(listInput).query(({ input }) => getWhiteLabelAppsWorkspace(input?.limit)),
+    summary: platformReadProcedure.input(listInput).query(({ input }) => getWhiteLabelAppsWorkspace(input?.limit)),
   }),
 
   merchantChannels: router({
-    workspace: protectedProcedure.query(() => getMerchantChannelWorkspace()),
+    workspace: platformReadProcedure.query(() => getMerchantChannelWorkspace()),
   }),
 
   serviceRecovery: router({
-    workspace: protectedProcedure.query(() => getServiceRecoveryWorkspace()),
+    workspace: platformReadProcedure.query(() => getServiceRecoveryWorkspace()),
   }),
 
   phoneOrdering: router({
-    workspace: protectedProcedure.query(() => getPhoneOrderingWorkspace()),
+    workspace: platformReadProcedure.query(() => getPhoneOrderingWorkspace()),
   }),
 });
 

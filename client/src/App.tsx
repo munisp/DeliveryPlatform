@@ -1,4 +1,4 @@
-import React, { FormEvent, useEffect, useMemo, useState } from "react";
+import React, { FormEvent, useMemo, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link, Route, Switch } from "wouter";
 
@@ -17,6 +17,7 @@ type AuthConfig = {
   oidcIssuer: string | null;
   oidcClientId: string | null;
   oidcLogoutUrl: string | null;
+  oidcStartPath: string | null;
   fallbackLoginEnabled: boolean;
 };
 
@@ -101,7 +102,9 @@ function HomePage() {
 function PortalPage() {
   const [email, setEmail] = useState("admin@switchos.local");
   const [password, setPassword] = useState("ChangeMe123!");
-  const [externalToken, setExternalToken] = useState("");
+  const portalError = typeof window !== "undefined"
+    ? new URLSearchParams(window.location.search).get("error")
+    : null;
 
   const authConfigQuery = useQuery({
     queryKey: ["auth-config"],
@@ -127,30 +130,6 @@ function PortalPage() {
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) {
         const errorMessage = typeof payload?.error === "string" ? payload.error : "Unable to establish operator session.";
-        throw new Error(errorMessage);
-      }
-
-      return payload as { redirect?: string };
-    },
-    onSuccess(payload) {
-      window.location.href = payload.redirect || "/dashboard";
-    },
-  });
-
-  const externalLoginMutation = useMutation({
-    mutationFn: async (accessToken: string) => {
-      const response = await fetch("/api/auth/external-session", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        credentials: "include",
-        body: JSON.stringify({ accessToken }),
-      });
-
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        const errorMessage = typeof payload?.error === "string" ? payload.error : "Unable to establish external operator session.";
         throw new Error(errorMessage);
       }
 
@@ -190,14 +169,9 @@ function PortalPage() {
     loginMutation.mutate({ email, password });
   };
 
-  const handleExternalSubmit = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    externalLoginMutation.mutate(externalToken.trim());
-  };
-
   const authModeLabel = useMemo(() => {
     if (externalEnabled) {
-      return "External identity is enabled for this environment.";
+      return "External identity is enabled for this environment through a browser-based OIDC login flow.";
     }
     return "Local credential-backed sign-in remains available for environments that have not yet enabled external identity.";
   }, [externalEnabled]);
@@ -221,12 +195,20 @@ function PortalPage() {
           </Card>
         ) : null}
 
+        {portalError ? (
+          <Card>
+            <CardContent className="pt-6">
+              <p className="text-sm text-rose-300">Authentication error: {portalError}</p>
+            </CardContent>
+          </Card>
+        ) : null}
+
         {externalEnabled ? (
           <Card>
             <CardHeader>
-              <CardTitle>External OIDC session</CardTitle>
+              <CardTitle>External OIDC sign in</CardTitle>
               <CardDescription>
-                Submit a valid access token issued by the configured identity provider. This supports real external verification at the edge when the deployment has OIDC enabled.
+                Start a real browser-based authorization-code login against the configured identity provider.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
@@ -234,28 +216,16 @@ function PortalPage() {
                 <p>Issuer: <span className="text-slate-100">{authConfig?.oidcIssuer || "Not configured"}</span></p>
                 <p>Client: <span className="text-slate-100">{authConfig?.oidcClientId || "Not configured"}</span></p>
               </div>
-              <form className="space-y-4" onSubmit={handleExternalSubmit}>
-                <div className="space-y-2">
-                  <label className="text-sm font-medium text-slate-200" htmlFor="external-access-token">Access token</label>
-                  <textarea
-                    id="external-access-token"
-                    value={externalToken}
-                    onChange={(event) => setExternalToken(event.target.value)}
-                    className="min-h-40 w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-slate-100 outline-none transition focus:border-cyan-400"
-                    placeholder="Paste a bearer token from the configured OIDC or Keycloak-compatible provider"
-                  />
-                </div>
-                <button
-                  type="submit"
-                  disabled={externalLoginMutation.isPending || !externalToken.trim()}
-                  className="inline-flex rounded-full bg-cyan-500 px-5 py-3 text-sm font-medium text-slate-950 transition hover:bg-cyan-400 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  {externalLoginMutation.isPending ? "Verifying token..." : "Enter operator dashboard"}
-                </button>
-              </form>
-              {externalLoginMutation.isError ? (
-                <p className="text-sm text-rose-300">{externalLoginMutation.error.message}</p>
-              ) : null}
+              <button
+                type="button"
+                onClick={() => {
+                  const startPath = authConfig?.oidcStartPath || "/api/auth/oidc/start";
+                  window.location.href = `${startPath}?returnTo=${encodeURIComponent("/dashboard")}`;
+                }}
+                className="inline-flex rounded-full bg-cyan-500 px-5 py-3 text-sm font-medium text-slate-950 transition hover:bg-cyan-400"
+              >
+                Continue with external identity
+              </button>
             </CardContent>
           </Card>
         ) : null}

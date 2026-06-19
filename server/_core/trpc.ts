@@ -1,5 +1,5 @@
-import type { IncomingMessage, ServerResponse } from "http";
 import { initTRPC, TRPCError } from "@trpc/server";
+import { IncomingMessage, ServerResponse } from "http";
 import superjson from "superjson";
 import { UNAUTHED_ERR_MSG } from "../../shared/const";
 
@@ -68,4 +68,43 @@ const requireOperator = t.middleware(({ ctx, next }) => {
   });
 });
 
+function requireScopes(requiredScopes: string[]) {
+  return t.middleware(({ ctx, next }) => {
+    if (!ctx.user) {
+      throw new TRPCError({
+        code: "UNAUTHORIZED",
+        message: UNAUTHED_ERR_MSG,
+      });
+    }
+
+    const normalizedRole = `${ctx.user.role ?? ""}`.trim().toLowerCase();
+    if (normalizedRole === "admin") {
+      return next({
+        ctx: {
+          ...ctx,
+          user: ctx.user,
+        },
+      });
+    }
+
+    const scopes = new Set((ctx.user.scopes ?? []).map((scope) => scope.trim()));
+    const missing = requiredScopes.filter((scope) => !scopes.has(scope));
+    if (missing.length > 0) {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message: `MISSING_SCOPES:${missing.join(",")}`,
+      });
+    }
+
+    return next({
+      ctx: {
+        ...ctx,
+        user: ctx.user,
+      },
+    });
+  });
+}
+
 export const protectedProcedure = t.procedure.use(requireUser).use(requireOperator);
+export const platformReadProcedure = protectedProcedure.use(requireScopes(["platform:read"]));
+export const analyticsReadProcedure = protectedProcedure.use(requireScopes(["analytics:read"]));

@@ -1,0 +1,24 @@
+entity user {}
+
+entity tenant {
+  relation admin @user
+  relation operator @user
+  relation support @user
+  relation viewer @user
+
+  permission read_platform = admin or operator or support or viewer
+  permission write_platform = admin or operator or support
+  permission read_analytics = admin or operator or support or viewer
+  permission write_analytics = admin or operator
+}
+
+entity workspace {
+  relation tenant @tenant
+  relation manager @user
+  relation operator @user
+  relation viewer @user
+
+  permission read = manager or operator or viewer or tenant.read_platform
+  permission operate = manager or operator or tenant.write_platform
+  permission analytics = manager or operator or viewer or tenant.read_analytics
+}

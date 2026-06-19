@@ -1,0 +1,40 @@
+{
+  "policy": {
+    "name": "switchos-operator-edge",
+    "mode": "prevent-learn",
+    "practices": {
+      "webAttackMitigation": {
+        "enabled": true,
+        "minimumConfidence": "medium",
+        "protections": [
+          "sql-injection",
+          "cross-site-scripting",
+          "remote-code-execution",
+          "path-traversal",
+          "command-injection",
+          "method-enforcement"
+        ]
+      },
+      "apiProtection": {
+        "enabled": true,
+        "schemaValidation": true,
+        "blockUnknownMethods": true
+      },
+      "rateLimiting": {
+        "enabled": true,
+        "burstProtection": true
+      },
+      "botProtection": {
+        "enabled": true,
+        "suspiciousAutomation": "detect"
+      }
+    },
+    "targets": [
+      {
+        "host": "localhost",
+        "ports": [9080, 3005],
+        "paths": ["/", "/api/*", "/api/trpc/*"]
+      }
+    ]
+  }
+}

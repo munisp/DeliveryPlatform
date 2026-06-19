@@ -1,0 +1,108 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: switchos-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: switchos
+      POSTGRES_USER: switchos
+      POSTGRES_PASSWORD: switchos
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ../../scripts/init-local-postgres.sql:/docker-entrypoint-initdb.d/001-init.sql:ro
+
+  redis:
+    image: redis:7
+    container_name: switchos-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+  opensearch:
+    image: opensearchproject/opensearch:2.17.1
+    container_name: switchos-opensearch
+    restart: unless-stopped
+    environment:
+      discovery.type: single-node
+      plugins.security.disabled: "true"
+      OPENSEARCH_INITIAL_ADMIN_PASSWORD: change-me-before-production
+      bootstrap.memory_lock: "true"
+      OPENSEARCH_JAVA_OPTS: "-Xms512m -Xmx512m"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    ports:
+      - "9200:9200"
+      - "9600:9600"
+    volumes:
+      - opensearch_data:/usr/share/opensearch/data
+
+  permify:
+    image: ghcr.io/permify/permify:latest
+    container_name: switchos-permify
+    restart: unless-stopped
+    command: ["serve"]
+    ports:
+      - "3476:3476"
+      - "3478:3478"
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    container_name: switchos-keycloak
+    restart: unless-stopped
+    command:
+      - start-dev
+      - --import-realm
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: change-me-before-production
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/switchos
+      KC_DB_USERNAME: switchos
+      KC_DB_PASSWORD: switchos
+      KC_PROXY_HEADERS: xforwarded
+    depends_on:
+      - postgres
+    ports:
+      - "8080:8080"
+    volumes:
+      - ../identity/keycloak-realm-switchos.json:/opt/keycloak/data/import/switchos-realm.json:ro
+
+  etcd:
+    image: bitnami/etcd:3.5
+    container_name: switchos-etcd
+    restart: unless-stopped
+    environment:
+      ALLOW_NONE_AUTHENTICATION: "yes"
+      ETCD_ADVERTISE_CLIENT_URLS: http://etcd:2379
+      ETCD_LISTEN_CLIENT_URLS: http://0.0.0.0:2379
+    ports:
+      - "2379:2379"
+
+  apisix:
+    image: apache/apisix:3.10.0-debian
+    container_name: switchos-apisix
+    restart: unless-stopped
+    depends_on:
+      - etcd
+    environment:
+      APISIX_STAND_ALONE: "true"
+    ports:
+      - "9080:9080"
+      - "9180:9180"
+    volumes:
+      - ../gateway/apisix/config.yaml:/usr/local/apisix/conf/config.yaml:ro
+      - ../gateway/apisix/apisix.yaml:/usr/local/apisix/conf/apisix.yaml:ro
+
+volumes:
+  postgres_data:
+  redis_data:
+  opensearch_data:
