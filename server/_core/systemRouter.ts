@@ -1,5 +1,6 @@
 import { publicProcedure, router } from "./trpc";
 import { ENV } from "./env";
+import { getLiveIntegrationStatus } from "./integrationProbes";
 import { getPolicyIntegrationStatus } from "./policy";
 import { getOperationalEventStatus } from "./operationalEvents";
 
@@ -14,7 +15,7 @@ export const systemRouter = router({
     timestamp: new Date().toISOString(),
   })),
 
-  integrationStatus: publicProcedure.query(() => ({
+  integrationStatus: publicProcedure.query(async () => ({
     timestamp: new Date().toISOString(),
     edge: {
       apisixAdminUrl: ENV.apisixAdminUrl,
@@ -52,5 +53,6 @@ export const systemRouter = router({
       intakeOrchestratorUrl: ENV.intakeOrchestratorUrl,
     },
     operationalEvents: getOperationalEventStatus(),
+    liveChecks: await getLiveIntegrationStatus(),
   })),
 });

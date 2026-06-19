@@ -1,0 +1,136 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const fetchMock = vi.fn();
+vi.stubGlobal("fetch", fetchMock);
+
+async function loadModule() {
+  vi.resetModules();
+  return import("../server/_core/integrationProbes");
+}
+
+describe("SwitchOS live integration probes", () => {
+  const originalEnv = {
+    APISIX_ADMIN_URL: process.env.APISIX_ADMIN_URL,
+    APISIX_CONTROL_URL: process.env.APISIX_CONTROL_URL,
+    APISIX_ADMIN_KEY: process.env.APISIX_ADMIN_KEY,
+    ENABLE_EXTERNAL_OIDC: process.env.ENABLE_EXTERNAL_OIDC,
+    OIDC_ISSUER_URL: process.env.OIDC_ISSUER_URL,
+    OIDC_DISCOVERY_URL: process.env.OIDC_DISCOVERY_URL,
+    PERMIFY_ENDPOINT: process.env.PERMIFY_ENDPOINT,
+    REDIS_URL: process.env.REDIS_URL,
+    DAPR_HTTP_PORT: process.env.DAPR_HTTP_PORT,
+    OPENSEARCH_URL: process.env.OPENSEARCH_URL,
+    OPENSEARCH_USERNAME: process.env.OPENSEARCH_USERNAME,
+    OPENSEARCH_PASSWORD: process.env.OPENSEARCH_PASSWORD,
+    TEMPORAL_ADDRESS: process.env.TEMPORAL_ADDRESS,
+    FLUVIO_SERVICE_URL: process.env.FLUVIO_SERVICE_URL,
+    MOJALOOP_SERVICE_URL: process.env.MOJALOOP_SERVICE_URL,
+    TIGERBEETLE_SERVICE_URL: process.env.TIGERBEETLE_SERVICE_URL,
+    LAKEHOUSE_SERVICE_URL: process.env.LAKEHOUSE_SERVICE_URL,
+    VERTICAL_PROVISIONING_URL: process.env.VERTICAL_PROVISIONING_URL,
+    INTAKE_ORCHESTRATOR_URL: process.env.INTAKE_ORCHESTRATOR_URL,
+  };
+
+  beforeEach(() => {
+    fetchMock.mockReset();
+    process.env.APISIX_ADMIN_URL = "";
+    process.env.APISIX_CONTROL_URL = "";
+    process.env.APISIX_ADMIN_KEY = "";
+    process.env.ENABLE_EXTERNAL_OIDC = "false";
+    process.env.OIDC_ISSUER_URL = "";
+    process.env.OIDC_DISCOVERY_URL = "";
+    process.env.PERMIFY_ENDPOINT = "";
+    process.env.REDIS_URL = "";
+    process.env.DAPR_HTTP_PORT = "";
+    process.env.OPENSEARCH_URL = "";
+    process.env.OPENSEARCH_USERNAME = "";
+    process.env.OPENSEARCH_PASSWORD = "";
+    process.env.TEMPORAL_ADDRESS = "";
+    process.env.FLUVIO_SERVICE_URL = "";
+    process.env.MOJALOOP_SERVICE_URL = "http://127.0.0.1:8086";
+    process.env.TIGERBEETLE_SERVICE_URL = "http://127.0.0.1:8087";
+    process.env.LAKEHOUSE_SERVICE_URL = "http://127.0.0.1:8007";
+    process.env.VERTICAL_PROVISIONING_URL = "http://127.0.0.1:8088";
+    process.env.INTAKE_ORCHESTRATOR_URL = "http://127.0.0.1:8091";
+  });
+
+  afterEach(() => {
+    Object.entries(originalEnv).forEach(([key, value]) => {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    });
+  });
+
+  it("returns unconfigured results when optional integrations are not enabled", async () => {
+    const { getLiveIntegrationStatus } = await loadModule();
+    const status = await getLiveIntegrationStatus();
+
+    expect(status.identity.oidc.status).toBe("unconfigured");
+    expect(status.identity.permify.status).toBe("unconfigured");
+    expect(status.messaging.redis.status).toBe("unconfigured");
+    expect(status.messaging.dapr.status).toBe("unconfigured");
+    expect(status.messaging.openSearch.status).toBe("unconfigured");
+  });
+
+  it("reports healthy middleware checks when configured endpoints respond successfully", async () => {
+    process.env.APISIX_CONTROL_URL = "http://127.0.0.1:9000";
+    process.env.ENABLE_EXTERNAL_OIDC = "true";
+    process.env.OIDC_ISSUER_URL = "https://identity.switchos.example/realms/switchos";
+    process.env.PERMIFY_ENDPOINT = "http://127.0.0.1:3476";
+    process.env.DAPR_HTTP_PORT = "3500";
+    process.env.OPENSEARCH_URL = "http://127.0.0.1:9200";
+    process.env.OPENSEARCH_USERNAME = "admin";
+    process.env.OPENSEARCH_PASSWORD = "admin-password";
+    process.env.TEMPORAL_ADDRESS = "127.0.0.1:7233";
+    process.env.FLUVIO_SERVICE_URL = "http://127.0.0.1:50055";
+
+    fetchMock
+      .mockResolvedValueOnce({ ok: true, headers: new Headers({ "content-type": "application/json" }), json: async () => ({ routes: [] }) })
+      .mockResolvedValueOnce({ ok: true, headers: new Headers({ "content-type": "application/json" }), json: async () => ({ issuer: process.env.OIDC_ISSUER_URL, authorization_endpoint: "https://identity/auth", token_endpoint: "https://identity/token", jwks_uri: "https://identity/jwks" }) })
+      .mockResolvedValueOnce({ ok: true, headers: new Headers({ "content-type": "application/json" }), json: async () => ({ status: "ok" }) })
+      .mockResolvedValueOnce({ ok: true, headers: new Headers({ "content-type": "application/json" }), json: async () => ({ id: "dapr" }) })
+      .mockResolvedValueOnce({ ok: true, headers: new Headers({ "content-type": "application/json" }), json: async () => ({ status: "green" }) })
+      .mockResolvedValueOnce({ ok: true, headers: new Headers({ "content-type": "application/json" }), json: async () => ({ namespaces: [] }) })
+      .mockResolvedValueOnce({ ok: true, headers: new Headers({ "content-type": "application/json" }), json: async () => ({ status: "ok" }) })
+      .mockResolvedValueOnce({ ok: true, headers: new Headers({ "content-type": "application/json" }), json: async () => ({ status: "ok" }) })
+      .mockResolvedValueOnce({ ok: true, headers: new Headers({ "content-type": "application/json" }), json: async () => ({ status: "ok" }) })
+      .mockResolvedValueOnce({ ok: true, headers: new Headers({ "content-type": "application/json" }), json: async () => ({ status: "ok" }) })
+      .mockResolvedValueOnce({ ok: true, headers: new Headers({ "content-type": "application/json" }), json: async () => ({ status: "ok" }) })
+      .mockResolvedValueOnce({ ok: true, headers: new Headers({ "content-type": "application/json" }), json: async () => ({ status: "ok" }) });
+
+    const redisModule = await import("redis");
+    vi.spyOn(redisModule, "createClient").mockReturnValue({
+      connect: vi.fn().mockResolvedValue(undefined),
+      ping: vi.fn().mockResolvedValue("PONG"),
+      disconnect: vi.fn().mockResolvedValue(undefined),
+    } as never);
+
+    process.env.REDIS_URL = "redis://127.0.0.1:6379";
+
+    const { getLiveIntegrationStatus } = await loadModule();
+    const status = await getLiveIntegrationStatus();
+
+    expect(status.edge.apisix.status).toBe("healthy");
+    expect(status.identity.oidc.status).toBe("healthy");
+    expect(status.identity.permify.status).toBe("healthy");
+    expect(status.messaging.redis.status).toBe("healthy");
+    expect(status.messaging.dapr.status).toBe("healthy");
+    expect(status.messaging.openSearch.status).toBe("healthy");
+    expect(status.messaging.temporal.status).toBe("healthy");
+    expect(status.messaging.fluvio.status).toBe("healthy");
+  });
+
+  it("returns degraded results when configured services reject health checks", async () => {
+    process.env.APISIX_ADMIN_URL = "http://127.0.0.1:9180";
+    fetchMock.mockResolvedValue({ ok: false, status: 503, text: async () => "unavailable", headers: new Headers({ "content-type": "text/plain" }) });
+
+    const { probeApisix } = await loadModule();
+    const result = await probeApisix();
+
+    expect(result.status).toBe("degraded");
+    expect(result.error).toContain("503");
+  });
+});
