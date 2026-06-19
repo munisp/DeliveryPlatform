@@ -15,6 +15,7 @@ import {
   resolveUserFromExternalTokens,
 } from "./auth";
 import { authenticateOperator, ensureOperatorAuthStore } from "./operatorAuthStore";
+import { recordOperationalEvent } from "./operationalEvents";
 import { consumeRateLimit, getRateLimiterStatus } from "./rateLimiter";
 
 const OIDC_STATE_COOKIE = "switchos_oidc_state";
@@ -158,9 +159,18 @@ app.use((req, res, next) => {
 app.use(express.json({ limit: ENV.apiBodyLimit }));
 app.use(express.urlencoded({ extended: true, limit: ENV.apiBodyLimit }));
 
-app.get("/api/health", async (_req, res) => {
+app.get("/api/health", async (req, res) => {
   const discovery = ENV.enableExternalOidc ? await getOidcDiscoveryDocument() : null;
   const rateLimiter = await getRateLimiterStatus();
+  await recordOperationalEvent({
+    eventType: "system.health.checked",
+    route: req.path,
+    outcome: "info",
+    payload: {
+      externalOidcEnabled: ENV.enableExternalOidc,
+      rateLimiterMode: rateLimiter.mode,
+    },
+  });
   res.json({
     ok: true,
     service: "switchos-operator-dashboard",
@@ -203,9 +213,25 @@ app.get("/api/auth/oidc/start", rateLimit(20), async (req, res) => {
     res.cookie(OIDC_NONCE_COOKIE, authorization.nonce, transientCookieOptions);
     res.cookie(OIDC_VERIFIER_COOKIE, authorization.verifier, transientCookieOptions);
     res.cookie(OIDC_RETURN_TO_COOKIE, authorization.returnTo, transientCookieOptions);
+    await recordOperationalEvent({
+      eventType: "auth.oidc.start",
+      route: req.path,
+      outcome: "info",
+      payload: {
+        returnTo,
+      },
+    });
     res.redirect(302, authorization.authorizationUrl);
   } catch (error) {
     console.error("[SwitchOS] Failed to start OIDC login", error);
+    await recordOperationalEvent({
+      eventType: "auth.oidc.start",
+      route: req.path,
+      outcome: "failure",
+      payload: {
+        error: error instanceof Error ? error.message : "unknown_error",
+      },
+    });
     res.status(500).json({ error: "oidc_start_failed" });
   }
 });
@@ -240,6 +266,14 @@ app.get("/api/auth/oidc/callback", rateLimit(30), async (req, res) => {
 
     if (!identity?.email) {
       clearOidcFlowCookies(res);
+      await recordOperationalEvent({
+        eventType: "auth.oidc.callback",
+        route: req.path,
+        outcome: "failure",
+        payload: {
+          reason: "identity_missing_email",
+        },
+      });
       res.status(403).json({ error: "oidc_identity_missing_email" });
       return;
     }
@@ -251,10 +285,29 @@ app.get("/api/auth/oidc/callback", rateLimit(30), async (req, res) => {
       role: identity.role,
       tenantId: identity.tenantId,
     });
+    await recordOperationalEvent({
+      eventType: "auth.oidc.callback",
+      actorId: `${identity.id}`,
+      actorRole: identity.role,
+      tenantId: identity.tenantId,
+      route: req.path,
+      outcome: "success",
+      payload: {
+        email: identity.email,
+      },
+    });
     clearOidcFlowCookies(res);
     res.redirect(302, returnTo);
   } catch (error) {
     console.error("[SwitchOS] Failed to complete OIDC callback", error);
+    await recordOperationalEvent({
+      eventType: "auth.oidc.callback",
+      route: req.path,
+      outcome: "failure",
+      payload: {
+        error: error instanceof Error ? error.message : "unknown_error",
+      },
+    });
     clearOidcFlowCookies(res);
     res.status(500).json({ error: "oidc_callback_failed" });
   }
@@ -273,19 +326,55 @@ app.post("/api/auth/login", rateLimit(15), async (req, res) => {
 
     const operator = await authenticateOperator(email, password);
     if (!operator) {
+      await recordOperationalEvent({
+        eventType: "auth.local.login",
+        route: req.path,
+        outcome: "failure",
+        payload: {
+          email,
+          reason: "invalid_credentials",
+        },
+      });
       res.status(401).json({ error: "invalid_credentials" });
       return;
     }
 
     await issueOperatorSession(res, operator);
+    await recordOperationalEvent({
+      eventType: "auth.local.login",
+      actorId: `${operator.id}`,
+      actorRole: operator.role,
+      tenantId: operator.tenantId,
+      route: req.path,
+      outcome: "success",
+      payload: {
+        email: operator.email,
+      },
+    });
     res.status(200).json({ ok: true, user: operator });
   } catch (error) {
     console.error("[SwitchOS] Operator login failed", error);
+    await recordOperationalEvent({
+      eventType: "auth.local.login",
+      route: req.path,
+      outcome: "failure",
+      payload: {
+        error: error instanceof Error ? error.message : "unknown_error",
+      },
+    });
     res.status(500).json({ error: "login_failed" });
   }
 });
 
-app.post("/api/auth/logout", rateLimit(20), async (_req, res) => {
+app.post("/api/auth/logout", rateLimit(20), async (req, res) => {
+  await recordOperationalEvent({
+    eventType: "auth.logout",
+    actorId: req.user ? `${req.user.id}` : null,
+    actorRole: req.user?.role ?? null,
+    tenantId: req.user?.tenantId ?? null,
+    route: req.path,
+    outcome: "info",
+  });
   clearOidcFlowCookies(res);
   res.clearCookie(COOKIE_NAME, getCookieOptions());
   res.status(200).json({ ok: true });

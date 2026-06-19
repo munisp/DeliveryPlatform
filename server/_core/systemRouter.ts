@@ -1,6 +1,7 @@
 import { publicProcedure, router } from "./trpc";
 import { ENV } from "./env";
 import { getPolicyIntegrationStatus } from "./policy";
+import { getOperationalEventStatus } from "./operationalEvents";
 
 function configured(value: string | null | undefined) {
   return typeof value === "string" && value.trim().length > 0;
@@ -50,5 +51,6 @@ export const systemRouter = router({
       verticalProvisioningUrl: ENV.verticalProvisioningUrl,
       intakeOrchestratorUrl: ENV.intakeOrchestratorUrl,
     },
+    operationalEvents: getOperationalEventStatus(),
   })),
 });
