@@ -1,3 +1,5 @@
+import { Socket } from "node:net";
+
 import { ENV } from "./env";
 
 type ProbeStatus = "configured" | "healthy" | "degraded" | "unconfigured";
@@ -58,6 +60,42 @@ async function probeUrl(url: string | null | undefined, path = "/health"): Promi
   } catch (error) {
     return degraded(url, error);
   }
+}
+
+async function probeTcpSocket(address: string, defaultPort: number): Promise<ProbeResult> {
+  const normalized = address.includes("://") ? new URL(address) : new URL(`http://${address}`);
+  const host = normalized.hostname;
+  const port = Number.parseInt(normalized.port || `${defaultPort}`, 10);
+
+  if (!host || Number.isNaN(port)) {
+    return degraded(address, new Error("invalid Temporal address"));
+  }
+
+  await new Promise<void>((resolve, reject) => {
+    const socket = new Socket();
+
+    const cleanup = () => {
+      socket.removeAllListeners();
+      socket.destroy();
+    };
+
+    socket.setTimeout(3000);
+    socket.once("connect", () => {
+      cleanup();
+      resolve();
+    });
+    socket.once("timeout", () => {
+      cleanup();
+      reject(new Error(`connection to ${host}:${port} timed out`));
+    });
+    socket.once("error", (error) => {
+      cleanup();
+      reject(error);
+    });
+    socket.connect(port, host);
+  });
+
+  return ok(`${host}:${port}`, { protocol: "tcp" });
 }
 
 export async function probeExternalOidc(): Promise<ProbeResult> {
@@ -154,8 +192,12 @@ export async function probeRedis(): Promise<ProbeResult> {
 export async function probeTemporal(): Promise<ProbeResult> {
   const address = process.env.TEMPORAL_ADDRESS || "";
   if (!address.trim()) return unconfigured(null);
-  const normalized = address.includes("://") ? address : `http://${address}`;
-  return probeUrl(normalized, "/api/v1/namespaces");
+
+  try {
+    return await probeTcpSocket(address, 7233);
+  } catch (error) {
+    return degraded(address, error);
+  }
 }
 
 export async function probeFluvio(): Promise<ProbeResult> {

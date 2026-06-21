@@ -1,6 +1,34 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const fetchMock = vi.fn();
+const temporalSocketConnectMock = vi.fn();
+
+class MockSocket {
+  private handlers: Record<string, ((...args: any[]) => void) | undefined> = {};
+
+  setTimeout = vi.fn();
+
+  once(event: string, handler: (...args: any[]) => void) {
+    this.handlers[event] = handler;
+    return this;
+  }
+
+  removeAllListeners() {
+    this.handlers = {};
+    return this;
+  }
+
+  destroy() {
+    return this;
+  }
+
+  connect(port: number, host: string) {
+    temporalSocketConnectMock({ port, host, handlers: this.handlers });
+    return this;
+  }
+}
+
+vi.mock("node:net", () => ({ Socket: MockSocket }));
 vi.stubGlobal("fetch", fetchMock);
 
 async function loadModule() {
@@ -33,6 +61,7 @@ describe("SwitchOS live integration probes", () => {
 
   beforeEach(() => {
     fetchMock.mockReset();
+    temporalSocketConnectMock.mockReset();
     process.env.APISIX_ADMIN_URL = "";
     process.env.APISIX_CONTROL_URL = "";
     process.env.APISIX_ADMIN_KEY = "";
@@ -93,13 +122,15 @@ describe("SwitchOS live integration probes", () => {
       .mockResolvedValueOnce({ ok: true, headers: new Headers({ "content-type": "application/json" }), json: async () => ({ status: "ok" }) })
       .mockResolvedValueOnce({ ok: true, headers: new Headers({ "content-type": "application/json" }), json: async () => ({ id: "dapr" }) })
       .mockResolvedValueOnce({ ok: true, headers: new Headers({ "content-type": "application/json" }), json: async () => ({ status: "green" }) })
-      .mockResolvedValueOnce({ ok: true, headers: new Headers({ "content-type": "application/json" }), json: async () => ({ namespaces: [] }) })
-      .mockResolvedValueOnce({ ok: true, headers: new Headers({ "content-type": "application/json" }), json: async () => ({ status: "ok" }) })
       .mockResolvedValueOnce({ ok: true, headers: new Headers({ "content-type": "application/json" }), json: async () => ({ status: "ok" }) })
       .mockResolvedValueOnce({ ok: true, headers: new Headers({ "content-type": "application/json" }), json: async () => ({ status: "ok" }) })
       .mockResolvedValueOnce({ ok: true, headers: new Headers({ "content-type": "application/json" }), json: async () => ({ status: "ok" }) })
       .mockResolvedValueOnce({ ok: true, headers: new Headers({ "content-type": "application/json" }), json: async () => ({ status: "ok" }) })
       .mockResolvedValueOnce({ ok: true, headers: new Headers({ "content-type": "application/json" }), json: async () => ({ status: "ok" }) });
+
+    temporalSocketConnectMock.mockImplementation(({ handlers }) => {
+      handlers.connect?.();
+    });
 
     const redisModule = await import("redis");
     vi.spyOn(redisModule, "createClient").mockReturnValue({
@@ -120,6 +151,7 @@ describe("SwitchOS live integration probes", () => {
     expect(status.messaging.dapr.status).toBe("healthy");
     expect(status.messaging.openSearch.status).toBe("healthy");
     expect(status.messaging.temporal.status).toBe("healthy");
+    expect(status.messaging.temporal.details).toMatchObject({ protocol: "tcp" });
     expect(status.messaging.fluvio.status).toBe("healthy");
   });
 

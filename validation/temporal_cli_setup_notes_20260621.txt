@@ -1,0 +1,9 @@
+Temporal CLI setup notes captured from the official Temporal documentation on 2026-06-21.
+
+Key findings:
+- Supported Linux installation path includes a direct CDN archive download.
+- Linux amd64 download URL: https://temporal.download/cli/archive/latest?platform=linux&arch=amd64
+- The local development server is started with: temporal server start-dev
+- To persist state locally, use: temporal server start-dev --db-filename temporal.db
+- The development server exposes the Temporal frontend on localhost:7233 and the web UI on http://localhost:8233.
+- The development server pre-registers the default namespace and uses SQLite for local development.

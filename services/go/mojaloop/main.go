@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/subtle"
 	"database/sql"
 	"encoding/json"
@@ -10,7 +11,9 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	_ "github.com/lib/pq"
@@ -1292,6 +1295,7 @@ func main() {
 	httpPort := getEnv("HTTP_PORT", "8086")
 	bindHost := getEnv("BIND_HOST", "127.0.0.1")
 	databaseURL := getEnv("DATABASE_URL", "postgresql://ubuntu:ubuntu@127.0.0.1:5432/switchos?sslmode=disable")
+	serviceMode := strings.ToLower(strings.TrimSpace(getEnv("MOJALOOP_SERVICE_MODE", "http")))
 
 	var tigerBeetleClient *TigerBeetleClient
 	var err error
@@ -1302,12 +1306,21 @@ func main() {
 		}
 		defer tigerBeetleClient.Close()
 	}
-
 	service, err := NewMojaloopService(tigerBeetleClient)
 	if err != nil {
 		log.Fatalf("Failed to initialize Mojaloop service: %v", err)
 	}
 	defer service.db.Close()
+
+	if serviceMode == "worker" {
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		log.Printf("Mojaloop Temporal worker listening on %s (namespace=%s, taskQueue=%s)", effectiveTemporalHostPort(), effectiveTemporalNamespace(), effectiveTemporalTaskQueue())
+		if err := RunTemporalWorker(ctx, service); err != nil {
+			log.Fatalf("Failed to run Temporal worker: %v", err)
+		}
+		return
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", service.handleHealthHTTP)
@@ -1322,10 +1335,10 @@ func main() {
 	mux.HandleFunc("/transfers/", service.handleGetTransferHTTP)
 	mux.HandleFunc("/quotes/", service.handleGetQuoteHTTP)
 	mux.HandleFunc("/refunds/", service.handleGetRefundHTTP)
-
 	addr := bindHost + ":" + httpPort
 	log.Printf("Mojaloop HTTP server listening on %s", addr)
 	if err := http.ListenAndServe(addr, mux); err != nil {
 		log.Fatalf("Failed to serve HTTP: %v", err)
 	}
 }
+
