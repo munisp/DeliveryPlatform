@@ -2501,6 +2501,7 @@ export async function getDriverDispatchRecommendation(driverId: number) {
       COALESCE(dps.tier, 'bronze') AS tier,
       COALESCE(dps.acceptance_rate, 65) AS acceptance_rate,
       COALESCE(dps.completion_rate, 85) AS completion_rate,
+      COALESCE(dps.review_score, 4.5) AS rating,
       LEAST(
         95,
         GREATEST(
@@ -2539,19 +2540,65 @@ export async function getDriverDispatchRecommendation(driverId: number) {
     LIMIT 8
   `, [driverId]);
 
-  const optimization = await optimizeDispatch({
-    order_id: driverId,
-    trip_mode: profile.long_trip_share >= 35 ? 'long_haul' : 'standard',
-    demand_level: Math.max(profile.total_jobs, 1),
-    supply_level: Math.max(result.rows.filter((row: any) => !row.on_trip).length, 1),
-    multi_stop: profile.multi_stop_share >= 20,
-    long_trip_minutes: profile.long_trip_share >= 40 ? 75 : 35,
-    drivers: result.rows,
+  const candidateInputs = result.rows.map((row: any) => ({
+    id: Number(row.driver_id),
+    rating: Number(row.rating || 4.5),
+    acceptanceRate: Number(row.acceptance_rate || 0),
+    completionRate: Number(row.completion_rate || 0),
+    distanceKm: Number(row.distance_km || 0),
+    etaMinutes: Math.max(5, Number(row.distance_km || 0) * 4),
+    earningsPerHour: Math.max(10, Number(profile.margin_per_active_hour || 0) * 0.65 + Number(row.utilization_rate || 0) * 0.35),
+  }));
+
+  const optimized = optimizeDispatch(candidateInputs);
+  const rankedCandidates = optimized.rankedCandidates.map((candidate) => {
+    const source = result.rows.find((row: any) => Number(row.driver_id) === Number(candidate.id));
+    const acceptanceRate = Number(source?.acceptance_rate || candidate.acceptanceRate || 0);
+    const idleMinutes = Number(source?.idle_minutes || 0);
+    const recentRejections = Number(source?.recent_rejections || 0);
+    const compensationMultiplier = Number(
+      Math.min(
+        1.75,
+        Math.max(
+          0.9,
+          1 + (idleMinutes >= 25 ? 0.15 : 0) + (acceptanceRate < 55 ? 0.2 : 0) + (profile.long_trip_share >= 35 ? 0.1 : 0),
+        ),
+      ).toFixed(2),
+    );
+
+    return {
+      driver_id: Number(candidate.id),
+      driver_name: source?.name,
+      tier: source?.tier,
+      score: candidate.score,
+      acceptance_rate: acceptanceRate,
+      completion_rate: Number(source?.completion_rate || candidate.completionRate || 0),
+      distance_km: Number(source?.distance_km || candidate.distanceKm || 0),
+      eta_minutes: Number(candidate.etaMinutes || 0),
+      idle_minutes: idleMinutes,
+      on_trip: Boolean(source?.on_trip),
+      recent_rejections: recentRejections,
+      compensation_multiplier: compensationMultiplier,
+      cherry_pick_risk:
+        recentRejections >= 3 || acceptanceRate < 45
+          ? 'high'
+          : recentRejections >= 1 || acceptanceRate < 65
+            ? 'medium'
+            : 'low',
+    };
   });
 
   return {
     marketplace_profile: profile,
-    optimization,
+    optimization: {
+      strategy: profile.long_trip_share >= 35 ? 'long-haul retention' : 'balanced marketplace dispatch',
+      recommended_driver_id: optimized.recommendedDriverId,
+      ranked_candidates: rankedCandidates,
+      batching_eligible: optimized.batchingEligible,
+      reasoning: optimized.reasoning,
+      supply_level: Math.max(result.rows.filter((row: any) => !row.on_trip).length, 1),
+      demand_level: Math.max(profile.total_jobs, 1),
+    },
   };
 }
 
@@ -2922,57 +2969,79 @@ export async function generateMonthlySettlement(driverId: number, month: number,
   await getDb();
   if (!_pool) return null;
 
-  const periodStart = new Date(year, month - 1, 1);
-  const periodEnd = new Date(year, month, 0);
+  const client = await _pool.connect();
+  try {
+    await client.query('BEGIN');
 
-  // Calculate base earnings from completed orders
-  const earningsResult = await _pool.query<any>(
-    `SELECT COALESCE(SUM(driver_fee), 0) as base_earnings
-     FROM orders
-     WHERE driver_id = $1
-       AND status = 'delivered'
-       AND actual_delivery_time >= $2
-       AND actual_delivery_time <= $3`,
-    [driverId, periodStart, periodEnd]
-  );
+    const periodStart = new Date(year, month - 1, 1);
+    const periodEnd = new Date(year, month, 0);
 
-  const baseEarnings = parseFloat(earningsResult.rows[0].base_earnings) || 0;
+    const existingSettlement = await client.query<any>(
+      `SELECT * FROM payout_settlements
+       WHERE driver_id = $1
+         AND period_start = $2
+         AND period_end = $3
+       FOR UPDATE`,
+      [driverId, periodStart, periodEnd]
+    );
+    if (existingSettlement.rows.length > 0) {
+      await client.query('COMMIT');
+      return existingSettlement.rows[0];
+    }
 
-  // Calculate bonus amount from approved incentives
-  const bonusResult = await _pool.query<any>(
-    `SELECT COALESCE(SUM(amount), 0) as bonus_amount
-     FROM driver_incentives
-     WHERE driver_id = $1
-       AND status = 'approved'
-       AND earned_at >= $2
-       AND earned_at <= $3`,
-    [driverId, periodStart, periodEnd]
-  );
+    const earningsResult = await client.query<any>(
+      `SELECT COALESCE(SUM(driver_fee), 0) as base_earnings
+       FROM orders
+       WHERE driver_id = $1
+         AND status = 'delivered'
+         AND actual_delivery_time >= $2
+         AND actual_delivery_time <= $3`,
+      [driverId, periodStart, periodEnd]
+    );
 
-  const bonusAmount = parseFloat(bonusResult.rows[0].bonus_amount) || 0;
-  const totalAmount = baseEarnings + bonusAmount;
+    const bonusResult = await client.query<any>(
+      `SELECT COALESCE(SUM(amount), 0) as bonus_amount
+       FROM driver_incentives
+       WHERE driver_id = $1
+         AND status = 'approved'
+         AND settlement_id IS NULL
+         AND earned_at >= $2
+         AND earned_at <= $3
+       FOR UPDATE`,
+      [driverId, periodStart, periodEnd]
+    );
 
-  // Create settlement record
-  const result = await _pool.query<any>(
-    `INSERT INTO payout_settlements 
-     (driver_id, period_start, period_end, base_earnings, bonus_amount, total_amount, status)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)
-     RETURNING *`,
-    [driverId, periodStart, periodEnd, baseEarnings, bonusAmount, totalAmount, 'pending']
-  );
+    const baseEarnings = parseFloat(earningsResult.rows[0].base_earnings) || 0;
+    const bonusAmount = parseFloat(bonusResult.rows[0].bonus_amount) || 0;
+    const totalAmount = baseEarnings + bonusAmount;
 
-  // Update incentives with settlement_id
-  await _pool.query<any>(
-    `UPDATE driver_incentives 
-     SET settlement_id = $1
-     WHERE driver_id = $2
-       AND status = 'approved'
-       AND earned_at >= $3
-       AND earned_at <= $4`,
-    [result.rows[0].id, driverId, periodStart, periodEnd]
-  );
+    const result = await client.query<any>(
+      `INSERT INTO payout_settlements
+       (driver_id, period_start, period_end, base_earnings, bonus_amount, total_amount, status)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING *`,
+      [driverId, periodStart, periodEnd, baseEarnings, bonusAmount, totalAmount, 'pending']
+    );
 
-  return result.rows[0];
+    await client.query<any>(
+      `UPDATE driver_incentives
+       SET settlement_id = $1
+       WHERE driver_id = $2
+         AND status = 'approved'
+         AND settlement_id IS NULL
+         AND earned_at >= $3
+         AND earned_at <= $4`,
+      [result.rows[0].id, driverId, periodStart, periodEnd]
+    );
+
+    await client.query('COMMIT');
+    return result.rows[0];
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 export async function getDriverSettlements(driverId: number) {
@@ -2994,11 +3063,12 @@ export async function approveSettlement(settlementId: number, approvedBy: number
   if (!_pool) return false;
 
   const result = await _pool.query<any>(
-    `UPDATE payout_settlements 
+    `UPDATE payout_settlements
      SET status = 'approved',
          approved_by = $1,
          approved_at = NOW()
      WHERE id = $2
+       AND status = 'pending'
      RETURNING *`,
     [approvedBy, settlementId]
   );
@@ -3014,30 +3084,44 @@ export async function processSettlement(
   await getDb();
   if (!_pool) return false;
 
-  // Update settlement status
-  const result = await _pool.query<any>(
-    `UPDATE payout_settlements 
-     SET status = 'completed',
-         processed_at = NOW(),
-         payment_method = $1,
-         payment_reference = $2
-     WHERE id = $3
-     RETURNING *`,
-    [paymentMethod, paymentReference, settlementId]
-  );
+  const client = await _pool.connect();
+  try {
+    await client.query('BEGIN');
 
-  if (result.rows.length === 0) return false;
+    const settlementResult = await client.query<any>(
+      `UPDATE payout_settlements
+       SET status = 'completed',
+           processed_at = NOW(),
+           payment_method = $1,
+           payment_reference = $2
+       WHERE id = $3
+         AND status = 'approved'
+       RETURNING *`,
+      [paymentMethod, paymentReference, settlementId]
+    );
 
-  // Mark incentives as paid
-  await _pool.query<any>(
-    `UPDATE driver_incentives 
-     SET status = 'paid',
-         paid_at = NOW()
-     WHERE settlement_id = $1`,
-    [settlementId]
-  );
+    if (settlementResult.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return false;
+    }
 
-  return true;
+    await client.query<any>(
+      `UPDATE driver_incentives
+       SET status = 'paid',
+           paid_at = NOW()
+       WHERE settlement_id = $1
+         AND status = 'approved'`,
+      [settlementId]
+    );
+
+    await client.query('COMMIT');
+    return true;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 export async function getSettlementStats(month?: number, year?: number) {
