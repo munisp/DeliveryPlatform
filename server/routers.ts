@@ -21,6 +21,7 @@ import {
   getLakehouseOrderStats,
   syncLakehouseFromPostgres,
 } from "./lib/lakehouse";
+import { getFundsReconciliationSnapshot } from "./db";
 
 const listInput = z.object({ limit: z.number().min(1).max(25).optional() }).optional();
 
@@ -46,6 +47,7 @@ export const appRouter = router({
     orderStats: analyticsReadProcedure.query(() => withLakehouseFallback(() => getLakehouseOrderStats(), () => getWorkspaceOrderStats())),
     driverStats: analyticsReadProcedure.query(() => withLakehouseFallback(() => getLakehouseDriverStats(), () => getWorkspaceDriverStats())),
     marketplaceOverview: analyticsReadProcedure.query(() => withLakehouseFallback(() => getLakehouseMarketplaceOverview(), () => getWorkspaceMarketplaceOverview())),
+    fundsReconciliation: analyticsReadProcedure.query(async () => getFundsReconciliationSnapshot()),
   }),
 
   driverMobility: router({

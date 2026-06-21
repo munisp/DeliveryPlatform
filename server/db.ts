@@ -7596,3 +7596,113 @@ export async function getServiceRecoverySummary(limit = 8) {
     })),
   };
 }
+
+export async function getFundsReconciliationSnapshot() {
+  await getDb();
+  if (!_pool) return null;
+
+  const [transactionResult, settlementResult, incentiveResult, orderResult] = await Promise.all([
+    _pool.query<any>(`
+      SELECT
+        COUNT(*) AS transaction_count,
+        COALESCE(SUM(amount::numeric), 0) FILTER (WHERE type = 'payment' AND status = 'completed') AS completed_payments,
+        COALESCE(SUM(amount::numeric), 0) FILTER (WHERE type = 'refund' AND status = 'completed') AS completed_refunds,
+        COALESCE(SUM(amount::numeric), 0) FILTER (WHERE type = 'payout' AND status IN ('pending', 'approved')) AS pending_payout_exposure,
+        COUNT(*) FILTER (WHERE status = 'failed') AS failed_transactions,
+        COUNT(*) FILTER (WHERE status = 'pending') AS pending_transactions,
+        MAX(updated_at) AS last_transaction_update
+      FROM transactions
+    `),
+    _pool.query<any>(`
+      SELECT
+        COUNT(*) AS settlement_count,
+        COALESCE(SUM(total_amount), 0) FILTER (WHERE status = 'pending') AS pending_settlements,
+        COALESCE(SUM(total_amount), 0) FILTER (WHERE status = 'approved') AS approved_settlements,
+        COALESCE(SUM(total_amount), 0) FILTER (WHERE status = 'completed') AS completed_settlements,
+        MAX(COALESCE(processed_at, approved_at, created_at)) AS last_settlement_event
+      FROM payout_settlements
+    `),
+    _pool.query<any>(`
+      SELECT
+        COALESCE(SUM(amount), 0) FILTER (WHERE status = 'approved' AND settlement_id IS NULL) AS approved_unsettled_incentives,
+        COALESCE(SUM(amount), 0) FILTER (WHERE status = 'paid') AS paid_incentives,
+        COUNT(*) FILTER (WHERE status = 'approved' AND settlement_id IS NULL) AS unsettled_incentive_count,
+        MAX(COALESCE(paid_at, updated_at, created_at)) AS last_incentive_event
+      FROM driver_incentives
+    `),
+    _pool.query<any>(`
+      SELECT
+        COUNT(*) FILTER (WHERE status = 'cancelled') AS cancelled_orders,
+        COUNT(*) FILTER (WHERE status = 'delivered') AS delivered_orders,
+        COALESCE(SUM(driver_fee), 0) FILTER (WHERE status = 'delivered') AS delivered_driver_fees,
+        MAX(COALESCE(actual_delivery_time, updated_at, created_at)) AS last_order_event
+      FROM orders
+    `),
+  ]);
+
+  const transactions = transactionResult.rows[0] || {};
+  const settlements = settlementResult.rows[0] || {};
+  const incentives = incentiveResult.rows[0] || {};
+  const orders = orderResult.rows[0] || {};
+
+  const grossPayments = Number(Number(transactions.completed_payments || 0).toFixed(2));
+  const refunds = Number(Number(transactions.completed_refunds || 0).toFixed(2));
+  const pendingPayoutExposure = Number(Number(transactions.pending_payout_exposure || 0).toFixed(2));
+  const pendingSettlements = Number(Number(settlements.pending_settlements || 0).toFixed(2));
+  const approvedSettlements = Number(Number(settlements.approved_settlements || 0).toFixed(2));
+  const completedSettlements = Number(Number(settlements.completed_settlements || 0).toFixed(2));
+  const unsettledIncentives = Number(Number(incentives.approved_unsettled_incentives || 0).toFixed(2));
+  const deliveredDriverFees = Number(Number(orders.delivered_driver_fees || 0).toFixed(2));
+  const netCollected = Number((grossPayments - refunds).toFixed(2));
+  const outstandingDriverObligations = Number((pendingSettlements + approvedSettlements + unsettledIncentives).toFixed(2));
+  const payoutCoverageGap = Number((deliveredDriverFees - completedSettlements).toFixed(2));
+
+  let recommendation = "Funds posture is balanced across current transaction, settlement, and incentive signals.";
+  if (Number(transactions.failed_transactions || 0) > 0) {
+    recommendation = "Failed finance transactions exist; resolve them before relying on downstream reconciliation totals.";
+  } else if (outstandingDriverObligations > netCollected) {
+    recommendation = "Outstanding driver obligations exceed net collected funds; review refunds, unsettled incentives, and payout approvals immediately.";
+  } else if (payoutCoverageGap > 0) {
+    recommendation = "Delivered driver-fee obligations exceed completed settlements; treasury and payout operations should confirm downstream disbursement progress.";
+  } else if (Number(transactions.pending_transactions || 0) > 0) {
+    recommendation = "Pending finance transactions remain open; confirm that retries or external callbacks completed before closing the period.";
+  }
+
+  return {
+    generated_at: new Date().toISOString(),
+    transactions: {
+      count: Number(transactions.transaction_count || 0),
+      completed_payments: grossPayments,
+      completed_refunds: refunds,
+      pending_payout_exposure: pendingPayoutExposure,
+      failed_transactions: Number(transactions.failed_transactions || 0),
+      pending_transactions: Number(transactions.pending_transactions || 0),
+      last_transaction_update: transactions.last_transaction_update ?? null,
+    },
+    settlements: {
+      count: Number(settlements.settlement_count || 0),
+      pending_settlements: pendingSettlements,
+      approved_settlements: approvedSettlements,
+      completed_settlements: completedSettlements,
+      last_settlement_event: settlements.last_settlement_event ?? null,
+    },
+    incentives: {
+      approved_unsettled_amount: unsettledIncentives,
+      paid_incentives: Number(Number(incentives.paid_incentives || 0).toFixed(2)),
+      unsettled_incentive_count: Number(incentives.unsettled_incentive_count || 0),
+      last_incentive_event: incentives.last_incentive_event ?? null,
+    },
+    orders: {
+      cancelled_orders: Number(orders.cancelled_orders || 0),
+      delivered_orders: Number(orders.delivered_orders || 0),
+      delivered_driver_fees: deliveredDriverFees,
+      last_order_event: orders.last_order_event ?? null,
+    },
+    derived: {
+      net_collected: netCollected,
+      outstanding_driver_obligations: outstandingDriverObligations,
+      payout_coverage_gap: payoutCoverageGap,
+    },
+    recommendation,
+  };
+}

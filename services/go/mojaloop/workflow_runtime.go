@@ -61,6 +61,20 @@ func (s *MojaloopService) ensureWorkflowPersistence() error {
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_mojaloop_workflow_events_workflow_id ON mojaloop_workflow_events (workflow_id, created_at DESC)`,
+		`CREATE TABLE IF NOT EXISTS mojaloop_workflow_orchestration (
+			id BIGSERIAL PRIMARY KEY,
+			workflow_id TEXT NOT NULL,
+			workflow_type TEXT NOT NULL,
+			resource_id TEXT NOT NULL,
+			orchestrator TEXT NOT NULL,
+			target TEXT NOT NULL,
+			status TEXT NOT NULL,
+			payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+			last_error TEXT,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_mojaloop_workflow_orchestration_workflow ON mojaloop_workflow_orchestration (workflow_id, created_at DESC)`,
 	}
 	for _, statement := range statements {
 		if _, err := s.db.Exec(statement); err != nil {
@@ -129,6 +143,12 @@ func (s *MojaloopService) recordFundsWorkflowEvent(event FundsWorkflowEvent) err
 	if publishErr := s.publishWorkflowEventToKafka(event); publishErr != nil {
 		return publishErr
 	}
+	if publishErr := s.publishWorkflowEventToFluvio(event); publishErr != nil {
+		return publishErr
+	}
+	if publishErr := s.enqueueTemporalWorkflowTask(event); publishErr != nil {
+		return publishErr
+	}
 	return nil
 }
 
@@ -172,17 +192,33 @@ func (s *MojaloopService) publishWorkflowEventToKafka(event FundsWorkflowEvent) 
 	if brokers == "" || topic == "" {
 		return nil
 	}
+	return s.publishWorkflowEventToKafkaCompatible(splitAndTrim(brokers), topic, event, "kafka")
+}
+
+func (s *MojaloopService) publishWorkflowEventToFluvio(event FundsWorkflowEvent) error {
+	brokers := strings.TrimSpace(os.Getenv("FLUVIO_KAFKA_BROKERS"))
+	topic := strings.TrimSpace(os.Getenv("FLUVIO_FUNDS_TOPIC"))
+	if brokers == "" || topic == "" {
+		return nil
+	}
+	return s.publishWorkflowEventToKafkaCompatible(splitAndTrim(brokers), topic, event, "fluvio")
+}
+
+func (s *MojaloopService) publishWorkflowEventToKafkaCompatible(brokers []string, topic string, event FundsWorkflowEvent, brokerName string) error {
+	if len(brokers) == 0 || strings.TrimSpace(topic) == "" {
+		return nil
+	}
 
 	body, err := json.Marshal(s.workflowEnvelope(event))
 	if err != nil {
-		return fmt.Errorf("marshal kafka workflow event: %w", err)
+		return fmt.Errorf("marshal %s workflow event: %w", brokerName, err)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	writer := &kafka.Writer{
-		Addr:         kafka.TCP(splitAndTrim(brokers)...),
+		Addr:         kafka.TCP(brokers...),
 		Topic:        topic,
 		RequiredAcks: kafka.RequireAll,
 		Async:        false,
@@ -203,11 +239,96 @@ func (s *MojaloopService) publishWorkflowEventToKafka(event FundsWorkflowEvent) 
 			{Key: "workflow-type", Value: []byte(event.WorkflowType)},
 			{Key: "workflow-step", Value: []byte(event.Step)},
 			{Key: "workflow-status", Value: []byte(event.Status)},
+			{Key: "workflow-broker", Value: []byte(brokerName)},
 		},
 	}); err != nil {
-		return fmt.Errorf("publish workflow event to kafka: %w", err)
+		return fmt.Errorf("publish workflow event to %s: %w", brokerName, err)
 	}
 	return nil
+}
+
+func (s *MojaloopService) enqueueTemporalWorkflowTask(event FundsWorkflowEvent) error {
+	temporalBridgeURL := strings.TrimSpace(os.Getenv("TEMPORAL_BRIDGE_URL"))
+	taskQueue := strings.TrimSpace(os.Getenv("TEMPORAL_TASK_QUEUE"))
+	if temporalBridgeURL == "" && taskQueue == "" {
+		return nil
+	}
+
+	payload := s.workflowEnvelope(event)
+	payload["taskQueue"] = taskQueue
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshal temporal workflow task: %w", err)
+	}
+
+	status := "queued"
+	lastError := ""
+	if temporalBridgeURL != "" {
+		request, requestErr := http.NewRequest(
+			http.MethodPost,
+			strings.TrimRight(temporalBridgeURL, "/")+"/funds/workflows",
+			bytes.NewReader(payloadBytes),
+		)
+		if requestErr != nil {
+			status = "failed"
+			lastError = requestErr.Error()
+		} else {
+			request.Header.Set("Content-Type", "application/json")
+			response, doErr := s.httpClient.Do(request)
+			if doErr != nil {
+				status = "failed"
+				lastError = doErr.Error()
+			} else {
+				defer response.Body.Close()
+				if response.StatusCode >= 400 {
+					status = "failed"
+					lastError = fmt.Sprintf("temporal bridge returned status %d", response.StatusCode)
+				} else {
+					status = "submitted"
+				}
+			}
+		}
+	}
+
+	_, dbErr := s.db.Exec(
+		`INSERT INTO mojaloop_workflow_orchestration (
+			workflow_id, workflow_type, resource_id, orchestrator, target, status, payload, last_error, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, NOW(), NOW())`,
+		event.WorkflowID,
+		event.WorkflowType,
+		event.ResourceID,
+		"temporal",
+		temporalTarget(taskQueue, temporalBridgeURL),
+		status,
+		string(payloadBytes),
+		nullableDBString(lastError),
+	)
+	if dbErr != nil {
+		return fmt.Errorf("store temporal workflow task: %w", dbErr)
+	}
+
+	if lastError != "" {
+		return fmt.Errorf("enqueue temporal workflow task: %s", lastError)
+	}
+	return nil
+}
+
+func temporalTarget(taskQueue, temporalBridgeURL string) string {
+	if strings.TrimSpace(taskQueue) != "" && strings.TrimSpace(temporalBridgeURL) != "" {
+		return fmt.Sprintf("%s via %s", taskQueue, strings.TrimRight(temporalBridgeURL, "/"))
+	}
+	if strings.TrimSpace(taskQueue) != "" {
+		return taskQueue
+	}
+	return strings.TrimRight(temporalBridgeURL, "/")
+}
+
+func nullableDBString(value string) any {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return nil
+	}
+	return trimmed
 }
 
 func (s *MojaloopService) workflowEnvelope(event FundsWorkflowEvent) map[string]any {
@@ -243,11 +364,25 @@ func (s *MojaloopService) fundsMiddlewareStatus() map[string]any {
 		"kafka": map[string]any{
 			"configured": strings.TrimSpace(os.Getenv("KAFKA_BROKERS")) != "" && strings.TrimSpace(os.Getenv("KAFKA_FUNDS_TOPIC")) != "",
 		},
+		"fluvio": map[string]any{
+			"configured": strings.TrimSpace(os.Getenv("FLUVIO_KAFKA_BROKERS")) != "" && strings.TrimSpace(os.Getenv("FLUVIO_FUNDS_TOPIC")) != "",
+		},
+		"temporal": map[string]any{
+			"configured": strings.TrimSpace(os.Getenv("TEMPORAL_TASK_QUEUE")) != "" || strings.TrimSpace(os.Getenv("TEMPORAL_BRIDGE_URL")) != "",
+		},
 	}
 
-	if configured, ok := status["kafka"].(map[string]any)["configured"].(bool); ok && configured {
+	if kafkaConfigured, ok := status["kafka"].(map[string]any)["configured"].(bool); ok && kafkaConfigured {
 		status["kafka"].(map[string]any)["brokers"] = splitAndTrim(os.Getenv("KAFKA_BROKERS"))
 		status["kafka"].(map[string]any)["topic"] = strings.TrimSpace(os.Getenv("KAFKA_FUNDS_TOPIC"))
+	}
+	if fluvioConfigured, ok := status["fluvio"].(map[string]any)["configured"].(bool); ok && fluvioConfigured {
+		status["fluvio"].(map[string]any)["brokers"] = splitAndTrim(os.Getenv("FLUVIO_KAFKA_BROKERS"))
+		status["fluvio"].(map[string]any)["topic"] = strings.TrimSpace(os.Getenv("FLUVIO_FUNDS_TOPIC"))
+	}
+	if temporalConfigured, ok := status["temporal"].(map[string]any)["configured"].(bool); ok && temporalConfigured {
+		status["temporal"].(map[string]any)["taskQueue"] = strings.TrimSpace(os.Getenv("TEMPORAL_TASK_QUEUE"))
+		status["temporal"].(map[string]any)["bridgeUrl"] = strings.TrimSpace(os.Getenv("TEMPORAL_BRIDGE_URL"))
 	}
 	return status
 }
