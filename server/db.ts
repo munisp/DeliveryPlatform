@@ -1,4 +1,5 @@
 import { and, desc, eq, ilike, or, sql } from "drizzle-orm";
+import { createHash } from "node:crypto";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 import { 
@@ -167,6 +168,54 @@ async function ensurePlatformTables() {
 
     CREATE INDEX IF NOT EXISTS idx_experiment_rollouts_status
       ON experiment_rollouts(status);
+
+    CREATE TABLE IF NOT EXISTS platform_idempotency_keys (
+      id SERIAL PRIMARY KEY,
+      scope VARCHAR(160) NOT NULL,
+      idempotency_key VARCHAR(255) NOT NULL,
+      request_hash VARCHAR(128) NOT NULL,
+      status VARCHAR(32) NOT NULL DEFAULT 'in_progress',
+      response_payload JSONB,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (scope, idempotency_key)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_platform_idempotency_keys_status
+      ON platform_idempotency_keys(status, updated_at DESC);
+
+    CREATE TABLE IF NOT EXISTS merchant_reserves (
+      id SERIAL PRIMARY KEY,
+      merchant_id INTEGER REFERENCES service_providers(id) ON DELETE SET NULL,
+      reserve_type VARCHAR(64) NOT NULL DEFAULT 'dispute_hold',
+      amount NUMERIC(14,2) NOT NULL DEFAULT 0,
+      currency VARCHAR(8) NOT NULL DEFAULT 'NGN',
+      status VARCHAR(32) NOT NULL DEFAULT 'held',
+      reason TEXT,
+      reference_id VARCHAR(128),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_merchant_reserves_status
+      ON merchant_reserves(status, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_merchant_reserves_merchant_id
+      ON merchant_reserves(merchant_id, updated_at DESC);
+
+    CREATE TABLE IF NOT EXISTS treasury_reserves (
+      id SERIAL PRIMARY KEY,
+      reserve_type VARCHAR(64) NOT NULL,
+      amount NUMERIC(14,2) NOT NULL DEFAULT 0,
+      currency VARCHAR(8) NOT NULL DEFAULT 'NGN',
+      status VARCHAR(32) NOT NULL DEFAULT 'held',
+      reason TEXT,
+      reference_id VARCHAR(128),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_treasury_reserves_status
+      ON treasury_reserves(status, updated_at DESC);
   `);
 
   await _pool.query(`
@@ -2965,13 +3014,98 @@ export async function approveIncentive(incentiveId: number) {
   return result.rows.length > 0;
 }
 
-export async function generateMonthlySettlement(driverId: number, month: number, year: number) {
+function hashFinanceIdempotencyRequest(payload: unknown) {
+  return createHash("sha256").update(JSON.stringify(payload ?? null)).digest("hex");
+}
+
+async function beginFinanceIdempotentOperation(
+  client: { query: (text: string, params?: any[]) => Promise<any> },
+  scope: string,
+  idempotencyKey: string | undefined,
+  payload: unknown,
+) {
+  if (!idempotencyKey?.trim()) {
+    return { replay: false as const, response: null, normalizedKey: null as string | null };
+  }
+
+  const normalizedKey = idempotencyKey.trim();
+  const requestHash = hashFinanceIdempotencyRequest(payload);
+  const insertResult = await client.query(
+    `INSERT INTO platform_idempotency_keys (scope, idempotency_key, request_hash, status)
+     VALUES ($1, $2, $3, 'in_progress')
+     ON CONFLICT (scope, idempotency_key) DO NOTHING
+     RETURNING id`,
+    [scope, normalizedKey, requestHash],
+  );
+
+  if (insertResult.rows.length > 0) {
+    return { replay: false as const, response: null, normalizedKey };
+  }
+
+  const existingResult = await client.query(
+    `SELECT request_hash, status, response_payload
+     FROM platform_idempotency_keys
+     WHERE scope = $1 AND idempotency_key = $2`,
+    [scope, normalizedKey],
+  );
+
+  const existing = existingResult.rows[0];
+  if (!existing) {
+    return { replay: false as const, response: null, normalizedKey };
+  }
+
+  if (existing.request_hash !== requestHash) {
+    throw new Error(`Idempotency key reuse detected for ${scope} with a different request payload.`);
+  }
+
+  if (existing.status === 'completed') {
+    return { replay: true as const, response: existing.response_payload ?? null, normalizedKey };
+  }
+
+  throw new Error(`Finance operation ${scope} is already in progress for this idempotency key.`);
+}
+
+async function finalizeFinanceIdempotentOperation(
+  client: { query: (text: string, params?: any[]) => Promise<any> },
+  scope: string,
+  idempotencyKey: string | undefined,
+  status: 'completed' | 'failed',
+  response: unknown,
+) {
+  if (!idempotencyKey?.trim()) {
+    return;
+  }
+
+  await client.query(
+    `UPDATE platform_idempotency_keys
+     SET status = $3,
+         response_payload = $4::jsonb,
+         updated_at = NOW()
+     WHERE scope = $1 AND idempotency_key = $2`,
+    [scope, idempotencyKey.trim(), status, JSON.stringify(response ?? null)],
+  );
+}
+
+export async function generateMonthlySettlement(driverId: number, month: number, year: number, idempotencyKey?: string) {
   await getDb();
   if (!_pool) return null;
 
   const client = await _pool.connect();
+  let idempotencyClaimed = false;
   try {
     await client.query('BEGIN');
+
+    const idempotency = await beginFinanceIdempotentOperation(
+      client,
+      'settlement.generate_monthly',
+      idempotencyKey,
+      { driverId, month, year },
+    );
+    idempotencyClaimed = Boolean(idempotency.normalizedKey) && !idempotency.replay;
+    if (idempotency.replay) {
+      await client.query('COMMIT');
+      return idempotency.response;
+    }
 
     const periodStart = new Date(year, month - 1, 1);
     const periodEnd = new Date(year, month, 0);
@@ -2985,6 +3119,7 @@ export async function generateMonthlySettlement(driverId: number, month: number,
       [driverId, periodStart, periodEnd]
     );
     if (existingSettlement.rows.length > 0) {
+      await finalizeFinanceIdempotentOperation(client, 'settlement.generate_monthly', idempotencyKey, 'completed', existingSettlement.rows[0]);
       await client.query('COMMIT');
       return existingSettlement.rows[0];
     }
@@ -3034,10 +3169,22 @@ export async function generateMonthlySettlement(driverId: number, month: number,
       [result.rows[0].id, driverId, periodStart, periodEnd]
     );
 
+    await finalizeFinanceIdempotentOperation(client, 'settlement.generate_monthly', idempotencyKey, 'completed', result.rows[0]);
     await client.query('COMMIT');
     return result.rows[0];
   } catch (error) {
-    await client.query('ROLLBACK');
+    try {
+      await client.query('ROLLBACK');
+    } catch {}
+    if (idempotencyClaimed) {
+      await finalizeFinanceIdempotentOperation(
+        client,
+        'settlement.generate_monthly',
+        idempotencyKey,
+        'failed',
+        { error: error instanceof Error ? error.message : String(error) },
+      ).catch(() => undefined);
+    }
     throw error;
   } finally {
     client.release();
@@ -3058,35 +3205,144 @@ export async function getDriverSettlements(driverId: number) {
   return result.rows;
 }
 
-export async function approveSettlement(settlementId: number, approvedBy: number) {
+export async function approveSettlement(settlementId: number, approvedBy: number, idempotencyKey?: string) {
   await getDb();
   if (!_pool) return false;
 
-  const result = await _pool.query<any>(
-    `UPDATE payout_settlements
-     SET status = 'approved',
-         approved_by = $1,
-         approved_at = NOW()
-     WHERE id = $2
-       AND status = 'pending'
-     RETURNING *`,
-    [approvedBy, settlementId]
-  );
+  const client = await _pool.connect();
+  let idempotencyClaimed = false;
+  try {
+    await client.query('BEGIN');
 
-  return result.rows.length > 0;
+    const idempotency = await beginFinanceIdempotentOperation(
+      client,
+      'settlement.approve',
+      idempotencyKey,
+      { settlementId, approvedBy },
+    );
+    idempotencyClaimed = Boolean(idempotency.normalizedKey) && !idempotency.replay;
+    if (idempotency.replay) {
+      await client.query('COMMIT');
+      return Boolean(idempotency.response);
+    }
+
+    const existingResult = await client.query<any>(
+      `SELECT id, status, approved_by
+       FROM payout_settlements
+       WHERE id = $1
+       FOR UPDATE`,
+      [settlementId],
+    );
+
+    const existing = existingResult.rows[0];
+    if (!existing) {
+      await finalizeFinanceIdempotentOperation(client, 'settlement.approve', idempotencyKey, 'completed', false);
+      await client.query('COMMIT');
+      return false;
+    }
+
+    if (existing.status === 'approved' && Number(existing.approved_by || 0) === approvedBy) {
+      await finalizeFinanceIdempotentOperation(client, 'settlement.approve', idempotencyKey, 'completed', true);
+      await client.query('COMMIT');
+      return true;
+    }
+
+    if (existing.status !== 'pending') {
+      await finalizeFinanceIdempotentOperation(client, 'settlement.approve', idempotencyKey, 'completed', false);
+      await client.query('COMMIT');
+      return false;
+    }
+
+    const result = await client.query<any>(
+      `UPDATE payout_settlements
+       SET status = 'approved',
+           approved_by = $1,
+           approved_at = NOW()
+       WHERE id = $2
+         AND status = 'pending'
+       RETURNING *`,
+      [approvedBy, settlementId]
+    );
+
+    const approved = result.rows.length > 0;
+    await finalizeFinanceIdempotentOperation(client, 'settlement.approve', idempotencyKey, 'completed', approved);
+    await client.query('COMMIT');
+    return approved;
+  } catch (error) {
+    try {
+      await client.query('ROLLBACK');
+    } catch {}
+    if (idempotencyClaimed) {
+      await finalizeFinanceIdempotentOperation(
+        client,
+        'settlement.approve',
+        idempotencyKey,
+        'failed',
+        { error: error instanceof Error ? error.message : String(error) },
+      ).catch(() => undefined);
+    }
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 export async function processSettlement(
   settlementId: number,
   paymentMethod: string,
-  paymentReference: string
+  paymentReference: string,
+  idempotencyKey?: string,
 ) {
   await getDb();
   if (!_pool) return false;
 
   const client = await _pool.connect();
+  let idempotencyClaimed = false;
   try {
     await client.query('BEGIN');
+
+    const idempotency = await beginFinanceIdempotentOperation(
+      client,
+      'settlement.process',
+      idempotencyKey,
+      { settlementId, paymentMethod, paymentReference },
+    );
+    idempotencyClaimed = Boolean(idempotency.normalizedKey) && !idempotency.replay;
+    if (idempotency.replay) {
+      await client.query('COMMIT');
+      return Boolean(idempotency.response);
+    }
+
+    const existingResult = await client.query<any>(
+      `SELECT id, status, payment_method, payment_reference
+       FROM payout_settlements
+       WHERE id = $1
+       FOR UPDATE`,
+      [settlementId],
+    );
+
+    const existing = existingResult.rows[0];
+    if (!existing) {
+      await finalizeFinanceIdempotentOperation(client, 'settlement.process', idempotencyKey, 'completed', false);
+      await client.query('COMMIT');
+      return false;
+    }
+
+    if (
+      existing.status === 'completed'
+      && existing.payment_method === paymentMethod
+      && existing.payment_reference === paymentReference
+    ) {
+      await finalizeFinanceIdempotentOperation(client, 'settlement.process', idempotencyKey, 'completed', true);
+      await client.query('COMMIT');
+      return true;
+    }
+
+    if (existing.status !== 'approved') {
+      await finalizeFinanceIdempotentOperation(client, 'settlement.process', idempotencyKey, 'completed', false);
+      await client.query('COMMIT');
+      return false;
+    }
 
     const settlementResult = await client.query<any>(
       `UPDATE payout_settlements
@@ -3101,7 +3357,8 @@ export async function processSettlement(
     );
 
     if (settlementResult.rows.length === 0) {
-      await client.query('ROLLBACK');
+      await finalizeFinanceIdempotentOperation(client, 'settlement.process', idempotencyKey, 'completed', false);
+      await client.query('COMMIT');
       return false;
     }
 
@@ -3114,10 +3371,22 @@ export async function processSettlement(
       [settlementId]
     );
 
+    await finalizeFinanceIdempotentOperation(client, 'settlement.process', idempotencyKey, 'completed', true);
     await client.query('COMMIT');
     return true;
   } catch (error) {
-    await client.query('ROLLBACK');
+    try {
+      await client.query('ROLLBACK');
+    } catch {}
+    if (idempotencyClaimed) {
+      await finalizeFinanceIdempotentOperation(
+        client,
+        'settlement.process',
+        idempotencyKey,
+        'failed',
+        { error: error instanceof Error ? error.message : String(error) },
+      ).catch(() => undefined);
+    }
     throw error;
   } finally {
     client.release();
@@ -7601,7 +7870,7 @@ export async function getFundsReconciliationSnapshot() {
   await getDb();
   if (!_pool) return null;
 
-  const [transactionResult, settlementResult, incentiveResult, orderResult, walletResult, disputeResult] = await Promise.all([
+  const [transactionResult, settlementResult, incentiveResult, orderResult, walletResult, disputeResult, reserveResult] = await Promise.all([
     _pool.query<any>(`
       SELECT
         COUNT(*) AS transaction_count,
@@ -7655,6 +7924,23 @@ export async function getFundsReconciliationSnapshot() {
         MAX(COALESCE(resolved_at, updated_at, created_at)) AS last_dispute_event
       FROM support_tickets
     `).catch(() => ({ rows: [{ open_dispute_like_tickets: 0, critical_dispute_tickets: 0, last_dispute_event: null }] })),
+    _pool.query<any>(`
+      SELECT
+        COALESCE(SUM(CASE WHEN source = 'merchant' THEN amount ELSE 0 END), 0) AS merchant_reserves_held,
+        COALESCE(SUM(CASE WHEN source = 'treasury' THEN amount ELSE 0 END), 0) AS treasury_reserves_held,
+        COUNT(*) FILTER (WHERE source = 'merchant') AS merchant_reserve_entries,
+        COUNT(*) FILTER (WHERE source = 'treasury') AS treasury_reserve_entries,
+        MAX(updated_at) AS last_reserve_event
+      FROM (
+        SELECT amount::numeric AS amount, updated_at, 'merchant' AS source
+        FROM merchant_reserves
+        WHERE status IN ('held', 'active')
+        UNION ALL
+        SELECT amount::numeric AS amount, updated_at, 'treasury' AS source
+        FROM treasury_reserves
+        WHERE status IN ('held', 'active')
+      ) reserves
+    `).catch(() => ({ rows: [{ merchant_reserves_held: 0, treasury_reserves_held: 0, merchant_reserve_entries: 0, treasury_reserve_entries: 0, last_reserve_event: null }] })),
   ]);
 
   const transactions = transactionResult.rows[0] || {};
@@ -7663,6 +7949,7 @@ export async function getFundsReconciliationSnapshot() {
   const orders = orderResult.rows[0] || {};
   const wallets = walletResult.rows[0] || {};
   const disputes = disputeResult.rows[0] || {};
+  const reserves = reserveResult.rows[0] || {};
 
   const grossPayments = Number(Number(transactions.completed_payments || 0).toFixed(2));
   const refunds = Number(Number(transactions.completed_refunds || 0).toFixed(2));
@@ -7674,16 +7961,22 @@ export async function getFundsReconciliationSnapshot() {
   const unsettledIncentives = Number(Number(incentives.approved_unsettled_incentives || 0).toFixed(2));
   const deliveredDriverFees = Number(Number(orders.delivered_driver_fees || 0).toFixed(2));
   const totalWalletBalance = Number(Number(wallets.total_wallet_balance || 0).toFixed(2));
+  const merchantReservesHeld = Number(Number(reserves.merchant_reserves_held || 0).toFixed(2));
+  const treasuryReservesHeld = Number(Number(reserves.treasury_reserves_held || 0).toFixed(2));
+  const totalReservesHeld = Number((merchantReservesHeld + treasuryReservesHeld).toFixed(2));
   const netCollected = Number((grossPayments - refunds - chargebackExposure).toFixed(2));
   const outstandingDriverObligations = Number((pendingSettlements + approvedSettlements + unsettledIncentives).toFixed(2));
   const payoutCoverageGap = Number((deliveredDriverFees - completedSettlements).toFixed(2));
   const treasuryDrift = Number((totalWalletBalance - netCollected).toFixed(2));
+  const reserveCoverageGap = Number(Math.max(chargebackExposure - totalReservesHeld, 0).toFixed(2));
 
   let recommendation = "Funds posture is balanced across transaction, settlement, incentive, wallet, and dispute signals.";
   if (Number(transactions.failed_transactions || 0) > 0) {
     recommendation = "Failed finance transactions exist; resolve them before relying on downstream reconciliation totals.";
   } else if (Number(wallets.negative_wallets || 0) > 0) {
     recommendation = "Negative wallet balances exist; investigate treasury and compensation adjustments before closing the period.";
+  } else if (reserveCoverageGap > 0) {
+    recommendation = "Chargeback exposure exceeds held reserves; fund merchant or treasury reserve coverage before additional settlement release.";
   } else if (Number(transactions.chargeback_count || 0) > 0 || Number(disputes.open_dispute_like_tickets || 0) > 0) {
     recommendation = "Chargeback or dispute exposure is active; confirm merchant reserves, customer remediation, and payout offsets before settlement finalization.";
   } else if (outstandingDriverObligations > netCollected) {
@@ -7739,11 +8032,20 @@ export async function getFundsReconciliationSnapshot() {
       critical_dispute_tickets: Number(disputes.critical_dispute_tickets || 0),
       last_dispute_event: disputes.last_dispute_event ?? null,
     },
+    reserves: {
+      merchant_reserves_held: merchantReservesHeld,
+      treasury_reserves_held: treasuryReservesHeld,
+      total_reserves_held: totalReservesHeld,
+      merchant_reserve_entries: Number(reserves.merchant_reserve_entries || 0),
+      treasury_reserve_entries: Number(reserves.treasury_reserve_entries || 0),
+      last_reserve_event: reserves.last_reserve_event ?? null,
+    },
     derived: {
       net_collected: netCollected,
       outstanding_driver_obligations: outstandingDriverObligations,
       payout_coverage_gap: payoutCoverageGap,
       treasury_drift: treasuryDrift,
+      reserve_coverage_gap: reserveCoverageGap,
     },
     recommendation,
   };
