@@ -89,14 +89,14 @@ type RefundInitiationPayload struct {
 }
 
 type ReconciliationReport struct {
-	Transfer            Transfer                `json:"transfer"`
-	Refunds             []Refund                `json:"refunds"`
-	Ledger              *TransferReconciliation `json:"ledger,omitempty"`
-	PlatformRefunded    float64                 `json:"platformRefundedAmount"`
-	PlatformNetSettled  float64                 `json:"platformNetSettledAmount"`
-	LedgerConsistent    bool                    `json:"ledgerConsistent"`
-	Recommendation      string                  `json:"recommendation"`
-	RecordedAt          time.Time               `json:"recordedAt"`
+	Transfer           Transfer                `json:"transfer"`
+	Refunds            []Refund                `json:"refunds"`
+	Ledger             *TransferReconciliation `json:"ledger,omitempty"`
+	PlatformRefunded   float64                 `json:"platformRefundedAmount"`
+	PlatformNetSettled float64                 `json:"platformNetSettledAmount"`
+	LedgerConsistent   bool                    `json:"ledgerConsistent"`
+	Recommendation     string                  `json:"recommendation"`
+	RecordedAt         time.Time               `json:"recordedAt"`
 }
 
 func NewMojaloopService(tigerBeetle *TigerBeetleClient) (*MojaloopService, error) {
@@ -961,7 +961,24 @@ func (s *MojaloopService) handleHealthHTTP(w http.ResponseWriter, _ *http.Reques
 		"refundsImplemented":  true,
 		"idempotencyEnabled":  true,
 		"reconciliationReady": true,
+		"fundsMiddleware":     s.fundsMiddlewareStatus(),
 	})
+}
+
+func (s *MojaloopService) handleReconciliationOverviewHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.requireInternalAccess(w, r) {
+		return
+	}
+	overview, err := s.buildReconciliationOverview()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, overview)
 }
 
 func (s *MojaloopService) handleTransferCallback(w http.ResponseWriter, r *http.Request) {
@@ -1300,6 +1317,7 @@ func main() {
 	mux.HandleFunc("/transfers/initiate", service.handleInitiateTransferHTTP)
 	mux.HandleFunc("/quotes/request", service.handleRequestQuoteHTTP)
 	mux.HandleFunc("/refunds/initiate", service.handleInitiateRefundHTTP)
+	mux.HandleFunc("/reconcile/overview", service.handleReconciliationOverviewHTTP)
 	mux.HandleFunc("/reconcile/transfers/", service.handleReconcileTransferHTTP)
 	mux.HandleFunc("/transfers/", service.handleGetTransferHTTP)
 	mux.HandleFunc("/quotes/", service.handleGetQuoteHTTP)

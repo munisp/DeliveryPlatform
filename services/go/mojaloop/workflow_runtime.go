@@ -2,12 +2,17 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
+	"strings"
 	"time"
+
+	"github.com/segmentio/kafka-go"
 )
 
 type FundsWorkflowEvent struct {
@@ -17,6 +22,20 @@ type FundsWorkflowEvent struct {
 	Step         string
 	Status       string
 	Payload      map[string]any
+}
+
+type ReconciliationOverview struct {
+	TransferCount          int        `json:"transferCount"`
+	RefundCount            int        `json:"refundCount"`
+	SettledTransfers       int        `json:"settledTransfers"`
+	PartiallyRefunded      int        `json:"partiallyRefundedTransfers"`
+	FullyRefunded          int        `json:"fullyRefundedTransfers"`
+	InconsistentAudits     int        `json:"inconsistentAudits"`
+	GrossTransferredAmount float64    `json:"grossTransferredAmount"`
+	RefundedAmount         float64    `json:"refundedAmount"`
+	NetSettledAmount       float64    `json:"netSettledAmount"`
+	LastReconciledAt       *time.Time `json:"lastReconciledAt,omitempty"`
+	Recommendation         string     `json:"recommendation"`
 }
 
 func (s *MojaloopService) ensureWorkflowPersistence() error {
@@ -107,6 +126,9 @@ func (s *MojaloopService) recordFundsWorkflowEvent(event FundsWorkflowEvent) err
 	if publishErr := s.publishWorkflowEventToDapr(event); publishErr != nil {
 		return publishErr
 	}
+	if publishErr := s.publishWorkflowEventToKafka(event); publishErr != nil {
+		return publishErr
+	}
 	return nil
 }
 
@@ -118,17 +140,7 @@ func (s *MojaloopService) publishWorkflowEventToDapr(event FundsWorkflowEvent) e
 		return nil
 	}
 
-	payload := map[string]any{
-		"source":       "switchos-mojaloop-service",
-		"timestamp":    time.Now().UTC().Format(time.RFC3339),
-		"workflowType": event.WorkflowType,
-		"workflowId":   event.WorkflowID,
-		"resourceId":   event.ResourceID,
-		"step":         event.Step,
-		"status":       event.Status,
-		"payload":      event.Payload,
-	}
-	body, err := json.Marshal(payload)
+	body, err := json.Marshal(s.workflowEnvelope(event))
 	if err != nil {
 		return fmt.Errorf("marshal dapr workflow event: %w", err)
 	}
@@ -152,6 +164,145 @@ func (s *MojaloopService) publishWorkflowEventToDapr(event FundsWorkflowEvent) e
 		return fmt.Errorf("publish workflow event to dapr returned status %d", response.StatusCode)
 	}
 	return nil
+}
+
+func (s *MojaloopService) publishWorkflowEventToKafka(event FundsWorkflowEvent) error {
+	brokers := strings.TrimSpace(os.Getenv("KAFKA_BROKERS"))
+	topic := strings.TrimSpace(os.Getenv("KAFKA_FUNDS_TOPIC"))
+	if brokers == "" || topic == "" {
+		return nil
+	}
+
+	body, err := json.Marshal(s.workflowEnvelope(event))
+	if err != nil {
+		return fmt.Errorf("marshal kafka workflow event: %w", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	writer := &kafka.Writer{
+		Addr:         kafka.TCP(splitAndTrim(brokers)...),
+		Topic:        topic,
+		RequiredAcks: kafka.RequireAll,
+		Async:        false,
+		Balancer:     &kafka.LeastBytes{},
+	}
+	defer writer.Close()
+
+	messageKey := event.WorkflowID
+	if strings.TrimSpace(messageKey) == "" {
+		messageKey = event.ResourceID
+	}
+
+	if err := writer.WriteMessages(ctx, kafka.Message{
+		Key:   []byte(messageKey),
+		Value: body,
+		Time:  time.Now().UTC(),
+		Headers: []kafka.Header{
+			{Key: "workflow-type", Value: []byte(event.WorkflowType)},
+			{Key: "workflow-step", Value: []byte(event.Step)},
+			{Key: "workflow-status", Value: []byte(event.Status)},
+		},
+	}); err != nil {
+		return fmt.Errorf("publish workflow event to kafka: %w", err)
+	}
+	return nil
+}
+
+func (s *MojaloopService) workflowEnvelope(event FundsWorkflowEvent) map[string]any {
+	return map[string]any{
+		"source":       "switchos-mojaloop-service",
+		"timestamp":    time.Now().UTC().Format(time.RFC3339),
+		"workflowType": event.WorkflowType,
+		"workflowId":   event.WorkflowID,
+		"resourceId":   event.ResourceID,
+		"step":         event.Step,
+		"status":       event.Status,
+		"payload":      event.Payload,
+	}
+}
+
+func splitAndTrim(value string) []string {
+	parts := strings.Split(value, ",")
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		if trimmed != "" {
+			result = append(result, trimmed)
+		}
+	}
+	return result
+}
+
+func (s *MojaloopService) fundsMiddlewareStatus() map[string]any {
+	status := map[string]any{
+		"dapr": map[string]any{
+			"configured": strings.TrimSpace(os.Getenv("DAPR_HTTP_PORT")) != "" && strings.TrimSpace(os.Getenv("DAPR_PUBSUB_NAME")) != "" && strings.TrimSpace(os.Getenv("DAPR_FUNDS_TOPIC")) != "",
+		},
+		"kafka": map[string]any{
+			"configured": strings.TrimSpace(os.Getenv("KAFKA_BROKERS")) != "" && strings.TrimSpace(os.Getenv("KAFKA_FUNDS_TOPIC")) != "",
+		},
+	}
+
+	if configured, ok := status["kafka"].(map[string]any)["configured"].(bool); ok && configured {
+		status["kafka"].(map[string]any)["brokers"] = splitAndTrim(os.Getenv("KAFKA_BROKERS"))
+		status["kafka"].(map[string]any)["topic"] = strings.TrimSpace(os.Getenv("KAFKA_FUNDS_TOPIC"))
+	}
+	return status
+}
+
+func (s *MojaloopService) buildReconciliationOverview() (ReconciliationOverview, error) {
+	var overview ReconciliationOverview
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM mojaloop_transfers`).Scan(&overview.TransferCount); err != nil {
+		return ReconciliationOverview{}, fmt.Errorf("count transfers: %w", err)
+	}
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM mojaloop_refunds`).Scan(&overview.RefundCount); err != nil {
+		return ReconciliationOverview{}, fmt.Errorf("count refunds: %w", err)
+	}
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM mojaloop_transfers WHERE state = 'SETTLED'`).Scan(&overview.SettledTransfers); err != nil {
+		return ReconciliationOverview{}, fmt.Errorf("count settled transfers: %w", err)
+	}
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM mojaloop_transfers WHERE state = 'PARTIALLY_REFUNDED'`).Scan(&overview.PartiallyRefunded); err != nil {
+		return ReconciliationOverview{}, fmt.Errorf("count partially refunded transfers: %w", err)
+	}
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM mojaloop_transfers WHERE state = 'REFUNDED'`).Scan(&overview.FullyRefunded); err != nil {
+		return ReconciliationOverview{}, fmt.Errorf("count refunded transfers: %w", err)
+	}
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM mojaloop_reconciliation_audits WHERE ledger_consistent = FALSE`).Scan(&overview.InconsistentAudits); err != nil {
+		return ReconciliationOverview{}, fmt.Errorf("count inconsistent audits: %w", err)
+	}
+	if err := s.db.QueryRow(`SELECT COALESCE(SUM(amount), 0) FROM mojaloop_transfers`).Scan(&overview.GrossTransferredAmount); err != nil {
+		return ReconciliationOverview{}, fmt.Errorf("sum transferred amount: %w", err)
+	}
+	if err := s.db.QueryRow(`SELECT COALESCE(SUM(amount), 0) FROM mojaloop_refunds`).Scan(&overview.RefundedAmount); err != nil {
+		return ReconciliationOverview{}, fmt.Errorf("sum refunded amount: %w", err)
+	}
+	overview.GrossTransferredAmount = round2(overview.GrossTransferredAmount)
+	overview.RefundedAmount = round2(overview.RefundedAmount)
+	overview.NetSettledAmount = round2(overview.GrossTransferredAmount - overview.RefundedAmount)
+	if overview.NetSettledAmount < 0 {
+		overview.NetSettledAmount = 0
+	}
+
+	var lastRecorded sql.NullTime
+	if err := s.db.QueryRow(`SELECT MAX(created_at) FROM mojaloop_reconciliation_audits`).Scan(&lastRecorded); err != nil {
+		return ReconciliationOverview{}, fmt.Errorf("load last reconciliation audit time: %w", err)
+	}
+	if lastRecorded.Valid {
+		timestamp := lastRecorded.Time.UTC()
+		overview.LastReconciledAt = &timestamp
+	}
+
+	overview.Recommendation = "No immediate reconciliation action required."
+	if overview.InconsistentAudits > 0 {
+		overview.Recommendation = "At least one reconciliation audit is inconsistent; investigate ledger and platform divergence before settlement finalization."
+	} else if overview.PartiallyRefunded > 0 {
+		overview.Recommendation = "Partially refunded transfers exist; verify merchant payout offsets and customer statement adjustments."
+	} else if overview.FullyRefunded > 0 {
+		overview.Recommendation = "Fully refunded transfers exist; confirm treasury and downstream payout reversals are reflected."
+	}
+	return overview, nil
 }
 
 func (s *MojaloopService) getWorkflowStatus(workflowID string) (map[string]any, bool, error) {
@@ -186,4 +337,13 @@ func nullableStringValue(value sql.NullString) any {
 		return nil
 	}
 	return value.String
+}
+
+func canDialTCPAddress(address string) bool {
+	conn, err := net.DialTimeout("tcp", address, 750*time.Millisecond)
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
 }

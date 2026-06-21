@@ -93,6 +93,63 @@ func TestPublishWorkflowEventToDaprSkipsWhenUnconfigured(t *testing.T) {
 	}
 }
 
+func TestPublishWorkflowEventToKafkaSkipsWhenUnconfigured(t *testing.T) {
+	originalBrokers := os.Getenv("KAFKA_BROKERS")
+	originalTopic := os.Getenv("KAFKA_FUNDS_TOPIC")
+	defer func() {
+		_ = os.Setenv("KAFKA_BROKERS", originalBrokers)
+		_ = os.Setenv("KAFKA_FUNDS_TOPIC", originalTopic)
+	}()
+
+	_ = os.Unsetenv("KAFKA_BROKERS")
+	_ = os.Unsetenv("KAFKA_FUNDS_TOPIC")
+
+	service := &MojaloopService{httpClient: http.DefaultClient}
+	if err := service.publishWorkflowEventToKafka(FundsWorkflowEvent{WorkflowType: "transfer", WorkflowID: "transfer-1"}); err != nil {
+		t.Fatalf("expected nil error when Kafka is unconfigured, got %v", err)
+	}
+}
+
+func TestFundsMiddlewareStatusReflectsConfiguration(t *testing.T) {
+	originalPort := os.Getenv("DAPR_HTTP_PORT")
+	originalPubsub := os.Getenv("DAPR_PUBSUB_NAME")
+	originalDaprTopic := os.Getenv("DAPR_FUNDS_TOPIC")
+	originalBrokers := os.Getenv("KAFKA_BROKERS")
+	originalKafkaTopic := os.Getenv("KAFKA_FUNDS_TOPIC")
+	defer func() {
+		_ = os.Setenv("DAPR_HTTP_PORT", originalPort)
+		_ = os.Setenv("DAPR_PUBSUB_NAME", originalPubsub)
+		_ = os.Setenv("DAPR_FUNDS_TOPIC", originalDaprTopic)
+		_ = os.Setenv("KAFKA_BROKERS", originalBrokers)
+		_ = os.Setenv("KAFKA_FUNDS_TOPIC", originalKafkaTopic)
+	}()
+
+	_ = os.Setenv("DAPR_HTTP_PORT", "3500")
+	_ = os.Setenv("DAPR_PUBSUB_NAME", "switchos-pubsub")
+	_ = os.Setenv("DAPR_FUNDS_TOPIC", "funds-events")
+	_ = os.Setenv("KAFKA_BROKERS", "broker-1:9092,broker-2:9092")
+	_ = os.Setenv("KAFKA_FUNDS_TOPIC", "switchos.funds")
+
+	service := &MojaloopService{httpClient: http.DefaultClient}
+	status := service.fundsMiddlewareStatus()
+
+	dapr, ok := status["dapr"].(map[string]any)
+	if !ok || dapr["configured"] != true {
+		t.Fatalf("expected dapr configured status, got %#v", status["dapr"])
+	}
+	kafkaStatus, ok := status["kafka"].(map[string]any)
+	if !ok || kafkaStatus["configured"] != true {
+		t.Fatalf("expected kafka configured status, got %#v", status["kafka"])
+	}
+	brokers, ok := kafkaStatus["brokers"].([]string)
+	if !ok || len(brokers) != 2 {
+		t.Fatalf("expected two kafka brokers, got %#v", kafkaStatus["brokers"])
+	}
+	if kafkaStatus["topic"] != "switchos.funds" {
+		t.Fatalf("expected kafka topic switchos.funds, got %#v", kafkaStatus["topic"])
+	}
+}
+
 func TestDeriveTransferStateFromRefunds(t *testing.T) {
 	tests := []struct {
 		name           string
