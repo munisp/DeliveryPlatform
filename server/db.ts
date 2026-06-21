@@ -3014,11 +3014,11 @@ export async function approveIncentive(incentiveId: number) {
   return result.rows.length > 0;
 }
 
-function hashFinanceIdempotencyRequest(payload: unknown) {
+function hashPlatformIdempotencyRequest(payload: unknown) {
   return createHash("sha256").update(JSON.stringify(payload ?? null)).digest("hex");
 }
 
-async function beginFinanceIdempotentOperation(
+async function beginPlatformIdempotentOperation(
   client: { query: (text: string, params?: any[]) => Promise<any> },
   scope: string,
   idempotencyKey: string | undefined,
@@ -3029,7 +3029,7 @@ async function beginFinanceIdempotentOperation(
   }
 
   const normalizedKey = idempotencyKey.trim();
-  const requestHash = hashFinanceIdempotencyRequest(payload);
+  const requestHash = hashPlatformIdempotencyRequest(payload);
   const insertResult = await client.query(
     `INSERT INTO platform_idempotency_keys (scope, idempotency_key, request_hash, status)
      VALUES ($1, $2, $3, 'in_progress')
@@ -3062,10 +3062,10 @@ async function beginFinanceIdempotentOperation(
     return { replay: true as const, response: existing.response_payload ?? null, normalizedKey };
   }
 
-  throw new Error(`Finance operation ${scope} is already in progress for this idempotency key.`);
+  throw new Error(`Operation ${scope} is already in progress for this idempotency key.`);
 }
 
-async function finalizeFinanceIdempotentOperation(
+async function finalizePlatformIdempotentOperation(
   client: { query: (text: string, params?: any[]) => Promise<any> },
   scope: string,
   idempotencyKey: string | undefined,
@@ -3084,6 +3084,116 @@ async function finalizeFinanceIdempotentOperation(
      WHERE scope = $1 AND idempotency_key = $2`,
     [scope, idempotencyKey.trim(), status, JSON.stringify(response ?? null)],
   );
+}
+
+function hashFinanceIdempotencyRequest(payload: unknown) {
+  return hashPlatformIdempotencyRequest(payload);
+}
+
+async function beginFinanceIdempotentOperation(
+  client: { query: (text: string, params?: any[]) => Promise<any> },
+  scope: string,
+  idempotencyKey: string | undefined,
+  payload: unknown,
+) {
+  return beginPlatformIdempotentOperation(client, scope, idempotencyKey, payload);
+}
+
+async function finalizeFinanceIdempotentOperation(
+  client: { query: (text: string, params?: any[]) => Promise<any> },
+  scope: string,
+  idempotencyKey: string | undefined,
+  status: 'completed' | 'failed',
+  response: unknown,
+) {
+  return finalizePlatformIdempotentOperation(client, scope, idempotencyKey, status, response);
+}
+
+async function ensureLoyaltyAccountForClient(
+  client: { query: (text: string, params?: any[]) => Promise<any> },
+  userId: number,
+) {
+  await client.query(
+    `INSERT INTO loyalty_points (user_id, points_balance, lifetime_points, tier, tier_progress, next_tier_threshold)
+     VALUES ($1, 0, 0, 'bronze', 0, $2)
+     ON CONFLICT (user_id) DO NOTHING`,
+    [userId, TIER_THRESHOLDS.silver],
+  );
+}
+
+async function checkAndUpgradeTierForClient(
+  client: { query: (text: string, params?: any[]) => Promise<any> },
+  userId: number,
+  lifetimePoints: number,
+) {
+  let newTier = 'bronze';
+  let nextThreshold = TIER_THRESHOLDS.silver;
+
+  if (lifetimePoints >= TIER_THRESHOLDS.platinum) {
+    newTier = 'platinum';
+    nextThreshold = 0;
+  } else if (lifetimePoints >= TIER_THRESHOLDS.gold) {
+    newTier = 'gold';
+    nextThreshold = TIER_THRESHOLDS.platinum;
+  } else if (lifetimePoints >= TIER_THRESHOLDS.silver) {
+    newTier = 'silver';
+    nextThreshold = TIER_THRESHOLDS.gold;
+  }
+
+  const progress = nextThreshold > 0 ? lifetimePoints - TIER_THRESHOLDS[newTier as keyof typeof TIER_THRESHOLDS] : 0;
+
+  await client.query(
+    `UPDATE loyalty_points
+     SET tier = $1,
+         tier_progress = $2,
+         next_tier_threshold = $3,
+         updated_at = NOW()
+     WHERE user_id = $4`,
+    [newTier, progress, nextThreshold, userId],
+  );
+}
+
+async function awardPointsTransactional(
+  client: { query: (text: string, params?: any[]) => Promise<any> },
+  userId: number,
+  points: number,
+  transactionType: string,
+  description: string,
+  orderId?: number,
+) {
+  let updateResult = await client.query<any>(
+    `UPDATE loyalty_points
+     SET points_balance = points_balance + $1,
+         lifetime_points = lifetime_points + $1,
+         updated_at = NOW()
+     WHERE user_id = $2
+     RETURNING *`,
+    [points, userId],
+  );
+
+  if (updateResult.rows.length === 0) {
+    await ensureLoyaltyAccountForClient(client, userId);
+    updateResult = await client.query<any>(
+      `UPDATE loyalty_points
+       SET points_balance = points_balance + $1,
+           lifetime_points = lifetime_points + $1,
+           updated_at = NOW()
+       WHERE user_id = $2
+       RETURNING *`,
+      [points, userId],
+    );
+  }
+
+  const account = updateResult.rows[0];
+  await checkAndUpgradeTierForClient(client, userId, account.lifetime_points);
+
+  await client.query<any>(
+    `INSERT INTO loyalty_transactions (user_id, transaction_type, points, order_id, description)
+     VALUES ($1, $2, $3, $4, $5)`,
+    [userId, transactionType, points, orderId, description],
+  );
+
+  return account;
 }
 
 export async function generateMonthlySettlement(driverId: number, month: number, year: number, idempotencyKey?: string) {
@@ -3541,66 +3651,107 @@ async function checkAndUpgradeTier(userId: number, lifetimePoints: number) {
   );
 }
 
-export async function redeemPoints(userId: number, rewardId: number) {
+export async function redeemPoints(userId: number, rewardId: number, idempotencyKey?: string) {
   await getDb();
   if (!_pool) return null;
 
-  // Get reward details
-  const rewardResult = await _pool.query<any>(
-    'SELECT * FROM loyalty_rewards WHERE id = $1 AND is_active = true',
-    [rewardId]
-  );
+  const client = await _pool.connect();
+  let idempotencyClaimed = false;
 
-  if (rewardResult.rows.length === 0) {
-    throw new Error('Reward not found or inactive');
-  }
-
-  const reward = rewardResult.rows[0];
-
-  // Check user's points balance
-  const account = await getLoyaltyAccount(userId);
-  if (!account || account.points_balance < reward.points_cost) {
-    throw new Error('Insufficient points');
-  }
-
-  // Check tier eligibility
-  if (reward.min_tier) {
-    const tierOrder = ['bronze', 'silver', 'gold', 'platinum'];
-    if (tierOrder.indexOf(account.tier) < tierOrder.indexOf(reward.min_tier)) {
-      throw new Error('Tier requirement not met');
+  try {
+    const idempotency = await beginPlatformIdempotentOperation(
+      client,
+      'loyalty.redeem',
+      idempotencyKey,
+      { userId, rewardId },
+    );
+    idempotencyClaimed = Boolean(idempotency.normalizedKey) && !idempotency.replay;
+    if (idempotency.replay) {
+      return idempotency.response;
     }
+
+    await client.query('BEGIN');
+
+    const rewardResult = await client.query<any>(
+      'SELECT * FROM loyalty_rewards WHERE id = $1 AND is_active = true',
+      [rewardId],
+    );
+
+    if (rewardResult.rows.length === 0) {
+      throw new Error('Reward not found or inactive');
+    }
+
+    const reward = rewardResult.rows[0];
+    const accountResult = await client.query<any>(
+      'SELECT * FROM loyalty_points WHERE user_id = $1 FOR UPDATE',
+      [userId],
+    );
+    const account = accountResult.rows[0];
+
+    if (!account || Number(account.points_balance) < Number(reward.points_cost)) {
+      throw new Error('Insufficient points');
+    }
+
+    if (reward.min_tier) {
+      const tierOrder = ['bronze', 'silver', 'gold', 'platinum'];
+      if (tierOrder.indexOf(account.tier) < tierOrder.indexOf(reward.min_tier)) {
+        throw new Error('Tier requirement not met');
+      }
+    }
+
+    const debitResult = await client.query<any>(
+      `UPDATE loyalty_points
+       SET points_balance = points_balance - $1,
+           updated_at = NOW()
+       WHERE user_id = $2
+         AND points_balance >= $1
+       RETURNING *`,
+      [reward.points_cost, userId],
+    );
+
+    if (debitResult.rows.length === 0) {
+      throw new Error('Insufficient points');
+    }
+
+    await client.query<any>(
+      `INSERT INTO loyalty_transactions (user_id, transaction_type, points, description)
+       VALUES ($1, 'redeem', $2, $3)`,
+      [userId, -reward.points_cost, `Redeemed: ${reward.reward_name}`],
+    );
+
+    const voucherCode = `REWARD-${Date.now()}-${Math.random().toString(36).substr(2, 9).toUpperCase()}`;
+    const expiresAt = new Date();
+    expiresAt.setDate(expiresAt.getDate() + 30);
+
+    const redemptionResult = await client.query<any>(
+      `INSERT INTO loyalty_redemptions
+       (user_id, reward_id, points_spent, status, voucher_code, expires_at)
+       VALUES ($1, $2, $3, 'approved', $4, $5)
+       RETURNING *`,
+      [userId, rewardId, reward.points_cost, voucherCode, expiresAt],
+    );
+
+    await client.query('COMMIT');
+    await finalizePlatformIdempotentOperation(client, 'loyalty.redeem', idempotencyKey, 'completed', redemptionResult.rows[0]);
+    return redemptionResult.rows[0];
+  } catch (error) {
+    try {
+      await client.query('ROLLBACK');
+    } catch {}
+
+    if (idempotencyClaimed) {
+      await finalizePlatformIdempotentOperation(
+        client,
+        'loyalty.redeem',
+        idempotencyKey,
+        'failed',
+        { error: error instanceof Error ? error.message : String(error) },
+      );
+    }
+    throw error;
+  } finally {
+    client.release();
   }
-
-  // Deduct points
-  await _pool.query<any>(
-    `UPDATE loyalty_points 
-     SET points_balance = points_balance - $1,
-         updated_at = NOW()
-     WHERE user_id = $2`,
-    [reward.points_cost, userId]
-  );
-
-  // Log transaction
-  await _pool.query<any>(
-    `INSERT INTO loyalty_transactions (user_id, transaction_type, points, description)
-     VALUES ($1, 'redeem', $2, $3)`,
-    [userId, -reward.points_cost, `Redeemed: ${reward.reward_name}`]
-  );
-
-  // Create redemption record
-  const voucherCode = `REWARD-${Date.now()}-${Math.random().toString(36).substr(2, 9).toUpperCase()}`;
-  const expiresAt = new Date();
-  expiresAt.setDate(expiresAt.getDate() + 30); // 30 days validity
-
-  const redemptionResult = await _pool.query<any>(
-    `INSERT INTO loyalty_redemptions 
-     (user_id, reward_id, points_spent, status, voucher_code, expires_at)
-     VALUES ($1, $2, $3, 'approved', $4, $5)
-     RETURNING *`,
-    [userId, rewardId, reward.points_cost, voucherCode, expiresAt]
-  );
-
-  return redemptionResult.rows[0];
 }
 
 export async function getLoyaltyTransactions(userId: number, limit: number = 50) {
@@ -3914,95 +4065,174 @@ export async function getUserReferralCode(userId: number) {
   return result.rows[0].referral_code;
 }
 
-export async function applyReferralCode(newUserId: number, referralCode: string) {
+export async function applyReferralCode(newUserId: number, referralCode: string, idempotencyKey?: string) {
   await getDb();
   if (!_pool) return null;
 
-  // Find the referrer by code
-  const referrerResult = await _pool.query<any>(
-    'SELECT id FROM users WHERE referral_code = $1',
-    [referralCode]
-  );
+  const normalizedReferralCode = referralCode.trim().toUpperCase();
+  const client = await _pool.connect();
+  let idempotencyClaimed = false;
 
-  if (referrerResult.rows.length === 0) {
-    throw new Error('Invalid referral code');
+  try {
+    const idempotency = await beginPlatformIdempotentOperation(
+      client,
+      'referral.apply_code',
+      idempotencyKey,
+      { newUserId, referralCode: normalizedReferralCode },
+    );
+    idempotencyClaimed = Boolean(idempotency.normalizedKey) && !idempotency.replay;
+    if (idempotency.replay) {
+      return idempotency.response;
+    }
+
+    await client.query('BEGIN');
+
+    const referrerResult = await client.query<any>(
+      'SELECT id FROM users WHERE referral_code = $1',
+      [normalizedReferralCode],
+    );
+
+    if (referrerResult.rows.length === 0) {
+      throw new Error('Invalid referral code');
+    }
+
+    const referrerId = referrerResult.rows[0].id;
+    if (referrerId === newUserId) {
+      throw new Error('Users cannot apply their own referral code');
+    }
+
+    const existingResult = await client.query<any>(
+      'SELECT * FROM customer_referrals WHERE referred_id = $1 FOR UPDATE',
+      [newUserId],
+    );
+
+    if (existingResult.rows.length > 0) {
+      const existing = existingResult.rows[0];
+      if (existing.referral_code === normalizedReferralCode) {
+        await client.query('COMMIT');
+        await finalizePlatformIdempotentOperation(client, 'referral.apply_code', idempotencyKey, 'completed', existing);
+        return existing;
+      }
+
+      throw new Error('User has already used a referral code');
+    }
+
+    const referralResult = await client.query<any>(
+      `INSERT INTO customer_referrals
+       (referrer_id, referred_id, referral_code, status, referrer_bonus_points, referred_bonus_points)
+       VALUES ($1, $2, $3, 'pending', $4, $5)
+       RETURNING *`,
+      [referrerId, newUserId, normalizedReferralCode, REFERRAL_BONUS.referrer, REFERRAL_BONUS.referred],
+    );
+
+    await client.query<any>(
+      `UPDATE users
+       SET referred_by_code = COALESCE(referred_by_code, $1)
+       WHERE id = $2`,
+      [normalizedReferralCode, newUserId],
+    );
+
+    await awardPointsTransactional(
+      client,
+      newUserId,
+      REFERRAL_BONUS.referred,
+      'referral',
+      `Welcome bonus for using referral code ${normalizedReferralCode}`,
+    );
+
+    await client.query('COMMIT');
+    await finalizePlatformIdempotentOperation(client, 'referral.apply_code', idempotencyKey, 'completed', referralResult.rows[0]);
+    return referralResult.rows[0];
+  } catch (error) {
+    try {
+      await client.query('ROLLBACK');
+    } catch {}
+
+    if (idempotencyClaimed) {
+      await finalizePlatformIdempotentOperation(
+        client,
+        'referral.apply_code',
+        idempotencyKey,
+        'failed',
+        { error: error instanceof Error ? error.message : String(error) },
+      );
+    }
+    throw error;
+  } finally {
+    client.release();
   }
-
-  const referrerId = referrerResult.rows[0].id;
-
-  // Check if user already used a referral code
-  const existingResult = await _pool.query<any>(
-    'SELECT id FROM customer_referrals WHERE referred_id = $1',
-    [newUserId]
-  );
-
-  if (existingResult.rows.length > 0) {
-    throw new Error('User has already used a referral code');
-  }
-
-  // Create referral record
-  const referralResult = await _pool.query<any>(
-    `INSERT INTO customer_referrals 
-     (referrer_id, referred_id, referral_code, status, referrer_bonus_points, referred_bonus_points)
-     VALUES ($1, $2, $3, 'pending', $4, $5)
-     RETURNING *`,
-    [referrerId, newUserId, referralCode, REFERRAL_BONUS.referrer, REFERRAL_BONUS.referred]
-  );
-
-  // Update new user's referred_by_code
-  await _pool.query<any>(
-    'UPDATE users SET referred_by_code = $1 WHERE id = $2',
-    [referralCode, newUserId]
-  );
-
-  // Award welcome bonus to new user
-  await awardPoints(
-    newUserId,
-    REFERRAL_BONUS.referred,
-    'referral',
-    `Welcome bonus for using referral code ${referralCode}`
-  );
-
-  return referralResult.rows[0];
 }
 
-export async function completeReferral(referralId: number) {
+export async function completeReferral(referralId: number, idempotencyKey?: string) {
   await getDb();
   if (!_pool) return null;
 
-  // Get referral details
-  const referralResult = await _pool.query<any>(
-    'SELECT * FROM customer_referrals WHERE id = $1',
-    [referralId]
-  );
+  const client = await _pool.connect();
+  let idempotencyClaimed = false;
 
-  if (referralResult.rows.length === 0) {
-    throw new Error('Referral not found');
+  try {
+    const idempotency = await beginPlatformIdempotentOperation(
+      client,
+      'referral.complete',
+      idempotencyKey,
+      { referralId },
+    );
+    idempotencyClaimed = Boolean(idempotency.normalizedKey) && !idempotency.replay;
+    if (idempotency.replay) {
+      return idempotency.response;
+    }
+
+    await client.query('BEGIN');
+
+    const referralResult = await client.query<any>(
+      'SELECT * FROM customer_referrals WHERE id = $1 FOR UPDATE',
+      [referralId],
+    );
+
+    if (referralResult.rows.length === 0) {
+      throw new Error('Referral not found');
+    }
+
+    const referral = referralResult.rows[0];
+    if (referral.status !== 'rewarded') {
+      await awardPointsTransactional(
+        client,
+        referral.referrer_id,
+        referral.referrer_bonus_points,
+        'referral',
+        'Referral bonus for inviting a friend',
+      );
+
+      await client.query<any>(
+        `UPDATE customer_referrals
+         SET status = 'rewarded', completed_at = COALESCE(completed_at, NOW())
+         WHERE id = $1`,
+        [referralId],
+      );
+    }
+
+    await client.query('COMMIT');
+    const completedReferral = await getReferralById(referralId);
+    await finalizePlatformIdempotentOperation(client, 'referral.complete', idempotencyKey, 'completed', completedReferral);
+    return completedReferral;
+  } catch (error) {
+    try {
+      await client.query('ROLLBACK');
+    } catch {}
+
+    if (idempotencyClaimed) {
+      await finalizePlatformIdempotentOperation(
+        client,
+        'referral.complete',
+        idempotencyKey,
+        'failed',
+        { error: error instanceof Error ? error.message : String(error) },
+      );
+    }
+    throw error;
+  } finally {
+    client.release();
   }
-
-  const referral = referralResult.rows[0];
-
-  if (referral.status === 'rewarded') {
-    throw new Error('Referral already rewarded');
-  }
-
-  // Award bonus to referrer
-  await awardPoints(
-    referral.referrer_id,
-    referral.referrer_bonus_points,
-    'referral',
-    'Referral bonus for inviting a friend'
-  );
-
-  // Update referral status
-  await _pool.query<any>(
-    `UPDATE customer_referrals 
-     SET status = 'rewarded', completed_at = NOW()
-     WHERE id = $1`,
-    [referralId]
-  );
-
-  return await getReferralById(referralId);
 }
 
 export async function getReferralById(referralId: number) {
@@ -4213,67 +4443,85 @@ function interpolateTemplate(template: string, variables: Record<string, any>): 
   });
 }
 
-export async function sendCampaign(campaignId: number, userId: number, channel: string = 'email') {
+export async function sendCampaign(
+  campaignId: number,
+  userId: number,
+  channel: string = 'email',
+  idempotencyKey?: string,
+) {
   await getDb();
   if (!_pool) return null;
 
-  // Get campaign details
-  const campaign = await getCampaignById(campaignId);
-  if (!campaign || !campaign.is_active) {
-    throw new Error('Campaign not found or inactive');
-  }
-
-  // Get user details
-  const userResult = await _pool.query<any>(
-    'SELECT * FROM users WHERE id = $1',
-    [userId]
-  );
-
-  if (userResult.rows.length === 0) {
-    throw new Error('User not found');
-  }
-
-  const user = userResult.rows[0];
-
-  // Get loyalty account for personalization
-  const loyaltyAccount = await getLoyaltyAccount(userId);
-
-  // Prepare template variables
-  const variables = {
-    name: user.name,
-    email: user.email,
-    tier: loyaltyAccount?.tier || 'bronze',
-    points: loyaltyAccount?.points_balance || 0,
-    expiration_date: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toLocaleDateString(),
-  };
-
-  // Interpolate template
-  const template = channel === 'email' ? campaign.email_template : campaign.sms_template;
-  if (!template) {
-    throw new Error(`No ${channel} template configured for this campaign`);
-  }
-
-  const message = interpolateTemplate(template, variables);
-
-  // Create campaign send record
-  const sendResult = await _pool.query<any>(
-    `INSERT INTO campaign_sends 
-     (campaign_id, user_id, channel, status)
-     VALUES ($1, $2, $3, 'pending')
-     RETURNING *`,
-    [campaignId, userId, channel]
-  );
-
-  const sendRecord = sendResult.rows[0];
+  const client = await _pool.connect();
+  let idempotencyClaimed = false;
+  let sendRecordId: number | null = null;
 
   try {
-    // Send via appropriate channel
+    const idempotency = await beginPlatformIdempotentOperation(
+      client,
+      'campaign.send',
+      idempotencyKey,
+      { campaignId, userId, channel },
+    );
+    idempotencyClaimed = Boolean(idempotency.normalizedKey) && !idempotency.replay;
+    if (idempotency.replay) {
+      return idempotency.response;
+    }
+
+    const campaignResult = await client.query<any>(
+      'SELECT * FROM marketing_campaigns WHERE id = $1',
+      [campaignId],
+    );
+    const campaign = campaignResult.rows[0];
+    if (!campaign || !campaign.is_active) {
+      throw new Error('Campaign not found or inactive');
+    }
+
+    const userResult = await client.query<any>(
+      'SELECT * FROM users WHERE id = $1',
+      [userId],
+    );
+
+    if (userResult.rows.length === 0) {
+      throw new Error('User not found');
+    }
+
+    const user = userResult.rows[0];
+    const loyaltyResult = await client.query<any>(
+      'SELECT tier, points_balance FROM loyalty_points WHERE user_id = $1',
+      [userId],
+    );
+    const loyaltyAccount = loyaltyResult.rows[0] ?? null;
+
+    const variables = {
+      name: user.name,
+      email: user.email,
+      tier: loyaltyAccount?.tier || 'bronze',
+      points: loyaltyAccount?.points_balance || 0,
+      expiration_date: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toLocaleDateString(),
+    };
+
+    const template = channel === 'email' ? campaign.email_template : campaign.sms_template;
+    if (!template) {
+      throw new Error(`No ${channel} template configured for this campaign`);
+    }
+
+    const message = interpolateTemplate(template, variables);
+    const sendResult = await client.query<any>(
+      `INSERT INTO campaign_sends
+       (campaign_id, user_id, channel, status)
+       VALUES ($1, $2, $3, 'pending')
+       RETURNING *`,
+      [campaignId, userId, channel],
+    );
+
+    const sendRecord = sendResult.rows[0];
+    sendRecordId = sendRecord.id;
+
     if (channel === 'email') {
-      // Use SendGrid integration
       const { sendEmail } = await import('./_core/notificationGateway');
       await sendEmail(user.email, campaign.campaign_name, message);
     } else if (channel === 'sms') {
-      // Use Twilio integration
       const { sendSMS } = await import('./_core/notificationGateway');
       if (user.phone) {
         await sendSMS(user.phone, message);
@@ -4282,46 +4530,60 @@ export async function sendCampaign(campaignId: number, userId: number, channel: 
       }
     }
 
-    // Update send record
-    await _pool.query<any>(
-      `UPDATE campaign_sends 
-       SET status = 'sent', sent_at = NOW()
-       WHERE id = $1`,
-      [sendRecord.id]
+    const updatedSendResult = await client.query<any>(
+      `UPDATE campaign_sends
+       SET status = 'sent', sent_at = NOW(), error_message = NULL
+       WHERE id = $1
+       RETURNING *`,
+      [sendRecord.id],
     );
 
-    // Update campaign stats
-    await _pool.query<any>(
-      `UPDATE marketing_campaigns 
-       SET send_count = send_count + 1
+    await client.query<any>(
+      `UPDATE marketing_campaigns
+       SET send_count = send_count + 1,
+           updated_at = NOW()
        WHERE id = $1`,
-      [campaignId]
+      [campaignId],
     );
 
-    return sendRecord;
+    const completedSend = updatedSendResult.rows[0] ?? sendRecord;
+    await finalizePlatformIdempotentOperation(client, 'campaign.send', idempotencyKey, 'completed', completedSend);
+    return completedSend;
   } catch (error: any) {
-    // Update send record with error
-    await _pool.query<any>(
-      `UPDATE campaign_sends 
-       SET status = 'failed', error_message = $1
-       WHERE id = $2`,
-      [error.message, sendRecord.id]
-    );
+    if (sendRecordId) {
+      await client.query<any>(
+        `UPDATE campaign_sends
+         SET status = 'failed', error_message = $1
+         WHERE id = $2`,
+        [error.message, sendRecordId],
+      );
+    }
+
+    if (idempotencyClaimed) {
+      await finalizePlatformIdempotentOperation(
+        client,
+        'campaign.send',
+        idempotencyKey,
+        'failed',
+        { error: error instanceof Error ? error.message : String(error), sendRecordId },
+      );
+    }
 
     throw error;
+  } finally {
+    client.release();
   }
 }
 
-export async function sendCampaignToAudience(campaignId: number) {
+export async function sendCampaignToAudience(campaignId: number, idempotencyKey?: string) {
   await getDb();
-  if (!_pool) return { sent: 0, failed: 0 };
+  if (!_pool) return { sent: 0, failed: 0, total: 0 };
 
   const campaign = await getCampaignById(campaignId);
   if (!campaign || !campaign.is_active) {
     throw new Error('Campaign not found or inactive');
   }
 
-  // Get target users based on audience
   let userQuery = 'SELECT id FROM users WHERE 1=1';
   const params: any[] = [];
 
@@ -4337,11 +4599,11 @@ export async function sendCampaignToAudience(campaignId: number) {
 
   let sent = 0;
   let failed = 0;
+  const audienceScope = idempotencyKey?.trim() || `campaign.audience.${campaignId}`;
 
-  // Send to each user
   for (const user of users) {
     try {
-      await sendCampaign(campaignId, user.id, 'email');
+      await sendCampaign(campaignId, user.id, 'email', `${audienceScope}:user:${user.id}:channel:email`);
       sent++;
     } catch (error) {
       failed++;
