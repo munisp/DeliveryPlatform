@@ -7601,12 +7601,14 @@ export async function getFundsReconciliationSnapshot() {
   await getDb();
   if (!_pool) return null;
 
-  const [transactionResult, settlementResult, incentiveResult, orderResult] = await Promise.all([
+  const [transactionResult, settlementResult, incentiveResult, orderResult, walletResult, disputeResult] = await Promise.all([
     _pool.query<any>(`
       SELECT
         COUNT(*) AS transaction_count,
         COALESCE(SUM(amount::numeric), 0) FILTER (WHERE type = 'payment' AND status = 'completed') AS completed_payments,
         COALESCE(SUM(amount::numeric), 0) FILTER (WHERE type = 'refund' AND status = 'completed') AS completed_refunds,
+        COALESCE(SUM(amount::numeric), 0) FILTER (WHERE type = 'chargeback' AND status IN ('pending', 'completed')) AS chargeback_exposure,
+        COUNT(*) FILTER (WHERE type = 'chargeback' AND status IN ('pending', 'completed')) AS chargeback_count,
         COALESCE(SUM(amount::numeric), 0) FILTER (WHERE type = 'payout' AND status IN ('pending', 'approved')) AS pending_payout_exposure,
         COUNT(*) FILTER (WHERE status = 'failed') AS failed_transactions,
         COUNT(*) FILTER (WHERE status = 'pending') AS pending_transactions,
@@ -7638,32 +7640,58 @@ export async function getFundsReconciliationSnapshot() {
         MAX(COALESCE(actual_delivery_time, updated_at, created_at)) AS last_order_event
       FROM orders
     `),
+    _pool.query<any>(`
+      SELECT
+        COUNT(*) AS wallet_count,
+        COALESCE(SUM(balance::numeric), 0) AS total_wallet_balance,
+        COUNT(*) FILTER (WHERE balance::numeric < 0) AS negative_wallets,
+        MAX(updated_at) AS last_wallet_event
+      FROM wallets
+    `).catch(() => ({ rows: [{ wallet_count: 0, total_wallet_balance: 0, negative_wallets: 0, last_wallet_event: null }] })),
+    _pool.query<any>(`
+      SELECT
+        COUNT(*) FILTER (WHERE type IN ('refund', 'claim') AND status IN ('open', 'in_progress')) AS open_dispute_like_tickets,
+        COUNT(*) FILTER (WHERE priority IN ('urgent', 'critical') AND status IN ('open', 'in_progress')) AS critical_dispute_tickets,
+        MAX(COALESCE(resolved_at, updated_at, created_at)) AS last_dispute_event
+      FROM support_tickets
+    `).catch(() => ({ rows: [{ open_dispute_like_tickets: 0, critical_dispute_tickets: 0, last_dispute_event: null }] })),
   ]);
 
   const transactions = transactionResult.rows[0] || {};
   const settlements = settlementResult.rows[0] || {};
   const incentives = incentiveResult.rows[0] || {};
   const orders = orderResult.rows[0] || {};
+  const wallets = walletResult.rows[0] || {};
+  const disputes = disputeResult.rows[0] || {};
 
   const grossPayments = Number(Number(transactions.completed_payments || 0).toFixed(2));
   const refunds = Number(Number(transactions.completed_refunds || 0).toFixed(2));
+  const chargebackExposure = Number(Number(transactions.chargeback_exposure || 0).toFixed(2));
   const pendingPayoutExposure = Number(Number(transactions.pending_payout_exposure || 0).toFixed(2));
   const pendingSettlements = Number(Number(settlements.pending_settlements || 0).toFixed(2));
   const approvedSettlements = Number(Number(settlements.approved_settlements || 0).toFixed(2));
   const completedSettlements = Number(Number(settlements.completed_settlements || 0).toFixed(2));
   const unsettledIncentives = Number(Number(incentives.approved_unsettled_incentives || 0).toFixed(2));
   const deliveredDriverFees = Number(Number(orders.delivered_driver_fees || 0).toFixed(2));
-  const netCollected = Number((grossPayments - refunds).toFixed(2));
+  const totalWalletBalance = Number(Number(wallets.total_wallet_balance || 0).toFixed(2));
+  const netCollected = Number((grossPayments - refunds - chargebackExposure).toFixed(2));
   const outstandingDriverObligations = Number((pendingSettlements + approvedSettlements + unsettledIncentives).toFixed(2));
   const payoutCoverageGap = Number((deliveredDriverFees - completedSettlements).toFixed(2));
+  const treasuryDrift = Number((totalWalletBalance - netCollected).toFixed(2));
 
-  let recommendation = "Funds posture is balanced across current transaction, settlement, and incentive signals.";
+  let recommendation = "Funds posture is balanced across transaction, settlement, incentive, wallet, and dispute signals.";
   if (Number(transactions.failed_transactions || 0) > 0) {
     recommendation = "Failed finance transactions exist; resolve them before relying on downstream reconciliation totals.";
+  } else if (Number(wallets.negative_wallets || 0) > 0) {
+    recommendation = "Negative wallet balances exist; investigate treasury and compensation adjustments before closing the period.";
+  } else if (Number(transactions.chargeback_count || 0) > 0 || Number(disputes.open_dispute_like_tickets || 0) > 0) {
+    recommendation = "Chargeback or dispute exposure is active; confirm merchant reserves, customer remediation, and payout offsets before settlement finalization.";
   } else if (outstandingDriverObligations > netCollected) {
-    recommendation = "Outstanding driver obligations exceed net collected funds; review refunds, unsettled incentives, and payout approvals immediately.";
+    recommendation = "Outstanding driver obligations exceed net collected funds; review refunds, chargebacks, unsettled incentives, and payout approvals immediately.";
   } else if (payoutCoverageGap > 0) {
     recommendation = "Delivered driver-fee obligations exceed completed settlements; treasury and payout operations should confirm downstream disbursement progress.";
+  } else if (Math.abs(treasuryDrift) > 0.01) {
+    recommendation = "Wallet balances do not align with net collected funds; review treasury posting, reserves, and internal wallet adjustments.";
   } else if (Number(transactions.pending_transactions || 0) > 0) {
     recommendation = "Pending finance transactions remain open; confirm that retries or external callbacks completed before closing the period.";
   }
@@ -7674,6 +7702,8 @@ export async function getFundsReconciliationSnapshot() {
       count: Number(transactions.transaction_count || 0),
       completed_payments: grossPayments,
       completed_refunds: refunds,
+      chargeback_exposure: chargebackExposure,
+      chargeback_count: Number(transactions.chargeback_count || 0),
       pending_payout_exposure: pendingPayoutExposure,
       failed_transactions: Number(transactions.failed_transactions || 0),
       pending_transactions: Number(transactions.pending_transactions || 0),
@@ -7698,10 +7728,22 @@ export async function getFundsReconciliationSnapshot() {
       delivered_driver_fees: deliveredDriverFees,
       last_order_event: orders.last_order_event ?? null,
     },
+    wallets: {
+      wallet_count: Number(wallets.wallet_count || 0),
+      total_wallet_balance: totalWalletBalance,
+      negative_wallets: Number(wallets.negative_wallets || 0),
+      last_wallet_event: wallets.last_wallet_event ?? null,
+    },
+    disputes: {
+      open_dispute_like_tickets: Number(disputes.open_dispute_like_tickets || 0),
+      critical_dispute_tickets: Number(disputes.critical_dispute_tickets || 0),
+      last_dispute_event: disputes.last_dispute_event ?? null,
+    },
     derived: {
       net_collected: netCollected,
       outstanding_driver_obligations: outstandingDriverObligations,
       payout_coverage_gap: payoutCoverageGap,
+      treasury_drift: treasuryDrift,
     },
     recommendation,
   };
