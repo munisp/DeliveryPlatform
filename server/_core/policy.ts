@@ -1,6 +1,12 @@
 import { ENV } from "./env";
 import type { SessionUser } from "./trpc";
 
+type RedisPolicyCacheClient = {
+  connect(): Promise<void>;
+  get(key: string): Promise<string | null>;
+  set(key: string, value: string, options?: { EX?: number }): Promise<unknown>;
+};
+
 export type PolicyResource = {
   type: "tenant" | "workspace";
   id: string;
@@ -12,6 +18,8 @@ export type PolicyCheckInput = {
   resource: PolicyResource;
 };
 
+let redisPolicyCacheClientPromise: Promise<RedisPolicyCacheClient | null> | null = null;
+
 function normalizePermifyEndpoint() {
   const endpoint = `${process.env.PERMIFY_ENDPOINT ?? ""}`.trim();
   return endpoint.replace(/\/$/, "");
@@ -21,8 +29,20 @@ function buildAuthzModelId() {
   return `${process.env.PERMIFY_SCHEMA_VERSION ?? "switchos-v1"}`.trim();
 }
 
+function getPolicyCacheTtlSeconds() {
+  const parsed = Number.parseInt(`${process.env.POLICY_CACHE_TTL_SECONDS ?? "30"}`.trim(), 10);
+  if (Number.isNaN(parsed) || parsed <= 0) {
+    return 30;
+  }
+  return parsed;
+}
+
 function isPolicyEngineEnabled() {
   return normalizePermifyEndpoint().length > 0;
+}
+
+function isPolicyCacheEnabled() {
+  return Boolean(ENV.redisUrl?.trim()) && isPolicyEngineEnabled();
 }
 
 function scopeFallbackAllows(subject: SessionUser, permission: PolicyCheckInput["permission"]) {
@@ -41,9 +61,83 @@ function scopeFallbackAllows(subject: SessionUser, permission: PolicyCheckInput[
   return scopes.has(requiredScope);
 }
 
+function getPolicyCacheKey(input: PolicyCheckInput) {
+  return [
+    "switchos",
+    "policy",
+    buildAuthzModelId(),
+    input.subject.tenantId ?? "switchos-core",
+    input.subject.openId ?? input.subject.id,
+    input.resource.type,
+    input.resource.id,
+    input.permission,
+  ].join(":");
+}
+
+async function getRedisPolicyCacheClient(): Promise<RedisPolicyCacheClient | null> {
+  if (!isPolicyCacheEnabled()) {
+    return null;
+  }
+
+  if (!redisPolicyCacheClientPromise) {
+    redisPolicyCacheClientPromise = (async () => {
+      try {
+        const { createClient } = await import("redis");
+        const client = createClient({ url: ENV.redisUrl });
+        await client.connect();
+        return client as unknown as RedisPolicyCacheClient;
+      } catch (error) {
+        console.warn("[SwitchOS] Failed to initialize Redis policy cache", error);
+        redisPolicyCacheClientPromise = null;
+        return null;
+      }
+    })();
+  }
+
+  return redisPolicyCacheClientPromise;
+}
+
+async function readCachedPolicyDecision(input: PolicyCheckInput): Promise<boolean | null> {
+  const client = await getRedisPolicyCacheClient();
+  if (!client) {
+    return null;
+  }
+
+  try {
+    const cached = await client.get(getPolicyCacheKey(input));
+    if (cached == null) {
+      return null;
+    }
+    return cached === "1";
+  } catch (error) {
+    console.warn("[SwitchOS] Failed to read Redis policy cache", error);
+    return null;
+  }
+}
+
+async function writeCachedPolicyDecision(input: PolicyCheckInput, allowed: boolean) {
+  const client = await getRedisPolicyCacheClient();
+  if (!client) {
+    return;
+  }
+
+  try {
+    await client.set(getPolicyCacheKey(input), allowed ? "1" : "0", {
+      EX: getPolicyCacheTtlSeconds(),
+    });
+  } catch (error) {
+    console.warn("[SwitchOS] Failed to write Redis policy cache", error);
+  }
+}
+
 export async function checkPolicy(input: PolicyCheckInput): Promise<boolean> {
   if (!isPolicyEngineEnabled()) {
     return scopeFallbackAllows(input.subject, input.permission);
+  }
+
+  const cachedDecision = await readCachedPolicyDecision(input);
+  if (cachedDecision != null) {
+    return cachedDecision;
   }
 
   const endpoint = normalizePermifyEndpoint();
@@ -77,10 +171,12 @@ export async function checkPolicy(input: PolicyCheckInput): Promise<boolean> {
   }
 
   const payload = await response.json() as { can?: string; allowed?: boolean };
-  if (typeof payload.allowed === "boolean") {
-    return payload.allowed;
-  }
-  return `${payload.can ?? ""}`.toUpperCase() === "RESULT_ALLOWED";
+  const allowed = typeof payload.allowed === "boolean"
+    ? payload.allowed
+    : `${payload.can ?? ""}`.toUpperCase() === "RESULT_ALLOWED";
+
+  await writeCachedPolicyDecision(input, allowed);
+  return allowed;
 }
 
 export function getPolicyIntegrationStatus() {
@@ -90,5 +186,7 @@ export function getPolicyIntegrationStatus() {
     schemaVersion: buildAuthzModelId(),
     fallbackMode: !isPolicyEngineEnabled(),
     cacheConfigured: Boolean(ENV.redisUrl),
+    cacheEnabled: isPolicyCacheEnabled(),
+    cacheTtlSeconds: getPolicyCacheTtlSeconds(),
   };
 }

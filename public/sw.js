@@ -1,6 +1,11 @@
 const BUILD_VERSION = self.__SW_BUILD_VERSION__ || "dev";
 const CACHE_NAME = `switchos-shell-${BUILD_VERSION}`;
-const ASSETS = ["/manifest.webmanifest"];
+const ASSETS = [
+  "/manifest.webmanifest",
+  "/offline.html",
+  "/icons/switchos-icon.svg",
+  "/icons/switchos-maskable.svg",
+];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(

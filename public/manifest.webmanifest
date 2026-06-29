@@ -3,8 +3,35 @@
   "short_name": "SwitchOS",
   "description": "Multi-vertical commerce, logistics, analytics, and operator tooling.",
   "start_url": "/",
+  "scope": "/",
   "display": "standalone",
+  "orientation": "portrait-primary",
   "background_color": "#020617",
   "theme_color": "#06b6d4",
-  "icons": []
+  "icons": [
+    {
+      "src": "/icons/switchos-icon.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/switchos-maskable.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Portal",
+      "short_name": "Portal",
+      "url": "/portal"
+    },
+    {
+      "name": "Analytics",
+      "short_name": "Analytics",
+      "url": "/analytics"
+    }
+  ]
 }
