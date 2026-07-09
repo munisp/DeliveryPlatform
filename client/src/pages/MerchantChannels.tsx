@@ -66,6 +66,71 @@ export default function MerchantChannels() {
             </CardContent>
           </Card>
         </div>
+
+        <div className="grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
+          <Card>
+            <CardHeader>
+              <CardTitle>{data?.longcat?.consultant_name ?? "LongCat Merchant Copilot"}</CardTitle>
+              <CardDescription>
+                AI-guided merchant decision support modeled after the Meituan-style market, menu, and financial consulting use case.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4 text-sm text-slate-300">
+              <div>
+                <p className="text-xs uppercase tracking-[0.2em] text-cyan-200">Market Brief</p>
+                <p className="mt-2 leading-7">{data?.longcat?.market_brief ?? "Loading merchant market analysis…"}</p>
+              </div>
+              <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-4">
+                <p className="text-xs uppercase tracking-[0.2em] text-cyan-200">Demand Forecast</p>
+                <p className="mt-2 leading-7">{data?.longcat?.demand_forecast ?? "Awaiting demand forecast…"}</p>
+              </div>
+            </CardContent>
+          </Card>
+
+          <div className="space-y-4">
+            <Card>
+              <CardHeader>
+                <CardTitle>Menu Actions</CardTitle>
+                <CardDescription>How the AI copilot would refine offer mix and featured dishes.</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <ul className="space-y-3 text-sm leading-6 text-slate-300">
+                  {(data?.longcat?.menu_actions ?? []).map((item) => (
+                    <li key={item} className="rounded-xl border border-slate-800 bg-slate-950/70 px-4 py-3">{item}</li>
+                  ))}
+                </ul>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Channel Actions</CardTitle>
+                <CardDescription>Recommended channel and campaign moves for the next operating cycle.</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <ul className="space-y-3 text-sm leading-6 text-slate-300">
+                  {(data?.longcat?.channel_actions ?? []).map((item) => (
+                    <li key={item} className="rounded-xl border border-slate-800 bg-slate-950/70 px-4 py-3">{item}</li>
+                  ))}
+                </ul>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Financial Watchouts</CardTitle>
+                <CardDescription>Risk controls the merchant operator should review before scaling demand.</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <ul className="space-y-3 text-sm leading-6 text-slate-300">
+                  {(data?.longcat?.financial_watchouts ?? []).map((item) => (
+                    <li key={item} className="rounded-xl border border-slate-800 bg-slate-950/70 px-4 py-3">{item}</li>
+                  ))}
+                </ul>
+              </CardContent>
+            </Card>
+          </div>
+        </div>
       </div>
     </DashboardLayout>
   );

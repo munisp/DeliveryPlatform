@@ -1,5 +1,6 @@
 import pg from "pg";
 
+import { buildConsumerAssistant, buildDispatchIntelligence, buildMerchantConsultant } from "../_core/longcat";
 import { ENV } from "../_core/env";
 
 type Driver = {
@@ -170,7 +171,7 @@ export function getMarketplaceOverview() {
   };
 }
 
-export function getDriverMobilityWorkspace(limit = 8) {
+export async function getDriverMobilityWorkspace(limit = 8) {
   const supplyQueue = drivers.slice(0, limit).map((driver) => ({
     driver: driver.name,
     mode: driver.mode,
@@ -182,14 +183,16 @@ export function getDriverMobilityWorkspace(limit = 8) {
     next_action: driver.tripRadarEligible ? "Eligible for trip radar and batch offers" : "Specialized dispatch only",
   }));
 
+  const summary = {
+    online_drivers: drivers.filter((driver) => driver.online).length,
+    trip_radar_candidates: drivers.filter((driver) => driver.tripRadarEligible).length,
+    airport_ready_drivers: drivers.filter((driver) => driver.airportReady).length,
+    avg_weekly_earnings: Math.round(drivers.reduce((sum, driver) => sum + driver.weeklyEarnings, 0) / drivers.length),
+    recommended_action: "Airport demand is outrunning reserve supply; rebalance one delivery-first cohort toward transfer readiness.",
+  };
+
   return {
-    summary: {
-      online_drivers: drivers.filter((driver) => driver.online).length,
-      trip_radar_candidates: drivers.filter((driver) => driver.tripRadarEligible).length,
-      airport_ready_drivers: drivers.filter((driver) => driver.airportReady).length,
-      avg_weekly_earnings: Math.round(drivers.reduce((sum, driver) => sum + driver.weeklyEarnings, 0) / drivers.length),
-      recommended_action: "Airport demand is outrunning reserve supply; rebalance one delivery-first cohort toward transfer readiness.",
-    },
+    summary,
     earning_streams: [
       "Airport reserve queue incentives",
       "Trip radar surge offers for mixed mobility and courier work",
@@ -197,6 +200,10 @@ export function getDriverMobilityWorkspace(limit = 8) {
       "High-reliability weekly guarantee programs",
     ],
     supply_queue: supplyQueue,
+    longcat: await buildDispatchIntelligence({
+      ...summary,
+      supply_queue: supplyQueue,
+    }),
   };
 }
 
@@ -289,37 +296,52 @@ export async function getMerchantChannelWorkspace() {
     const recentPushDeliveries = toNumber(summary?.recent_push_deliveries);
     const campaignsRunning = toNumber(summary?.campaigns_running);
 
+    const summaryPayload = {
+      activated_channels: activatedChannels,
+      branded_storefronts: brandedStorefronts,
+      partner_channels: partnerChannels,
+      recommended_action: campaignsRunning > 0
+        ? `Stabilize ${campaignsRunning} live campaign channels and align push follow-through before opening additional storefront surfaces.`
+        : "Activate owned storefront and messaging channels before expanding partner syndication.",
+    };
+
+    const channelMix = channelRows.rows.length > 0
+      ? channelRows.rows.map((row) => `${row.channel} channel with ${recentPushDeliveries} push deliveries observed in the last 7 days`)
+      : [
+          "Owned web storefronts with active merchant records",
+          "Managed campaign channels awaiting wider activation",
+        ];
+
     return {
-      summary: {
-        activated_channels: activatedChannels,
-        branded_storefronts: brandedStorefronts,
-        partner_channels: partnerChannels,
-        recommended_action: campaignsRunning > 0
-          ? `Stabilize ${campaignsRunning} live campaign channels and align push follow-through before opening additional storefront surfaces.`
-          : "Activate owned storefront and messaging channels before expanding partner syndication.",
-      },
-      channel_mix: channelRows.rows.length > 0
-        ? channelRows.rows.map((row) => `${row.channel} channel with ${recentPushDeliveries} push deliveries observed in the last 7 days`)
-        : [
-            "Owned web storefronts with active merchant records",
-            "Managed campaign channels awaiting wider activation",
-          ],
+      summary: summaryPayload,
+      channel_mix: channelMix,
+      longcat: await buildMerchantConsultant({
+        ...summaryPayload,
+        channel_mix: channelMix,
+      }),
     };
   } catch {
+    const summaryPayload = {
+      activated_channels: 5,
+      branded_storefronts: 12,
+      partner_channels: 3,
+      recommended_action: "Focus the next release on merchant activation sequencing instead of adding more disconnected storefront CRUD.",
+    };
+    const channelMix = [
+      "Owned web storefronts",
+      "Branded mobile ordering",
+      "Tableside ordering",
+      "Phone-assisted capture",
+      "Partner marketplace syndication",
+    ];
+
     return {
-      summary: {
-        activated_channels: 5,
-        branded_storefronts: 12,
-        partner_channels: 3,
-        recommended_action: "Focus the next release on merchant activation sequencing instead of adding more disconnected storefront CRUD.",
-      },
-      channel_mix: [
-        "Owned web storefronts",
-        "Branded mobile ordering",
-        "Tableside ordering",
-        "Phone-assisted capture",
-        "Partner marketplace syndication",
-      ],
+      summary: summaryPayload,
+      channel_mix: channelMix,
+      longcat: await buildMerchantConsultant({
+        ...summaryPayload,
+        channel_mix: channelMix,
+      }),
     };
   }
 }
@@ -420,31 +442,46 @@ export async function getPhoneOrderingWorkspace() {
     const activeCalls = toNumber(summary?.active_calls);
     const substitutionCases = toNumber(summary?.substitution_cases);
 
+    const summaryPayload = {
+      staffed_lines: staffedLines,
+      active_calls: activeCalls,
+      substitution_cases: substitutionCases,
+      recommended_action: substitutionCases > 0
+        ? `Escalate the ${substitutionCases} substitution-sensitive orders before they degrade into cancellations or manual callbacks.`
+        : "Phone-ordering load is stable; prioritize tighter kitchen handoff confirmation for new assisted orders.",
+    };
+
+    const callFlows = flowRows.rows.map((row) => `${row.flow_name}: ${toNumber(row.flow_volume)} active cases`) || ["No live assisted-ordering flows detected in the current window"];
+
     return {
-      summary: {
-        staffed_lines: staffedLines,
-        active_calls: activeCalls,
-        substitution_cases: substitutionCases,
-        recommended_action: substitutionCases > 0
-          ? `Escalate the ${substitutionCases} substitution-sensitive orders before they degrade into cancellations or manual callbacks.`
-          : "Phone-ordering load is stable; prioritize tighter kitchen handoff confirmation for new assisted orders.",
-      },
-      call_flows: flowRows.rows.map((row) => `${row.flow_name}: ${toNumber(row.flow_volume)} active cases`) || ["No live assisted-ordering flows detected in the current window"],
+      summary: summaryPayload,
+      call_flows: callFlows,
+      longcat: await buildConsumerAssistant({
+        ...summaryPayload,
+        call_flows: callFlows,
+      }),
     };
   } catch {
+    const summaryPayload = {
+      staffed_lines: 7,
+      active_calls: 11,
+      substitution_cases: 4,
+      recommended_action: "Route overflow dinner-period calls to assisted menu capture and auto-escalate unavailable-item decisions to merchant leads.",
+    };
+    const callFlows = [
+      "Assisted order capture with menu confirmation",
+      "Stored-customer lookup and saved-payment recovery",
+      "Substitution and unavailable-item resolution",
+      "Kitchen handoff and fulfillment promise verification",
+    ];
+
     return {
-      summary: {
-        staffed_lines: 7,
-        active_calls: 11,
-        substitution_cases: 4,
-        recommended_action: "Route overflow dinner-period calls to assisted menu capture and auto-escalate unavailable-item decisions to merchant leads.",
-      },
-      call_flows: [
-        "Assisted order capture with menu confirmation",
-        "Stored-customer lookup and saved-payment recovery",
-        "Substitution and unavailable-item resolution",
-        "Kitchen handoff and fulfillment promise verification",
-      ],
+      summary: summaryPayload,
+      call_flows: callFlows,
+      longcat: await buildConsumerAssistant({
+        ...summaryPayload,
+        call_flows: callFlows,
+      }),
     };
   }
 }

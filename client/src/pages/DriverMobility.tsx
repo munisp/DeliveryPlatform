@@ -19,7 +19,10 @@ export default function DriverMobility() {
         { label: "Airport-Ready Drivers", value: data?.summary?.airport_ready_drivers ?? 0, supporting: "Supply already staged for terminal, reserve, and transfer operations." },
         { label: "Avg Weekly Earnings", value: data?.summary?.avg_weekly_earnings ?? 0, supporting: data?.summary?.recommended_action },
       ]}
-      highlights={data?.earning_streams ?? []}
+      highlights={[
+        ...(data?.earning_streams ?? []),
+        ...(data?.longcat?.rider_guidance ?? []),
+      ]}
       sections={[
         {
           title: "Supply Queue",
@@ -27,9 +30,22 @@ export default function DriverMobility() {
           items: data?.supply_queue ?? [],
         },
         {
-          title: "Earning Streams",
-          description: "Programs contributing to driver utilization and retention.",
-          items: (data?.earning_streams ?? []).map((item: string) => item),
+          title: "LongCat Dispatch Brief",
+          description: "Local AI guidance for real-time balancing, batching, and dispatch explainability.",
+          items: [
+            data?.longcat?.dispatch_brief ?? "Loading dispatch brief…",
+            data?.longcat?.batching_strategy ?? "Loading batching strategy…",
+          ],
+        },
+        {
+          title: "Dispatch Risk Flags",
+          description: "Operational risks and guardrails synthesized by the LongCat dispatch layer.",
+          items: data?.longcat?.risk_flags ?? [],
+        },
+        {
+          title: "Ranked Candidates",
+          description: "Driver ranking summary derived from the embedded dispatch optimizer.",
+          items: data?.longcat?.ranked_candidates ?? [],
         },
       ]}
     />
