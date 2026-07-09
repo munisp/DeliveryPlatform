@@ -1,0 +1,18 @@
+[Unit]
+Description=SwitchOS LongCat Speech Runtime
+After=network-online.target postgresql.service redis-server.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/opt/switchos/DeliveryPlatform/services/python/speech-runtime
+EnvironmentFile=/etc/switchos/longcat-voice.env
+ExecStart=/usr/bin/python3 /opt/switchos/DeliveryPlatform/services/python/speech-runtime/main.py
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

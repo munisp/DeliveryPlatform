@@ -1,0 +1,18 @@
+[Unit]
+Description=SwitchOS LongCat Voice Gateway
+After=network-online.target longcat-speech-runtime.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/opt/switchos/DeliveryPlatform/services/go/voice-gateway
+EnvironmentFile=/etc/switchos/longcat-voice.env
+ExecStart=/opt/switchos/DeliveryPlatform/services/go/voice-gateway/switchos-longcat-voice-gateway
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

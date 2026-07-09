@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import base64
 import importlib.util
+import io
 import json
 import os
 import shutil
 import subprocess
 import tempfile
 import time
+import wave
 from typing import Any
 
 from fastapi import FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect, status
@@ -28,6 +30,9 @@ PIPER_MODEL = os.getenv("PIPER_MODEL", "")
 STT_MODEL_PATH = os.getenv("LONGCAT_SPEECH_STT_MODEL", "").strip() or os.getenv("WHISPER_MODEL", "").strip()
 WHISPER_CPP_BIN = os.getenv("WHISPER_CPP_BIN", "").strip()
 STREAM_SESSION_TIMEOUT_SECONDS = int(os.getenv("LONGCAT_SPEECH_STREAM_TIMEOUT_SECONDS", "30"))
+FASTER_WHISPER_DEVICE = os.getenv("LONGCAT_SPEECH_STT_DEVICE", "cpu").strip() or "cpu"
+FASTER_WHISPER_COMPUTE_TYPE = os.getenv("LONGCAT_SPEECH_STT_COMPUTE_TYPE", "int8").strip() or "int8"
+_faster_whisper_models: dict[str, Any] = {}
 
 app = FastAPI(
     title="SwitchOS LongCat Speech Runtime",
@@ -147,6 +152,32 @@ def build_transcription_result(payload: dict[str, Any]) -> dict[str, Any]:
             "stream_timeout_seconds": STREAM_SESSION_TIMEOUT_SECONDS,
         }
 
+    if stt_runtime["ready"]:
+        try:
+            live_transcript = transcribe_with_runtime(payload, stt_runtime)
+            return {
+                "transcript": live_transcript,
+                "final": final,
+                "engine": engine,
+                "latency_ms": int((time.time() - started) * 1000),
+                "degraded_mode": False,
+                "engine_ready": True,
+                "degraded_reason": None,
+                "stream_timeout_seconds": STREAM_SESSION_TIMEOUT_SECONDS,
+            }
+        except Exception as error:  # noqa: BLE001
+            return {
+                "transcript": "",
+                "final": final,
+                "engine": engine,
+                "latency_ms": int((time.time() - started) * 1000),
+                "degraded_mode": True,
+                "engine_ready": False,
+                "degraded_reason": str(error),
+                "stream_timeout_seconds": STREAM_SESSION_TIMEOUT_SECONDS,
+                "error": f"Streaming STT execution failed: {error}",
+            }
+
     return {
         "transcript": "",
         "final": final,
@@ -250,12 +281,61 @@ def resolve_tts_runtime(engine_override: str | None = None) -> dict[str, Any]:
     }
 
 
-def estimate_audio_bytes(payload: dict[str, Any]) -> int:
+def transcribe_with_runtime(payload: dict[str, Any], stt_runtime: dict[str, Any]) -> str:
+    engine = str(stt_runtime.get("engine") or "").strip().lower()
+    if "faster-whisper" in engine:
+        return transcribe_with_faster_whisper(payload, str(stt_runtime.get("model_path") or STT_MODEL_PATH))
+    raise RuntimeError(f"unsupported_stt_engine:{engine or 'unknown'}")
+
+
+def transcribe_with_faster_whisper(payload: dict[str, Any], model_path: str) -> str:
+    if not model_path:
+        raise RuntimeError("faster_whisper_model_not_configured")
+    audio_bytes = decode_audio_bytes(payload)
+    if not audio_bytes:
+        raise RuntimeError("audio_chunk_missing")
+    sample_rate_hz = int(payload.get("sample_rate_hz") or 16000)
+    audio_wav = render_pcm16_mono_wav(audio_bytes, sample_rate_hz)
+    model = get_faster_whisper_model(model_path)
+    with tempfile.NamedTemporaryFile(prefix="longcat-stt-", suffix=".wav", delete=True) as handle:
+        handle.write(audio_wav)
+        handle.flush()
+        segments, _ = model.transcribe(handle.name, language=str(payload.get("language") or "en"), vad_filter=True)
+        transcript = " ".join(segment.text.strip() for segment in segments if segment.text and segment.text.strip()).strip()
+    return transcript
+
+
+def get_faster_whisper_model(model_path: str):
+    cached = _faster_whisper_models.get(model_path)
+    if cached is not None:
+        return cached
+    from faster_whisper import WhisperModel
+
+    model = WhisperModel(model_path, device=FASTER_WHISPER_DEVICE, compute_type=FASTER_WHISPER_COMPUTE_TYPE)
+    _faster_whisper_models[model_path] = model
+    return model
+
+
+def decode_audio_bytes(payload: dict[str, Any]) -> bytes:
     audio_base64 = str(payload.get("audio_base64") or "").strip()
     if not audio_base64:
-        return 0
+        return b""
+    return base64.b64decode(audio_base64, validate=False)
+
+
+def render_pcm16_mono_wav(audio_bytes: bytes, sample_rate_hz: int) -> bytes:
+    with io.BytesIO() as buffer:
+        with wave.open(buffer, "wb") as wav_file:
+            wav_file.setnchannels(1)
+            wav_file.setsampwidth(2)
+            wav_file.setframerate(max(8000, sample_rate_hz or 16000))
+            wav_file.writeframes(audio_bytes)
+        return buffer.getvalue()
+
+
+def estimate_audio_bytes(payload: dict[str, Any]) -> int:
     try:
-        return len(base64.b64decode(audio_base64, validate=False))
+        return len(decode_audio_bytes(payload))
     except Exception:  # noqa: BLE001
         return 0
 
