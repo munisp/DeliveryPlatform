@@ -4,6 +4,7 @@ import { createHTTPHandler } from "@trpc/server/adapters/standalone";
 import { randomUUID } from "crypto";
 
 import { appRouter } from "../routers";
+import { appendLongCatTelephonyTranscript, startLongCatTelephonyIngressSession } from "./longcatVoice";
 import { COOKIE_NAME } from "../../shared/const";
 import { ENV } from "./env";
 import { getCookieOptions } from "./cookies";
@@ -97,6 +98,15 @@ function applyCors(req: express.Request, res: express.Response) {
     res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
     res.setHeader("Vary", "Origin");
   }
+}
+
+function requireInternalServiceAccess(req: express.Request, res: express.Response) {
+  const provided = `${req.header("X-Internal-Service-Token") ?? ""}`.trim();
+  if (!provided || provided !== ENV.internalServiceToken) {
+    res.status(401).json({ error: "unauthorized" });
+    return false;
+  }
+  return true;
 }
 
 function rateLimit(limit: number): express.RequestHandler {
@@ -406,6 +416,49 @@ app.use(
     },
   }),
 );
+
+app.post("/api/internal/longcat/voice/bootstrap", rateLimit(60), async (req, res) => {
+  if (!requireInternalServiceAccess(req, res)) return;
+  try {
+    const payload = await startLongCatTelephonyIngressSession({
+      userId: typeof req.body?.userId === "number" ? req.body.userId : null,
+      customerPhone: typeof req.body?.customerPhone === "string" ? req.body.customerPhone : null,
+      customerName: typeof req.body?.customerName === "string" ? req.body.customerName : null,
+      voiceChannel: typeof req.body?.voiceChannel === "string" ? req.body.voiceChannel : null,
+      accessibilityFlags: Array.isArray(req.body?.accessibilityFlags) ? req.body.accessibilityFlags.filter((value: unknown) => typeof value === "string") : [],
+      idempotencyKey: typeof req.body?.idempotencyKey === "string" ? req.body.idempotencyKey : null,
+      triggerReason: typeof req.body?.triggerReason === "string" ? req.body.triggerReason : null,
+      externalCallId: `${req.body?.externalCallId ?? ""}`.trim(),
+      telephonyProvider: typeof req.body?.telephonyProvider === "string" ? req.body.telephonyProvider : null,
+      transport: typeof req.body?.transport === "string" ? req.body.transport : null,
+      sampleRateHz: typeof req.body?.sampleRateHz === "number" ? req.body.sampleRateHz : null,
+    });
+    res.status(200).json(payload);
+  } catch (error) {
+    console.error("[SwitchOS] Failed to bootstrap LongCat telephony session", error);
+    res.status(500).json({ error: error instanceof Error ? error.message : "longcat_bootstrap_failed" });
+  }
+});
+
+app.post("/api/internal/longcat/voice/transcript", rateLimit(120), async (req, res) => {
+  if (!requireInternalServiceAccess(req, res)) return;
+  try {
+    const payload = await appendLongCatTelephonyTranscript({
+      sessionId: `${req.body?.sessionId ?? ""}`.trim(),
+      externalCallId: `${req.body?.externalCallId ?? ""}`.trim(),
+      telephonyProvider: typeof req.body?.telephonyProvider === "string" ? req.body.telephonyProvider : null,
+      transport: typeof req.body?.transport === "string" ? req.body.transport : null,
+      speaker: req.body?.speaker === "agent" || req.body?.speaker === "system" ? req.body.speaker : "customer",
+      transcript: `${req.body?.transcript ?? ""}`.trim(),
+      finalSegment: Boolean(req.body?.finalSegment ?? true),
+      metadata: req.body?.metadata && typeof req.body.metadata === "object" ? req.body.metadata : undefined,
+    });
+    res.status(200).json(payload);
+  } catch (error) {
+    console.error("[SwitchOS] Failed to append LongCat telephony transcript", error);
+    res.status(500).json({ error: error instanceof Error ? error.message : "longcat_transcript_failed" });
+  }
+});
 
 app.listen(ENV.port, ENV.bindHost, () => {
   console.log(`[SwitchOS] Operator edge listening on http://${ENV.bindHost}:${ENV.port}`);

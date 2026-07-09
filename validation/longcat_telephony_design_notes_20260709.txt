@@ -1,0 +1,24 @@
+Twilio Media Streams design notes for LongCat Wave 10
+
+- Twilio Media Streams can stream raw call audio over WebSockets in near real-time.
+- Bidirectional streaming is started with <Connect><Stream>, and Twilio blocks later TwiML instructions while that WebSocket stays connected.
+- The Stream resource cannot be used to start a bidirectional Media Stream.
+- A Media Stream is associated with one WebSocket connection.
+- Twilio documentation explicitly positions Media Streams for real-time transcription, AI agents, and sending audio back into live calls.
+
+Implication for SwitchOS LongCat:
+- Real telephony ingress should expose an inbound voice webhook that returns TwiML containing <Connect><Stream> to a SwitchOS WebSocket endpoint.
+- Streaming STT/TTS orchestration should sit behind that WebSocket session, with transcript or media events mapped onto LongCat voice sessions and turns.
+- Because the current sandbox does not provide a live Twilio account, number, or public callback host, implementation here must be provider-ready and honestly validated locally rather than claimed as live carrier-proof.
+
+Asterisk AudioSocket notes
+
+- AudioSocket is a simple TCP-based protocol for sending and receiving real-time audio streams and DTMF digits.
+- Each packet uses a 3-byte header with a 1-byte type and a 2-byte big-endian payload length.
+- Supported payload types include 16-bit mono PCM at multiple sample rates, including 8kHz, 16kHz, 24kHz, 32kHz, 48kHz, and higher.
+- The protocol includes UUID association for the stream and explicit DTMF signaling.
+
+Implication for SwitchOS LongCat:
+- An open-source ingress path can be built around Asterisk AudioSocket instead of Twilio Media Streams.
+- A Go service is a strong fit for the low-level AudioSocket bridge because the Asterisk docs explicitly reference a Go library and the protocol is simple TCP plus PCM framing.
+- That bridge can forward normalized PCM frames or transcript events into the TypeScript LongCat session layer, while Python can own STT/TTS and Rust can continue to own priority scoring.

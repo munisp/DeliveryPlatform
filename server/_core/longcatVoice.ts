@@ -60,6 +60,39 @@ export type LongCatVoiceTurnResult = {
   updated_memory: LongCatCustomerMemory;
 };
 
+export type LongCatTelephonySession = {
+  ingress_id: string;
+  session_id: string;
+  external_call_id: string;
+  telephony_provider: string;
+  transport: string;
+  sample_rate_hz: number;
+  status: string;
+  stream_started_at: string;
+  stream_last_activity_at: string;
+};
+
+export type LongCatSpeechSynthesisResult = {
+  requested: boolean;
+  synthesized: boolean;
+  engine: string;
+  audio_format: string | null;
+  audio_base64: string | null;
+  playback_text: string;
+  latency_ms: number | null;
+  degraded_mode: boolean;
+  error: string | null;
+};
+
+export type LongCatTelephonyTurnResult = LongCatVoiceTurnResult & {
+  telephony: {
+    provider: string;
+    transport: string;
+    external_call_id: string;
+  };
+  speech: LongCatSpeechSynthesisResult;
+};
+
 type RedisCacheClient = {
   connect(): Promise<void>;
   get(key: string): Promise<string | null>;
@@ -82,6 +115,24 @@ type StartVoiceSessionInput = {
   accessibilityFlags?: string[];
   idempotencyKey?: string | null;
   triggerReason?: string | null;
+};
+
+export type StartTelephonyIngressInput = StartVoiceSessionInput & {
+  externalCallId: string;
+  telephonyProvider?: string | null;
+  transport?: string | null;
+  sampleRateHz?: number | null;
+};
+
+export type AppendTelephonyTranscriptInput = {
+  sessionId: string;
+  externalCallId: string;
+  telephonyProvider?: string | null;
+  transport?: string | null;
+  speaker: "customer" | "agent" | "system";
+  transcript: string;
+  finalSegment?: boolean;
+  metadata?: Record<string, unknown>;
 };
 
 type OllamaVoiceResponse = {
@@ -181,6 +232,43 @@ async function ensureSchema() {
 
     CREATE INDEX IF NOT EXISTS idx_longcat_voice_turns_session_id
       ON longcat_voice_turns(session_id, created_at DESC);
+
+    CREATE TABLE IF NOT EXISTS longcat_voice_ingress_sessions (
+      ingress_id UUID PRIMARY KEY,
+      session_id UUID NOT NULL REFERENCES longcat_voice_sessions(session_id) ON DELETE CASCADE,
+      external_call_id VARCHAR(255) NOT NULL,
+      telephony_provider VARCHAR(64) NOT NULL DEFAULT 'asterisk',
+      transport VARCHAR(64) NOT NULL DEFAULT 'audiosocket',
+      sample_rate_hz INTEGER NOT NULL DEFAULT 16000,
+      status VARCHAR(32) NOT NULL DEFAULT 'active',
+      metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+      stream_started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      stream_last_activity_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (external_call_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_longcat_voice_ingress_session_id
+      ON longcat_voice_ingress_sessions(session_id, stream_last_activity_at DESC);
+
+    CREATE TABLE IF NOT EXISTS longcat_voice_speech_events (
+      id BIGSERIAL PRIMARY KEY,
+      session_id UUID NOT NULL REFERENCES longcat_voice_sessions(session_id) ON DELETE CASCADE,
+      direction VARCHAR(16) NOT NULL,
+      engine VARCHAR(64) NOT NULL,
+      event_type VARCHAR(64) NOT NULL,
+      transcript TEXT,
+      playback_text TEXT,
+      audio_format VARCHAR(32),
+      degraded_mode BOOLEAN NOT NULL DEFAULT FALSE,
+      latency_ms INTEGER,
+      metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_longcat_voice_speech_events_session_id
+      ON longcat_voice_speech_events(session_id, created_at DESC);
   `);
   schemaEnsured = true;
 }
@@ -735,6 +823,276 @@ async function requestVoiceCallback(sessionId: string, memory: LongCatCustomerMe
       error: error instanceof Error ? error.message : "callback_dispatch_failed",
     };
   }
+}
+
+async function recordSpeechEvent(input: {
+  sessionId: string;
+  direction: "ingress" | "egress";
+  engine: string;
+  eventType: string;
+  transcript?: string | null;
+  playbackText?: string | null;
+  audioFormat?: string | null;
+  degradedMode?: boolean;
+  latencyMs?: number | null;
+  metadata?: Record<string, unknown>;
+}) {
+  const db = getPool();
+  await db.query(
+    `INSERT INTO longcat_voice_speech_events (
+       session_id,
+       direction,
+       engine,
+       event_type,
+       transcript,
+       playback_text,
+       audio_format,
+       degraded_mode,
+       latency_ms,
+       metadata
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb)`,
+    [
+      input.sessionId,
+      input.direction,
+      input.engine,
+      input.eventType,
+      input.transcript ?? null,
+      input.playbackText ?? null,
+      input.audioFormat ?? null,
+      Boolean(input.degradedMode),
+      input.latencyMs ?? null,
+      JSON.stringify(input.metadata ?? {}),
+    ],
+  );
+}
+
+export async function synthesizeLongCatSpeech(input: {
+  sessionId: string;
+  text: string;
+  voice?: string | null;
+  channel?: string | null;
+  metadata?: Record<string, unknown>;
+}): Promise<LongCatSpeechSynthesisResult> {
+  await ensureSchema();
+  const playbackText = input.text.trim();
+  if (!playbackText) {
+    return {
+      requested: false,
+      synthesized: false,
+      engine: ENV.longcatSpeechTtsEngine,
+      audio_format: null,
+      audio_base64: null,
+      playback_text: "",
+      latency_ms: null,
+      degraded_mode: true,
+      error: "empty_playback_text",
+    };
+  }
+
+  const start = Date.now();
+  try {
+    const response = await fetch(`${ENV.longcatSpeechServiceUrl.replace(/\/$/, "")}/tts/synthesize`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Internal-Service-Token": ENV.internalServiceToken,
+      },
+      body: JSON.stringify({
+        session_id: input.sessionId,
+        text: playbackText,
+        voice: input.voice ?? "default",
+        channel: input.channel ?? "phone_ordering",
+        engine: ENV.longcatSpeechTtsEngine,
+        metadata: input.metadata ?? {},
+      }),
+      signal: AbortSignal.timeout(20_000),
+    });
+    const payload = await response.json().catch(() => ({})) as Record<string, unknown>;
+    const result: LongCatSpeechSynthesisResult = {
+      requested: true,
+      synthesized: Boolean(payload.synthesized ?? response.ok),
+      engine: `${payload.engine ?? ENV.longcatSpeechTtsEngine}`,
+      audio_format: payload.audio_format ? String(payload.audio_format) : null,
+      audio_base64: payload.audio_base64 ? String(payload.audio_base64) : null,
+      playback_text: payload.playback_text ? String(payload.playback_text) : playbackText,
+      latency_ms: toNumber(payload.latency_ms) || Date.now() - start,
+      degraded_mode: Boolean(payload.degraded_mode ?? !response.ok),
+      error: response.ok ? null : `${payload.error ?? `speech_service_http_${response.status}`}`,
+    };
+    await recordSpeechEvent({
+      sessionId: input.sessionId,
+      direction: "egress",
+      engine: result.engine,
+      eventType: "tts_synthesized",
+      playbackText: result.playback_text,
+      audioFormat: result.audio_format,
+      degradedMode: result.degraded_mode,
+      latencyMs: result.latency_ms,
+      metadata: input.metadata,
+    });
+    return result;
+  } catch (error) {
+    const result: LongCatSpeechSynthesisResult = {
+      requested: true,
+      synthesized: false,
+      engine: ENV.longcatSpeechTtsEngine,
+      audio_format: null,
+      audio_base64: null,
+      playback_text: playbackText,
+      latency_ms: Date.now() - start,
+      degraded_mode: true,
+      error: error instanceof Error ? error.message : "speech_service_unavailable",
+    };
+    await recordSpeechEvent({
+      sessionId: input.sessionId,
+      direction: "egress",
+      engine: result.engine,
+      eventType: "tts_fallback",
+      playbackText: result.playback_text,
+      degradedMode: true,
+      latencyMs: result.latency_ms,
+      metadata: { ...(input.metadata ?? {}), error: result.error },
+    });
+    return result;
+  }
+}
+
+export async function startLongCatTelephonyIngressSession(input: StartTelephonyIngressInput): Promise<LongCatVoiceSessionSnapshot & { telephony: LongCatTelephonySession }> {
+  await ensureSchema();
+  const session = await startLongCatVoiceSession({
+    userId: input.userId ?? null,
+    customerPhone: input.customerPhone ?? null,
+    customerName: input.customerName ?? null,
+    voiceChannel: input.voiceChannel ?? input.transport ?? input.telephonyProvider ?? "phone_ordering",
+    accessibilityFlags: input.accessibilityFlags ?? [],
+    idempotencyKey: input.idempotencyKey ?? `telephony-${input.externalCallId}`,
+    triggerReason: input.triggerReason ?? `telephony_ingress:${input.telephonyProvider ?? "asterisk"}`,
+  });
+
+  const ingressId = randomUUID();
+  const telephony: LongCatTelephonySession = {
+    ingress_id: ingressId,
+    session_id: session.session_id,
+    external_call_id: input.externalCallId.trim(),
+    telephony_provider: (input.telephonyProvider?.trim() || "asterisk"),
+    transport: (input.transport?.trim() || ENV.longcatTelephonyMode || "audiosocket"),
+    sample_rate_hz: Math.max(8_000, Number(input.sampleRateHz ?? 16_000) || 16_000),
+    status: "active",
+    stream_started_at: new Date().toISOString(),
+    stream_last_activity_at: new Date().toISOString(),
+  };
+
+  const db = getPool();
+  await db.query(
+    `INSERT INTO longcat_voice_ingress_sessions (
+       ingress_id,
+       session_id,
+       external_call_id,
+       telephony_provider,
+       transport,
+       sample_rate_hz,
+       status,
+       metadata,
+       stream_started_at,
+       stream_last_activity_at
+     ) VALUES ($1, $2, $3, $4, $5, $6, 'active', $7::jsonb, NOW(), NOW())
+     ON CONFLICT (external_call_id) DO UPDATE SET
+       session_id = EXCLUDED.session_id,
+       telephony_provider = EXCLUDED.telephony_provider,
+       transport = EXCLUDED.transport,
+       sample_rate_hz = EXCLUDED.sample_rate_hz,
+       status = 'active',
+       metadata = EXCLUDED.metadata,
+       stream_last_activity_at = NOW(),
+       updated_at = NOW()`,
+    [
+      ingressId,
+      session.session_id,
+      telephony.external_call_id,
+      telephony.telephony_provider,
+      telephony.transport,
+      telephony.sample_rate_hz,
+      JSON.stringify({
+        telephony_mode: ENV.longcatTelephonyMode,
+        speech_stt_engine: ENV.longcatSpeechSttEngine,
+        speech_tts_engine: ENV.longcatSpeechTtsEngine,
+      }),
+    ],
+  );
+
+  await recordOperationalEvent({
+    eventType: "longcat.voice.telephony_ingress_started",
+    outcome: "success",
+    payload: {
+      sessionId: session.session_id,
+      externalCallId: telephony.external_call_id,
+      provider: telephony.telephony_provider,
+      transport: telephony.transport,
+    },
+  });
+
+  return { ...session, telephony };
+}
+
+export async function appendLongCatTelephonyTranscript(input: AppendTelephonyTranscriptInput): Promise<LongCatTelephonyTurnResult> {
+  await ensureSchema();
+  const baseResult = await appendLongCatVoiceTurn({
+    sessionId: input.sessionId,
+    speaker: input.speaker,
+    utterance: input.transcript,
+    channel: input.transport ?? input.telephonyProvider ?? "telephony",
+    metadata: {
+      ...(input.metadata ?? {}),
+      external_call_id: input.externalCallId,
+      telephony_provider: input.telephonyProvider ?? "asterisk",
+      transport: input.transport ?? ENV.longcatTelephonyMode,
+      final_segment: Boolean(input.finalSegment),
+    },
+  });
+
+  const db = getPool();
+  await db.query(
+    `UPDATE longcat_voice_ingress_sessions
+     SET stream_last_activity_at = NOW(),
+         updated_at = NOW()
+     WHERE session_id = $1 AND external_call_id = $2`,
+    [input.sessionId, input.externalCallId],
+  );
+
+  await recordSpeechEvent({
+    sessionId: input.sessionId,
+    direction: "ingress",
+    engine: ENV.longcatSpeechSttEngine,
+    eventType: input.finalSegment ? "stt_final" : "stt_partial",
+    transcript: input.transcript,
+    degradedMode: false,
+    metadata: {
+      ...(input.metadata ?? {}),
+      external_call_id: input.externalCallId,
+      telephony_provider: input.telephonyProvider ?? "asterisk",
+    },
+  });
+
+  const speech = await synthesizeLongCatSpeech({
+    sessionId: input.sessionId,
+    text: baseResult.assistant_message,
+    channel: input.transport ?? input.telephonyProvider ?? "telephony",
+    metadata: {
+      external_call_id: input.externalCallId,
+      telephony_provider: input.telephonyProvider ?? "asterisk",
+      detected_intent: baseResult.detected_intent,
+    },
+  });
+
+  return {
+    ...baseResult,
+    telephony: {
+      provider: input.telephonyProvider ?? "asterisk",
+      transport: input.transport ?? ENV.longcatTelephonyMode,
+      external_call_id: input.externalCallId,
+    },
+    speech,
+  };
 }
 
 export async function appendLongCatVoiceTurn(input: VoiceTurnInput): Promise<LongCatVoiceTurnResult> {
