@@ -93,9 +93,11 @@ func TestHandleAudioSocketFrameReturnsTerminalConflictOnTranscript409(t *testing
 	state := &AudioSocketStreamState{SessionID: "voice-123", ExternalCallID: "call-123", SampleRateHz: 8000}
 	frame := AudioSocketFrame{PacketType: 0x10, Payload: []byte{0x01, 0x02, 0x03, 0x04}}
 
-	err := gateway.handleAudioSocketFrame(state, frame)
-	if !errors.Is(err, errTerminalSessionConflict) {
-		t.Fatalf("expected terminal session conflict, got %v", err)
+	if err := gateway.handleAudioSocketFrame(state, frame); err != nil {
+		t.Fatalf("expected frame buffering to succeed, got %v", err)
+	}
+	if !errors.Is(gateway.flushBufferedAudio(state), errTerminalSessionConflict) {
+		t.Fatalf("expected terminal session conflict on final flush, got %v", gateway.flushBufferedAudio(state))
 	}
 }
 
@@ -127,7 +129,10 @@ func TestHandleAudioSocketFrameForwardsSpeechReadinessMetadata(t *testing.T) {
 	frame := AudioSocketFrame{PacketType: 0x10, Payload: []byte{0x01, 0x02, 0x03, 0x04}}
 
 	if err := gateway.handleAudioSocketFrame(state, frame); err != nil {
-		t.Fatalf("expected successful frame handling, got %v", err)
+		t.Fatalf("expected successful frame buffering, got %v", err)
+	}
+	if err := gateway.flushBufferedAudio(state); err != nil {
+		t.Fatalf("expected successful final flush, got %v", err)
 	}
 	if forwarded.Metadata["stt_engine"] != "whisper.cpp" {
 		t.Fatalf("expected stt_engine metadata, got %+v", forwarded.Metadata)

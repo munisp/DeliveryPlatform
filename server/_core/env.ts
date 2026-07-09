@@ -110,6 +110,7 @@ export const ENV = {
   sessionIssuer: process.env.SESSION_ISSUER ?? "switchos.local",
   sessionAudience: process.env.SESSION_AUDIENCE ?? "switchos-operator-dashboard",
   internalServiceToken: process.env.INTERNAL_SERVICE_TOKEN ?? "switchos-internal-dev-token-change-before-production",
+  port: Number.parseInt(process.env.PORT ?? "3005", 10) || 3005,
   bindHost: process.env.BIND_HOST ?? "127.0.0.1",
   apisixAdminUrl: process.env.APISIX_ADMIN_URL ?? "http://127.0.0.1:9180",
   apisixControlUrl: process.env.APISIX_CONTROL_URL ?? "http://127.0.0.1:8006",

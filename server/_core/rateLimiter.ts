@@ -59,7 +59,7 @@ async function consumeRedisBucket(key: string, limit: number) {
   const bucketKey = `switchos:ratelimit:${key}`;
   const multi = client.multi();
   multi.incr(bucketKey);
-  multi.pttl(bucketKey);
+  multi.pTTL(bucketKey);
   const result = await multi.exec();
   const count = Number(result?.[0] ?? 0);
   let ttl = Number(result?.[1] ?? -1);
@@ -78,14 +78,29 @@ async function consumeRedisBucket(key: string, limit: number) {
 }
 
 export async function consumeRateLimit(key: string, limit: number) {
-  return consumeRedisBucket(key, limit);
+  try {
+    return await consumeRedisBucket(key, limit);
+  } catch (error) {
+    console.warn("[SwitchOS] Falling back to local rate limiter after Redis bucket failure", error);
+    redisClientPromise = null;
+    return consumeLocalBucket(key, limit);
+  }
 }
 
 export async function getRateLimiterStatus() {
-  const client = await getRedisClient();
-  return {
-    redisConfigured: Boolean(ENV.redisUrl),
-    redisConnected: Boolean(client?.isOpen),
-    mode: client?.isOpen ? "redis" : "local-fallback",
-  };
+  try {
+    const client = await getRedisClient();
+    return {
+      redisConfigured: Boolean(ENV.redisUrl),
+      redisConnected: Boolean(client?.isOpen),
+      mode: client?.isOpen ? "redis" : "local-fallback",
+    };
+  } catch {
+    redisClientPromise = null;
+    return {
+      redisConfigured: Boolean(ENV.redisUrl),
+      redisConnected: false,
+      mode: "local-fallback",
+    };
+  }
 }

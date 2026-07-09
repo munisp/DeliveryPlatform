@@ -126,6 +126,7 @@ type AudioSocketStreamState struct {
 	SessionID      string
 	SampleRateHz   int
 	ChunkIndex     int
+	BufferedAudio  []byte
 }
 
 func main() {
@@ -306,11 +307,17 @@ func (s *GatewayService) handleAudioSocketConnection(conn net.Conn) {
 		_ = conn.SetReadDeadline(time.Now().Add(60 * time.Second))
 		frame, err := readAudioSocketFrame(conn)
 		if err != nil {
-			if err != io.EOF {
-				closeStatus = "failed"
-				closeReason = fmt.Sprintf("audiosocket_error:%v", err)
-				log.Printf("[LongCat Voice Gateway] AudioSocket connection error: %v", err)
+			if err == io.EOF {
+				if flushErr := s.flushBufferedAudio(state); flushErr != nil {
+					closeStatus = "failed"
+					closeReason = flushErr.Error()
+					log.Printf("[LongCat Voice Gateway] AudioSocket final flush failed: %v", flushErr)
+				}
+				return
 			}
+			closeStatus = "failed"
+			closeReason = fmt.Sprintf("audiosocket_error:%v", err)
+			log.Printf("[LongCat Voice Gateway] AudioSocket connection error: %v", err)
 			return
 		}
 
@@ -385,42 +392,11 @@ func (s *GatewayService) handleAudioSocketFrame(state *AudioSocketStreamState, f
 			}
 			state.SessionID = sessionID
 		}
-		state.SampleRateHz = sampleRateForPacket(frame.PacketType)
-		state.ChunkIndex++
-		result, err := s.sendAudioChunkForTranscription(state, frame)
-		if err != nil {
-			return fmt.Errorf("transcribe audio chunk: %w", err)
-		}
-		if strings.TrimSpace(result.Transcript) == "" {
+					state.SampleRateHz = sampleRateForPacket(frame.PacketType)
+			state.ChunkIndex++
+			state.BufferedAudio = append(state.BufferedAudio, frame.Payload...)
 			return nil
-		}
-		_, err = s.forwardTranscript(TranscriptRequest{
-			SessionID:         state.SessionID,
-			ExternalCallID:    state.ExternalCallID,
-			TelephonyProvider: "asterisk",
-			Transport:         "audiosocket",
-			Speaker:           "customer",
-			Transcript:        result.Transcript,
-			FinalSegment:      result.Final,
-			Metadata: map[string]any{
-				"audio_chunk_id":       result.ChunkID,
-				"audio_bytes":          result.AudioBytes,
-				"stt_engine":           result.Engine,
-				"stt_engine_ready":     result.EngineReady,
-				"stt_degraded":         result.DegradedMode,
-				"stt_degraded_mode":    result.DegradedMode,
-				"stt_degraded_reason":  strings.TrimSpace(result.DegradedReason),
-				"stt_latency_ms":       result.LatencyMS,
-			},
-		})
-					if err != nil {
-				if isHTTPStatus(err, http.StatusConflict) {
-					return errTerminalSessionConflict
-				}
-				return fmt.Errorf("forward transcript: %w", err)
-			}
 
-		return nil
 	default:
 		return nil
 	}
@@ -453,15 +429,15 @@ func (s *GatewayService) bootstrapTelephonySession(state *AudioSocketStreamState
 	return sessionID, nil
 }
 
-func (s *GatewayService) sendAudioChunkForTranscription(state *AudioSocketStreamState, frame AudioSocketFrame) (*SpeechChunkResponse, error) {
+func (s *GatewayService) sendAudioChunkForTranscription(state *AudioSocketStreamState, audioBytes []byte, final bool) (*SpeechChunkResponse, error) {
 	chunkID := fmt.Sprintf("%s-%d", state.ExternalCallID, state.ChunkIndex)
 	payload := map[string]any{
 		"session_id":     state.SessionID,
 		"chunk_id":       chunkID,
 		"engine":         getEnv("LONGCAT_SPEECH_STT_ENGINE", "faster-whisper"),
-		"audio_base64":   base64.StdEncoding.EncodeToString(frame.Payload),
+		"audio_base64":   base64.StdEncoding.EncodeToString(audioBytes),
 		"sample_rate_hz": state.SampleRateHz,
-		"final":          false,
+		"final":          final,
 	}
 	responseBody, _, err := s.forwardJSON(http.MethodPost, s.speechServiceURL+"/stt/stream-chunk", payload)
 	if err != nil {
@@ -472,6 +448,46 @@ func (s *GatewayService) sendAudioChunkForTranscription(state *AudioSocketStream
 		return nil, err
 	}
 	return &result, nil
+}
+
+func (s *GatewayService) flushBufferedAudio(state *AudioSocketStreamState) error {
+	if len(state.BufferedAudio) == 0 || strings.TrimSpace(state.SessionID) == "" {
+		return nil
+	}
+	result, err := s.sendAudioChunkForTranscription(state, state.BufferedAudio, true)
+	if err != nil {
+		return fmt.Errorf("transcribe final buffered audio: %w", err)
+	}
+	state.BufferedAudio = nil
+	if strings.TrimSpace(result.Transcript) == "" {
+		return nil
+	}
+	_, err = s.forwardTranscript(TranscriptRequest{
+		SessionID:         state.SessionID,
+		ExternalCallID:    state.ExternalCallID,
+		TelephonyProvider: "asterisk",
+		Transport:         "audiosocket",
+		Speaker:           "customer",
+		Transcript:        result.Transcript,
+		FinalSegment:      result.Final,
+		Metadata: map[string]any{
+			"audio_chunk_id":      result.ChunkID,
+			"audio_bytes":         result.AudioBytes,
+			"stt_engine":          result.Engine,
+			"stt_engine_ready":    result.EngineReady,
+			"stt_degraded":        result.DegradedMode,
+			"stt_degraded_mode":   result.DegradedMode,
+			"stt_degraded_reason": strings.TrimSpace(result.DegradedReason),
+			"stt_latency_ms":      result.LatencyMS,
+		},
+	})
+	if err != nil {
+		if isHTTPStatus(err, http.StatusConflict) {
+			return errTerminalSessionConflict
+		}
+		return fmt.Errorf("forward final transcript: %w", err)
+	}
+	return nil
 }
 
 func (s *GatewayService) forwardTranscript(req TranscriptRequest) (*GatewayTranscriptResponse, error) {

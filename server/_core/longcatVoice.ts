@@ -1205,10 +1205,10 @@ export async function closeLongCatTelephonyIngressSession(input: {
 
   await db.query(
     `UPDATE longcat_voice_sessions
-     SET status = CASE WHEN status = 'closed' THEN status ELSE $2 END,
+     SET status = CASE WHEN status = 'closed' THEN status ELSE $2::text END,
          closed_at = COALESCE(closed_at, NOW()),
          last_turn_at = NOW(),
-         current_context = COALESCE(current_context, '{}'::jsonb) || jsonb_build_object('close_reason', $3, 'closed_via', 'telephony_ingress')
+         current_context = COALESCE(current_context, '{}'::jsonb) || jsonb_build_object('close_reason', $3::text, 'closed_via', 'telephony_ingress')
      WHERE session_id = $1`,
     [input.sessionId, normalizedStatus, closeReason],
   );
@@ -1371,7 +1371,7 @@ export async function appendLongCatVoiceTurn(input: VoiceTurnInput): Promise<Lon
   await db.query(
     `UPDATE longcat_voice_sessions
      SET last_turn_at = NOW(),
-         current_context = jsonb_build_object('last_detected_intent', $2, 'next_actions', $3::jsonb)
+         current_context = jsonb_build_object('last_detected_intent', $2::text, 'next_actions', $3::jsonb)
      WHERE session_id = $1`,
     [input.sessionId, detectedIntent, JSON.stringify(nextActions)],
   );

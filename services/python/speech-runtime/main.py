@@ -5,6 +5,7 @@ import importlib.util
 import io
 import json
 import os
+from pathlib import Path
 import shutil
 import subprocess
 import tempfile
@@ -25,9 +26,11 @@ ALLOWED_ORIGINS = [
     if origin.strip()
 ]
 INTERNAL_SERVICE_TOKEN = os.getenv("INTERNAL_SERVICE_TOKEN", "switchos-internal-dev-token-change-before-production")
+BASE_DIR = Path(__file__).resolve().parent
 PIPER_BIN = os.getenv("PIPER_BIN", "")
 PIPER_MODEL = os.getenv("PIPER_MODEL", "")
-STT_MODEL_PATH = os.getenv("LONGCAT_SPEECH_STT_MODEL", "").strip() or os.getenv("WHISPER_MODEL", "").strip()
+LOCAL_PIPER_MODEL = BASE_DIR / "models" / "en_US-lessac-medium.onnx"
+STT_MODEL_PATH = os.getenv("LONGCAT_SPEECH_STT_MODEL", "").strip() or os.getenv("WHISPER_MODEL", "").strip() or os.getenv("FASTER_WHISPER_MODEL", "").strip() or "tiny.en"
 WHISPER_CPP_BIN = os.getenv("WHISPER_CPP_BIN", "").strip()
 STREAM_SESSION_TIMEOUT_SECONDS = int(os.getenv("LONGCAT_SPEECH_STREAM_TIMEOUT_SECONDS", "30"))
 FASTER_WHISPER_DEVICE = os.getenv("LONGCAT_SPEECH_STT_DEVICE", "cpu").strip() or "cpu"
@@ -200,9 +203,10 @@ def synthesize_payload(payload: dict[str, Any]) -> dict[str, Any]:
     tts_runtime = resolve_tts_runtime(str(payload.get("engine") or "").strip() or None)
     engine = str(tts_runtime["engine"])
     piper_bin = resolve_piper_binary()
-    if piper_bin and PIPER_MODEL:
+    piper_model = resolve_piper_model_path()
+    if piper_bin and piper_model:
         try:
-            audio_base64 = synthesize_with_piper(piper_bin, PIPER_MODEL, text)
+            audio_base64 = synthesize_with_piper(piper_bin, piper_model, text)
             return {
                 "requested": True,
                 "synthesized": True,
@@ -248,21 +252,22 @@ def synthesize_payload(payload: dict[str, Any]) -> dict[str, Any]:
 def resolve_stt_runtime(engine_override: str | None = None) -> dict[str, Any]:
     engine = (engine_override or os.getenv("LONGCAT_SPEECH_STT_ENGINE", "faster-whisper")).strip() or "faster-whisper"
     normalized = engine.lower()
+    model_path = resolve_stt_model_path()
     faster_whisper_available = importlib.util.find_spec("faster_whisper") is not None
     whisper_cpp_binary = resolve_whisper_cpp_binary()
     if "faster-whisper" in normalized:
-        ready = faster_whisper_available and bool(STT_MODEL_PATH)
+        ready = faster_whisper_available and bool(model_path)
         reason = None if ready else "faster_whisper_module_or_model_missing"
     elif "whisper" in normalized:
-        ready = bool(whisper_cpp_binary and STT_MODEL_PATH)
+        ready = bool(whisper_cpp_binary and model_path)
         reason = None if ready else "whisper_cpp_binary_or_model_missing"
     else:
-        ready = bool(STT_MODEL_PATH)
+        ready = bool(model_path)
         reason = None if ready else "stt_model_missing"
     return {
         "engine": engine,
         "ready": ready,
-        "model_path": STT_MODEL_PATH or None,
+        "model_path": model_path,
         "binary": whisper_cpp_binary,
         "reason": reason,
     }
@@ -271,12 +276,13 @@ def resolve_stt_runtime(engine_override: str | None = None) -> dict[str, Any]:
 def resolve_tts_runtime(engine_override: str | None = None) -> dict[str, Any]:
     engine = (engine_override or os.getenv("LONGCAT_SPEECH_TTS_ENGINE", "piper")).strip() or "piper"
     piper_bin = resolve_piper_binary()
-    ready = bool(piper_bin and PIPER_MODEL)
+    piper_model = resolve_piper_model_path()
+    ready = bool(piper_bin and piper_model)
     return {
         "engine": engine,
         "ready": ready,
         "binary": piper_bin,
-        "model_path": PIPER_MODEL or None,
+        "model_path": piper_model,
         "reason": None if ready else "piper_binary_or_model_missing",
     }
 
@@ -314,6 +320,19 @@ def get_faster_whisper_model(model_path: str):
     model = WhisperModel(model_path, device=FASTER_WHISPER_DEVICE, compute_type=FASTER_WHISPER_COMPUTE_TYPE)
     _faster_whisper_models[model_path] = model
     return model
+
+
+def resolve_stt_model_path() -> str | None:
+    candidate = STT_MODEL_PATH.strip()
+    return candidate or None
+
+
+def resolve_piper_model_path() -> str | None:
+    if PIPER_MODEL.strip():
+        return PIPER_MODEL.strip()
+    if LOCAL_PIPER_MODEL.exists():
+        return str(LOCAL_PIPER_MODEL)
+    return None
 
 
 def decode_audio_bytes(payload: dict[str, Any]) -> bytes:
