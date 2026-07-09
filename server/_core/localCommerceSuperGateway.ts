@@ -95,6 +95,38 @@ type GatewayPlanResponse = {
   metrics?: Record<string, unknown>;
 };
 
+type GatewayControlTowerResponse = {
+  service?: string;
+  status?: string;
+  recent_plan_count?: number;
+  middleware?: Record<string, unknown>;
+  metrics?: Record<string, unknown>;
+  recommendations?: string[];
+};
+
+type NetworkHealthResponse = {
+  service?: string;
+  city?: string | null;
+  planning_horizon_hours?: number;
+  resilience_band?: string;
+  constrained_nodes?: number;
+  critical_nodes?: number;
+  summary?: string;
+  nodes?: Array<{
+    warehouse_id: number;
+    label: string;
+    zone_key?: string | null;
+    stock_cover_hours: number;
+    recommended_restock_units: number;
+    risk_band: string;
+    cold_chain_ready: boolean;
+    stock_accuracy: number;
+    critical_skus: number;
+    narrative: string;
+  }>;
+  metrics?: Record<string, unknown>;
+};
+
 type Workspace = Awaited<ReturnType<typeof assembleWorkspace>>;
 
 type TimedResult<T> = {
@@ -124,6 +156,50 @@ export async function buildLocalCommerceSuperGatewayWorkspace(options?: { forceR
   const timed = await timeAsync(() => assembleWorkspace(), traceId, "workspace.assemble");
   setCacheValue(workspaceCache, cacheKey, timed.result, ENV.localCommerceWorkspaceCacheTtlMs);
   return timed.result;
+}
+
+export async function buildLocalCommerceLogisticsControlTower(options?: { city?: string | null; traceId?: string | null; forceRefresh?: boolean }) {
+  const traceId = options?.traceId ?? generateTraceId("lct");
+  const workspaceTimed = await timeAsync(
+    () => buildLocalCommerceSuperGatewayWorkspace({ forceRefresh: options?.forceRefresh, traceId }),
+    traceId,
+    "control_tower.workspace",
+  );
+
+  const [gatewayTimed, networkTimed] = await Promise.all([
+    timeAsync(() => loadGatewayControlTower(traceId), traceId, "control_tower.gateway"),
+    timeAsync(() => loadNetworkHealth(options?.city ?? "Lagos", workspaceTimed.result, traceId), traceId, "control_tower.network"),
+  ]);
+
+  const summaryParts = [
+    gatewayTimed.result?.status ? `Gateway status is ${gatewayTimed.result.status}.` : null,
+    networkTimed.result?.summary ?? null,
+    workspaceTimed.result.summary.recommended_action,
+  ].filter((value): value is string => typeof value === "string" && value.trim().length > 0);
+
+  return {
+    workspace: workspaceTimed.result,
+    gateway: gatewayTimed.result,
+    network: networkTimed.result,
+    summary: summaryParts.join(" "),
+    alerts: [
+      ...(gatewayTimed.result?.recommendations ?? []),
+      ...((networkTimed.result?.nodes ?? []).filter((node) => node.risk_band !== "healthy").map((node) => node.narrative)),
+    ].slice(0, 8),
+    metrics: {
+      trace_id: traceId,
+      timings_ms: {
+        workspace: workspaceTimed.duration_ms,
+        gateway: gatewayTimed.duration_ms,
+        network: networkTimed.duration_ms,
+      },
+    },
+    mobile_shortcuts: [
+      { label: "Run fast logistics plan", route: "/logistics-control-tower", action: "plan-fast" },
+      { label: "Review supply risk", route: "/merchant-channels", action: "supply-risk" },
+      { label: "Check driver readiness", route: "/driver-mobility", action: "driver-readiness" },
+    ],
+  };
 }
 
 export async function planLocalCommerceConciergeIntent(input: ConciergeIntent) {
@@ -388,6 +464,96 @@ function baseHeaders(traceId: string) {
     "x-internal-service-token": ENV.internalServiceToken,
     "x-trace-id": traceId,
   };
+}
+
+async function loadGatewayControlTower(traceId: string): Promise<GatewayControlTowerResponse | null> {
+  if (!ENV.localCommerceGatewayUrl) {
+    return null;
+  }
+
+  const response = await fetch(`${ENV.localCommerceGatewayUrl.replace(/\/$/, "")}/logistics-control-tower`, {
+    method: "GET",
+    headers: baseHeaders(traceId),
+  }).catch(() => null);
+
+  if (!response?.ok) {
+    return null;
+  }
+
+  return response.json() as Promise<GatewayControlTowerResponse>;
+}
+
+async function loadNetworkHealth(city: string, workspace: Workspace, traceId: string): Promise<NetworkHealthResponse | null> {
+  if (!ENV.retailForecastServiceUrl) {
+    return null;
+  }
+
+  const payload = {
+    city,
+    planning_horizon_hours: 24,
+    nodes: defaultNetworkNodesFromWorkspace(workspace),
+  };
+
+  const response = await fetch(`${ENV.retailForecastServiceUrl.replace(/\/$/, "")}/network-health`, {
+    method: "POST",
+    headers: baseHeaders(traceId),
+    body: JSON.stringify(payload),
+  }).catch(() => null);
+
+  if (!response?.ok) {
+    return null;
+  }
+
+  return response.json() as Promise<NetworkHealthResponse>;
+}
+
+function defaultNetworkNodesFromWorkspace(workspace: Workspace) {
+  const activePromotions = Number(workspace.summary.active_promotions ?? 0);
+  const benefits = Number(workspace.summary.cross_category_benefits ?? 0);
+  return [
+    {
+      warehouse_id: 701,
+      label: "VI Dark Store",
+      zone_key: "lagos-island",
+      cold_chain_ready: true,
+      stock_accuracy: 0.94,
+      on_hand_units: 54,
+      reserved_units: Math.max(4, Math.round(activePromotions / 2)),
+      inbound_units: 24,
+      hourly_demand: 3.2,
+      lead_time_hours: 6,
+      freshness_hours: 28,
+      critical_skus: 1,
+    },
+    {
+      warehouse_id: 702,
+      label: "Yaba Rapid Hub",
+      zone_key: "lagos-mainland",
+      cold_chain_ready: false,
+      stock_accuracy: 0.83,
+      on_hand_units: 28,
+      reserved_units: 11,
+      inbound_units: 8,
+      hourly_demand: 2.8,
+      lead_time_hours: 8,
+      freshness_hours: 20,
+      critical_skus: Math.max(2, Math.round(benefits / 3)),
+    },
+    {
+      warehouse_id: 703,
+      label: "Airport Relay Node",
+      zone_key: "airport-corridor",
+      cold_chain_ready: true,
+      stock_accuracy: 0.9,
+      on_hand_units: 18,
+      reserved_units: 6,
+      inbound_units: 20,
+      hourly_demand: 1.6,
+      lead_time_hours: 10,
+      freshness_hours: 18,
+      critical_skus: 0,
+    },
+  ];
 }
 
 function buildPlanCacheKey(input: Partial<ConciergeIntent>) {

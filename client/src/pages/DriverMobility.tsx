@@ -4,6 +4,7 @@ import { CarFront } from "lucide-react";
 
 export default function DriverMobility() {
   const query = trpc.driverMobility.summary.useQuery({ limit: 8 });
+  const logisticsQuery = trpc.localCommerceSuperGateway.logisticsControlTower.useQuery({ city: "Lagos" });
   const data = query.data;
 
   return (
@@ -22,6 +23,7 @@ export default function DriverMobility() {
       highlights={[
         ...(data?.earning_streams ?? []),
         ...(data?.longcat?.rider_guidance ?? []),
+        logisticsQuery.data?.summary ?? "Loading logistics control-tower summary…",
       ]}
       sections={[
         {
@@ -46,6 +48,16 @@ export default function DriverMobility() {
           title: "Ranked Candidates",
           description: "Driver ranking summary derived from the embedded dispatch optimizer.",
           items: data?.longcat?.ranked_candidates ?? [],
+        },
+        {
+          title: "Logistics Control Tower",
+          description: "Supply-chain and warehouse resilience context that can change dispatch routing and ETA honesty.",
+          items: logisticsQuery.data
+            ? [
+                logisticsQuery.data.summary,
+                `Route: /logistics-control-tower · risk band ${logisticsQuery.data.network?.resilience_band ?? "unknown"} · critical nodes ${logisticsQuery.data.network?.critical_nodes ?? 0}`,
+              ]
+            : [],
         },
       ]}
     />

@@ -24,7 +24,7 @@ import {
 import { getFundsReconciliationSnapshot } from "./db";
 import { appendLongCatMessagingTurn, appendLongCatVoiceTurn, getLongCatCustomerMemory, startLongCatMessagingSession, startLongCatVoiceSession } from "./_core/longcatVoice";
 import { executeLongCatAction } from "./_core/longcatActions";
-import { buildLocalCommerceSuperGatewayWorkspace, planLocalCommerceConciergeIntent } from "./_core/localCommerceSuperGateway";
+import { buildLocalCommerceLogisticsControlTower, buildLocalCommerceSuperGatewayWorkspace, planLocalCommerceConciergeIntent } from "./_core/localCommerceSuperGateway";
 
 const listInput = z.object({ limit: z.number().min(1).max(25).optional() }).optional();
 
@@ -75,6 +75,9 @@ export const appRouter = router({
 
   localCommerceSuperGateway: router({
     workspace: workspaceReadProcedure.query(() => buildLocalCommerceSuperGatewayWorkspace()),
+    logisticsControlTower: workspaceReadProcedure
+      .input(z.object({ city: z.string().trim().min(2).max(128).optional(), forceRefresh: z.boolean().optional() }).optional())
+      .query(({ input }) => buildLocalCommerceLogisticsControlTower({ city: input?.city, forceRefresh: input?.forceRefresh })),
     plan: protectedProcedure
       .input(z.object({
         city: z.string().trim().min(2).max(128).optional(),

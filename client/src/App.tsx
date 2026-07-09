@@ -5,6 +5,7 @@ import { Link, Route, Switch } from "wouter";
 import DashboardLayout from "@/components/DashboardLayout";
 import Analytics from "@/pages/Analytics";
 import DriverMobility from "@/pages/DriverMobility";
+import LogisticsControlTower from "@/pages/LogisticsControlTower";
 import TablesideCommerce from "@/pages/TablesideCommerce";
 import WhiteLabelApps from "@/pages/WhiteLabelApps";
 import MerchantChannels from "@/pages/MerchantChannels";
@@ -41,6 +42,11 @@ const quickLinks = [
     title: "Analytics",
     href: "/analytics",
     description: "Lakehouse-backed marketplace analytics, supply hotspots, and operator response visibility.",
+  },
+  {
+    title: "Logistics Control Tower",
+    href: "/logistics-control-tower",
+    description: "Supply resilience, warehouse risk, middleware readiness, and operator shortcuts for live logistics execution.",
   },
 ];
 
@@ -360,6 +366,7 @@ export default function App() {
       <Route path="/dashboard" component={DashboardPage} />
       <Route path="/analytics" component={Analytics} />
       <Route path="/driver-mobility" component={DriverMobility} />
+      <Route path="/logistics-control-tower" component={LogisticsControlTower} />
       <Route path="/tableside-commerce" component={TablesideCommerce} />
       <Route path="/white-label-apps" component={WhiteLabelApps} />
       <Route path="/merchant-channels" component={MerchantChannels} />

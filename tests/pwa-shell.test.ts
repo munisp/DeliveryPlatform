@@ -22,6 +22,8 @@ describe("SwitchOS PWA shell assets", () => {
       expect.arrayContaining([
         expect.objectContaining({ name: "Portal", url: "/portal" }),
         expect.objectContaining({ name: "Analytics", url: "/analytics" }),
+        expect.objectContaining({ name: "Logistics Control Tower", url: "/logistics-control-tower" }),
+        expect.objectContaining({ name: "Merchant Supply", url: "/merchant-channels" }),
       ]),
     );
   });

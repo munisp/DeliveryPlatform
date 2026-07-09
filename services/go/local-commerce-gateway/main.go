@@ -50,6 +50,15 @@ type planResponse struct {
 	Metrics    map[string]any `json:"metrics"`
 }
 
+type logisticsControlTowerResponse struct {
+	Service         string         `json:"service"`
+	Status          string         `json:"status"`
+	RecentPlanCount int            `json:"recent_plan_count"`
+	Middleware      map[string]any `json:"middleware"`
+	Metrics         map[string]any `json:"metrics"`
+	Recommendations []string       `json:"recommendations"`
+}
+
 type envelope struct {
 	Source    string         `json:"source"`
 	Timestamp string         `json:"timestamp"`
@@ -74,6 +83,7 @@ func main() {
 	mux.HandleFunc("/health", service.healthHandler)
 	mux.HandleFunc("/plan", service.planHandler)
 	mux.HandleFunc("/middleware-status", service.middlewareStatusHandler)
+	mux.HandleFunc("/logistics-control-tower", service.logisticsControlTowerHandler)
 
 	addr := fmt.Sprintf("%s:%s", getenv("BIND_HOST", "127.0.0.1"), getenv("PORT", "8114"))
 	log.Printf("local commerce gateway listening on %s", addr)
@@ -119,6 +129,41 @@ func (s *gatewayService) healthHandler(w http.ResponseWriter, r *http.Request) {
 
 func (s *gatewayService) middlewareStatusHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.middlewareStatus())
+}
+
+func (s *gatewayService) logisticsControlTowerHandler(w http.ResponseWriter, r *http.Request) {
+	traceID := requestTraceID(r)
+	if err := s.requireInternalAccess(r); err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": err.Error(), "trace_id": traceID})
+		return
+	}
+
+	recentPlanCount, err := s.countRecentPlans(6 * time.Hour)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error(), "trace_id": traceID})
+		return
+	}
+	middleware := s.middlewareStatus()
+	recommendations := buildControlTowerRecommendations(middleware, recentPlanCount)
+	status := "healthy"
+	if recentPlanCount == 0 {
+		status = "watch"
+	}
+	if hasUnconfiguredCriticalMiddleware(middleware) {
+		status = "watch"
+	}
+
+	writeJSON(w, http.StatusOK, logisticsControlTowerResponse{
+		Service:         s.serviceName,
+		Status:          status,
+		RecentPlanCount: recentPlanCount,
+		Middleware:      middleware,
+		Metrics: map[string]any{
+			"trace_id": traceID,
+			"evaluated_window_hours": 6,
+		},
+		Recommendations: recommendations,
+	})
 }
 
 func (s *gatewayService) planHandler(w http.ResponseWriter, r *http.Request) {
@@ -229,6 +274,16 @@ func (s *gatewayService) storeEvent(eventID string, eventType string, request pl
 		VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7::jsonb)
 	`, eventID, eventType, nullable(request.CustomerSegment), nullable(request.City), string(categories), request.Request, string(body))
 	return err
+}
+
+func (s *gatewayService) countRecentPlans(window time.Duration) (int, error) {
+	var count int
+	err := s.db.QueryRow(`
+		SELECT COUNT(*)
+		FROM local_commerce_gateway_events
+		WHERE event_type = 'local_commerce_plan_created' AND created_at >= NOW() - ($1::text)::interval
+	`, fmt.Sprintf("%d seconds", int(window.Seconds()))).Scan(&count)
+	return count, err
 }
 
 type publishMetrics struct {
@@ -355,6 +410,41 @@ func (s *gatewayService) middlewareStatus() map[string]any {
 		"fluvio": map[string]any{"configured": getenv("FLUVIO_KAFKA_BROKERS", "") != "" && getenv("FLUVIO_LOCAL_COMMERCE_TOPIC", "") != ""},
 		"temporal": map[string]any{"configured": getenv("TEMPORAL_TASK_QUEUE", "") != "" || getenv("TEMPORAL_BRIDGE_URL", "") != ""},
 	}
+}
+
+func hasUnconfiguredCriticalMiddleware(middleware map[string]any) bool {
+	for _, key := range []string{"dapr", "temporal"} {
+		entry, ok := middleware[key].(map[string]any)
+		if !ok {
+			continue
+		}
+		configured, _ := entry["configured"].(bool)
+		if !configured {
+			return true
+		}
+	}
+	return false
+}
+
+func buildControlTowerRecommendations(middleware map[string]any, recentPlanCount int) []string {
+	recommendations := []string{}
+	if recentPlanCount == 0 {
+		recommendations = append(recommendations, "No recent local-commerce plans were recorded in the last six hours; verify upstream request flow and operator demand routing.")
+	}
+	for target, raw := range middleware {
+		entry, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		configured, _ := entry["configured"].(bool)
+		if !configured {
+			recommendations = append(recommendations, fmt.Sprintf("%s is not configured; middleware fan-out resilience remains limited until this target is enabled.", strings.ToUpper(target)))
+		}
+	}
+	if len(recommendations) == 0 {
+		recommendations = append(recommendations, "Planning event flow and critical middleware configuration look healthy for the current local stack.")
+	}
+	return recommendations
 }
 
 func (s *gatewayService) requireInternalAccess(r *http.Request) error {

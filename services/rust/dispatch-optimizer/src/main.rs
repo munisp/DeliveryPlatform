@@ -204,6 +204,44 @@ struct InstantRetailAllocationResponse {
     metrics: ResponseMetrics,
 }
 
+#[derive(Debug, Deserialize, Serialize, Clone)]
+struct SupplyShockZone {
+    zone_key: String,
+    open_orders: f64,
+    online_drivers: f64,
+    warehouse_fill_rate: f64,
+    avg_eta_minutes: f64,
+    cold_chain_gap: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct SupplyShockRebalanceRequest {
+    city: Option<String>,
+    shock_type: Option<String>,
+    priority_level: Option<String>,
+    zones: Vec<SupplyShockZone>,
+}
+
+#[derive(Debug, Serialize)]
+struct SupplyShockZoneRecommendation {
+    zone_key: String,
+    pressure_score: f64,
+    action: String,
+    recommended_driver_shift: i32,
+    recommended_inventory_shift_units: i32,
+    reason: String,
+}
+
+#[derive(Debug, Serialize)]
+struct SupplyShockRebalanceResponse {
+    strategy: String,
+    shock_type: String,
+    city: Option<String>,
+    highest_risk_zone: Option<String>,
+    recommendations: Vec<SupplyShockZoneRecommendation>,
+    metrics: ResponseMetrics,
+}
+
 #[derive(Debug, Serialize)]
 struct ResponseMetrics {
     trace_id: String,
@@ -266,6 +304,7 @@ async fn main() {
         .route("/eta", post(estimate_eta))
         .route("/voice-priority", post(voice_priority))
         .route("/instant-retail-allocation", post(instant_retail_allocation))
+        .route("/supply-shock-rebalance", post(supply_shock_rebalance))
         .with_state(Arc::new(AppState {
             service_name: "switchos-dispatch-optimizer".to_string(),
             database_url,
@@ -580,6 +619,99 @@ async fn voice_priority(
         score: round2(score),
         reason: reason.to_string(),
     }))
+}
+
+async fn supply_shock_rebalance(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(request): Json<SupplyShockRebalanceRequest>,
+) -> Result<Json<SupplyShockRebalanceResponse>, (StatusCode, String)> {
+    require_internal_access(&headers, &state)?;
+    let client = open_db(&state.database_url).await?;
+    let started_at = std::time::Instant::now();
+    let trace_id = headers
+        .get("x-trace-id")
+        .and_then(|value| value.to_str().ok())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| {
+            let millis = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_millis())
+                .unwrap_or(0);
+            format!("ssr-{}", millis)
+        });
+
+    if request.zones.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "at least one zone is required".to_string()));
+    }
+
+    let mut ranked = request
+        .zones
+        .iter()
+        .map(|zone| {
+            let demand_supply_gap = zone.open_orders / zone.online_drivers.max(1.0);
+            let eta_penalty = zone.avg_eta_minutes / 30.0;
+            let fill_penalty = (1.0 - zone.warehouse_fill_rate.clamp(0.0, 1.0)) * 2.0;
+            let cold_chain_penalty = if zone.cold_chain_gap.unwrap_or(false) { 0.8 } else { 0.0 };
+            let pressure_score = round2((demand_supply_gap * 2.8) + eta_penalty + fill_penalty + cold_chain_penalty);
+            let action = if pressure_score >= 5.5 {
+                "surge_rebalance_and_inventory_pull"
+            } else if pressure_score >= 3.5 {
+                "driver_shift_and_eta_protection"
+            } else {
+                "watch_and_hold"
+            };
+            let recommended_driver_shift = if pressure_score >= 5.5 {
+                4
+            } else if pressure_score >= 3.5 {
+                2
+            } else {
+                0
+            };
+            let recommended_inventory_shift_units = if zone.warehouse_fill_rate < 0.75 {
+                18
+            } else if zone.warehouse_fill_rate < 0.88 {
+                8
+            } else {
+                0
+            };
+            SupplyShockZoneRecommendation {
+                zone_key: zone.zone_key.clone(),
+                pressure_score,
+                action: action.to_string(),
+                recommended_driver_shift,
+                recommended_inventory_shift_units,
+                reason: format!(
+                    "{} has {:.1} open orders per online driver, {:.0} minute ETA pressure, and {:.0}% warehouse fill.",
+                    zone.zone_key,
+                    demand_supply_gap,
+                    zone.avg_eta_minutes,
+                    zone.warehouse_fill_rate.clamp(0.0, 1.0) * 100.0
+                ),
+            }
+        })
+        .collect::<Vec<_>>();
+
+    ranked.sort_by(|a, b| b.pressure_score.partial_cmp(&a.pressure_score).unwrap_or(Ordering::Equal));
+    let response = SupplyShockRebalanceResponse {
+        strategy: "zone_pressure_rebalance".to_string(),
+        shock_type: request.shock_type.clone().unwrap_or_else(|| "demand_spike".to_string()),
+        city: request.city.clone(),
+        highest_risk_zone: ranked.first().map(|item| item.zone_key.clone()),
+        recommendations: ranked,
+        metrics: ResponseMetrics {
+            trace_id,
+            duration_ms: round2(started_at.elapsed().as_secs_f64() * 1000.0),
+            payload: serde_json::json!({
+                "zone_count": request.zones.len(),
+                "priority_level": request.priority_level,
+            }),
+        },
+    };
+
+    persist_run(&client, "supply_shock_rebalance", &request, &response, None).await?;
+    Ok(Json(response))
 }
 
 async fn instant_retail_allocation(

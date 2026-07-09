@@ -10,7 +10,7 @@ from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
 
 INTERNAL_SERVICE_TOKEN = os.getenv("INTERNAL_SERVICE_TOKEN", "switchos-internal-dev-token-change-before-production")
-APP_VERSION = "2026-07-09-meituan-gap-wave"
+APP_VERSION = "2026-07-09-logistics-resilience-wave"
 TRACE_ENABLED = os.getenv("LOCAL_COMMERCE_ENABLE_TRACING", "true").strip().lower() == "true"
 
 app = FastAPI(title="switchos-retail-forecast", version=APP_VERSION)
@@ -48,6 +48,27 @@ class ForecastRequest(BaseModel):
 
 class BatchForecastRequest(BaseModel):
     requests: list[ForecastRequest] = Field(default_factory=list, min_length=1, max_length=100)
+
+
+class NetworkHealthNode(BaseModel):
+    warehouse_id: int = Field(ge=1)
+    label: str = Field(min_length=1, max_length=255)
+    zone_key: str | None = Field(default=None, max_length=128)
+    cold_chain_ready: bool = False
+    stock_accuracy: float = Field(default=0.92, ge=0, le=1)
+    on_hand_units: float = Field(default=0, ge=0)
+    reserved_units: float = Field(default=0, ge=0)
+    inbound_units: float = Field(default=0, ge=0)
+    hourly_demand: float = Field(default=0.25, ge=0)
+    lead_time_hours: float = Field(default=8, ge=1, le=240)
+    freshness_hours: float | None = Field(default=None, ge=1)
+    critical_skus: int = Field(default=0, ge=0)
+
+
+class NetworkHealthRequest(BaseModel):
+    city: str | None = Field(default=None, max_length=128)
+    planning_horizon_hours: int = Field(default=24, ge=4, le=168)
+    nodes: list[NetworkHealthNode] = Field(default_factory=list, min_length=1, max_length=100)
 
 
 class ForecastSkuResponse(BaseModel):
@@ -93,6 +114,41 @@ class BatchForecastResponse(BaseModel):
     metrics: ForecastMetrics
 
 
+class NetworkNodeHealthResponse(BaseModel):
+    warehouse_id: int
+    label: str
+    zone_key: str | None
+    stock_cover_hours: float
+    recommended_restock_units: float
+    risk_band: str
+    cold_chain_ready: bool
+    stock_accuracy: float
+    critical_skus: int
+    narrative: str
+
+
+class NetworkHealthMetrics(BaseModel):
+    trace_id: str
+    request_duration_ms: float
+    node_count: int
+    payload_chars: int
+    critical_nodes: int
+    constrained_nodes: int
+
+
+class NetworkHealthResponse(BaseModel):
+    service: str
+    generated_at: datetime
+    city: str | None
+    planning_horizon_hours: int
+    resilience_band: str
+    constrained_nodes: int
+    critical_nodes: int
+    nodes: list[NetworkNodeHealthResponse]
+    summary: str
+    metrics: NetworkHealthMetrics
+
+
 class HealthResponse(BaseModel):
     status: str
     service: str
@@ -108,7 +164,7 @@ def health() -> HealthResponse:
         service="switchos-retail-forecast",
         version=APP_VERSION,
         ready=True,
-        forecast_modes=["ewma", "lead-time-buffer", "freshness-aware", "batch"],
+        forecast_modes=["ewma", "lead-time-buffer", "freshness-aware", "batch", "network-resilience"],
     )
 
 
@@ -153,6 +209,49 @@ def forecast_batch(request: BatchForecastRequest, x_internal_service_token: str 
 @app.post("/restock-plan", response_model=ForecastResponse)
 def restock_plan(request: ForecastRequest, x_internal_service_token: str | None = Header(default=None), x_trace_id: str | None = Header(default=None)) -> ForecastResponse:
     return forecast(request, x_internal_service_token, x_trace_id)
+
+
+@app.post("/network-health", response_model=NetworkHealthResponse)
+def network_health(request: NetworkHealthRequest, x_internal_service_token: str | None = Header(default=None), x_trace_id: str | None = Header(default=None)) -> NetworkHealthResponse:
+    _require_internal_token(x_internal_service_token)
+    trace_id = (x_trace_id or _trace_id()).strip()
+    started = time.perf_counter()
+
+    responses = [_score_network_node(node, request.planning_horizon_hours) for node in request.nodes]
+    critical_nodes = sum(1 for node in responses if node.risk_band == "critical")
+    constrained_nodes = sum(1 for node in responses if node.risk_band in {"critical", "constrained"})
+    if critical_nodes > 0:
+        resilience_band = "fragile"
+    elif constrained_nodes >= max(2, len(responses) // 2):
+        resilience_band = "watch"
+    else:
+        resilience_band = "healthy"
+
+    summary = (
+        f"Evaluated {len(responses)} logistics nodes over {request.planning_horizon_hours}h; "
+        f"{critical_nodes} are critical and {constrained_nodes} require restock or reroute attention."
+    )
+    response = NetworkHealthResponse(
+        service="switchos-retail-forecast",
+        generated_at=datetime.now(timezone.utc),
+        city=request.city,
+        planning_horizon_hours=request.planning_horizon_hours,
+        resilience_band=resilience_band,
+        constrained_nodes=constrained_nodes,
+        critical_nodes=critical_nodes,
+        nodes=responses,
+        summary=summary,
+        metrics=NetworkHealthMetrics(
+            trace_id=trace_id,
+            request_duration_ms=round((time.perf_counter() - started) * 1000, 2),
+            node_count=len(request.nodes),
+            payload_chars=len(request.model_dump_json()),
+            critical_nodes=critical_nodes,
+            constrained_nodes=constrained_nodes,
+        ),
+    )
+    _trace("network_health.complete", response.metrics.model_dump())
+    return response
 
 
 def _require_internal_token(provided: str | None) -> None:
@@ -255,6 +354,46 @@ def _forecast_sku(sku: ForecastSku, planning_horizon_hours: int) -> ForecastSkuR
         stockout_risk=stockout_risk,
         freshness_watchout=freshness_watchout,
         narrative=" ".join(narrative_parts),
+    )
+
+
+def _score_network_node(node: NetworkHealthNode, planning_horizon_hours: int) -> NetworkNodeHealthResponse:
+    effective_velocity = max(node.hourly_demand, 0.05)
+    net_available = max(node.on_hand_units - node.reserved_units + node.inbound_units, 0)
+    stock_cover_hours = net_available / effective_velocity if effective_velocity > 0 else float("inf")
+    reorder_point_units = effective_velocity * node.lead_time_hours * 1.18
+    horizon_need_units = effective_velocity * planning_horizon_hours
+    recommended_restock_units = max(reorder_point_units + horizon_need_units - net_available, 0)
+
+    if stock_cover_hours < min(node.lead_time_hours, 6) or node.stock_accuracy < 0.75:
+        risk_band = "critical"
+    elif stock_cover_hours < planning_horizon_hours / 2 or node.critical_skus >= 3:
+        risk_band = "constrained"
+    elif stock_cover_hours < planning_horizon_hours or node.stock_accuracy < 0.9:
+        risk_band = "watch"
+    else:
+        risk_band = "healthy"
+
+    narrative = (
+        f"{node.label} covers roughly {stock_cover_hours:.1f} hours at {effective_velocity:.2f} units/hour, "
+        f"with stock accuracy at {node.stock_accuracy:.0%}."
+    )
+    if recommended_restock_units > 0:
+        narrative += f" Recommended restock is {recommended_restock_units:.1f} units to stabilize the next replenishment cycle."
+    if not node.cold_chain_ready:
+        narrative += " Cold-chain unavailable, so regulated or chilled baskets should be rerouted away from this node."
+
+    return NetworkNodeHealthResponse(
+        warehouse_id=node.warehouse_id,
+        label=node.label,
+        zone_key=node.zone_key,
+        stock_cover_hours=round(stock_cover_hours if math.isfinite(stock_cover_hours) else 9999, 2),
+        recommended_restock_units=round(recommended_restock_units, 2),
+        risk_band=risk_band,
+        cold_chain_ready=node.cold_chain_ready,
+        stock_accuracy=round(node.stock_accuracy, 3),
+        critical_skus=node.critical_skus,
+        narrative=narrative,
     )
 
 

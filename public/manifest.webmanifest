@@ -32,6 +32,16 @@
       "name": "Analytics",
       "short_name": "Analytics",
       "url": "/analytics"
+    },
+    {
+      "name": "Logistics Control Tower",
+      "short_name": "Logistics",
+      "url": "/logistics-control-tower"
+    },
+    {
+      "name": "Merchant Supply",
+      "short_name": "Supply",
+      "url": "/merchant-channels"
     }
   ]
 }
