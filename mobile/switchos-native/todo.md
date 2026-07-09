@@ -1,0 +1,94 @@
+# Project TODO
+
+- [x] Mobile app branding and app icon for SwitchOS Native Mobile
+- [x] Theme system and visual language aligned to logistics-first mobile operations
+- [x] Tab navigation shell for Home, Logistics, Dispatch, Growth, and Queue
+- [x] Offline-first local persistence layer for cached workspace data
+- [x] Connectivity awareness and sync-state banner system
+- [x] Local outbox for queued actions and retry handling
+- [x] Home Command Center screen
+- [x] Logistics Control Tower screen
+- [x] Dispatch Resilience screen
+- [x] Inventory Truth screen
+- [x] Procurement Planner screen
+- [x] Merchant Growth Console screen
+- [x] Loyalty Intervention screen
+- [x] Alerts and notifications screen
+- [x] Settings and connectivity diagnostics screen
+- [x] Shared mobile data client for SwitchOS backend integration
+- [x] Action workflows for replenishment, loyalty intervention, and campaign execution
+- [x] Mobile-safe loading, error, and empty states across key screens
+- [x] Offline-capable record detail sheets and action confirmations
+- [x] Validation tests for navigation, manifest, and offline workflow behavior
+- [x] Final checkpoint, documentation, and GitHub push
+- [x] Dedicated inventory record-detail sheet with confirmation modal
+- [x] Dedicated dispatch record-detail sheet with confirmation modal
+- [x] Dedicated merchant record-detail sheet with confirmation modal
+- [x] Real backend-powered snapshot hydration from SwitchOS services
+- [x] Snapshot cards wired to live operational payloads instead of probe-only health data
+- [x] Native visual refinement for spacing, card hierarchy, and motion animation
+- [x] Quick action composer with context-aware defaults for inventory, dispatch, and merchant workflows
+- [x] Bulk multi-select actions for inventory nodes and merchant records
+- [x] Swipe actions on operational cards for fast queue, escalate, and bookmark behavior
+- [x] Favorites and pinned records for frequently monitored warehouses, zones, and merchants
+- [x] Search and filter system across logistics, dispatch, growth, and queue data
+- [x] Sort controls for risk, freshness, region, and queue priority
+- [x] Dedicated procurement detail sheet with confirmation flow
+- [x] Dedicated loyalty detail sheet with confirmation flow
+- [x] Structured operator note entry with saved note templates
+- [x] Photo attachment support for audit, dispatch, and merchant action records
+- [x] Offline draft persistence for in-progress forms and notes
+- [x] Outbox priority levels and manual priority override
+- [x] Scheduled retry strategy with exponential backoff metadata in the outbox
+- [x] Conflict detection and resolution UI for actions retried against changed live records
+- [x] Snapshot freshness indicators per domain card and per record
+- [x] Stale-data fallback banners with explicit cache age messaging
+- [x] Manual per-service sync controls in diagnostics
+- [x] Pull-to-refresh completion feedback with summary delta messaging
+- [x] Last-known-good snapshot restore action after failed refresh attempts
+- [x] Empty-state recovery actions that deep-link users to required settings or workflows
+- [x] Cross-tab operational KPI strip with critical counts and trend indicators
+- [x] Mini trend sparkline visuals for inventory risk, dispatch pressure, and merchant momentum
+- [x] Region switcher with cached regional workspaces
+- [x] Endpoint preset profiles for local, staging, and production environments
+- [x] First-run onboarding flow for field operators
+- [x] Guided connectivity setup and endpoint validation wizard
+- [x] Accessibility pass for touch targets, contrast, and dynamic text resilience
+- [x] Haptic feedback tuning for key confirmations, warnings, and completed sync actions
+- [x] Native loading skeletons and progressive reveal states across all tabs
+- [x] Expanded automated tests for filters, queue priority, snapshot freshness, and detail flow behavior
+- [x] AI-powered natural-language smart search for inventory and dispatch records
+- [x] User-controlled dark mode theme toggle with adaptive cards, charts, and sparkline analytics
+- [x] Photo evidence annotation with drawing and text overlays on device
+- [x] Define next 20 mobile enhancements for the following implementation pass
+- [x] Push updated SwitchOS native codebase to GitHub
+- [x] Offline semantic fallback for smart search when live AI search is unavailable
+- [ ] Saved smart-search prompts and recent query history
+- [x] Search result explanation chips showing why a record matched
+- [x] Theme preference persistence and system-follow option
+- [x] Theme-aware annotation colors and contrast-safe markup presets
+- [x] Annotation undo, clear, and save-as-copy controls
+- [x] Dispatch photo evidence capture and annotation support
+- [x] Smart-search result actions that deep-link directly into detail sheets
+- [x] Search indexing and ranking helper for local inventory and dispatch summaries
+- [x] Queue-aware AI search state messaging for offline and degraded modes
+- [ ] Dark-mode refinement for onboarding, diagnostics, and queue screens
+- [ ] Theme-aware sparkline stroke and fill adaptation
+- [x] Annotation metadata stored with queued actions and drafts
+- [ ] Search analytics card for recent query volume and successful matches
+- [ ] Expanded automated tests for theme toggling, smart search, and annotation state
+- [x] Git remote verification, commit hygiene, and repository push workflow
+- [x] Post-push checkpoint alignment and version tracking
+- [ ] Search safety and prompt-shaping guardrails for operator queries
+- [x] Natural-language query suggestions seeded from current operational state
+- [ ] Smart-search filtering by region, freshness, and severity inside results
+- [x] Inspect open GitHub pull requests for merge readiness
+- [x] Summarize mergeable pull requests and blockers
+- [ ] Confirm merge scope with user before executing merges
+- [ ] Merge approved pull requests and verify repository state
+- [ ] Reconcile unrelated Git histories between repository main and the uploaded mobile branch
+- [ ] Build a merge-compatible main-branch update path that preserves existing GitHub history
+- [ ] Verify main branch after history reconciliation merge
+- [ ] Integrate the SwitchOS mobile app into the repository main branch under a dedicated subdirectory
+- [ ] Preserve existing main-branch project files while adding the mobile app under a separate folder
+- [ ] Push the reconciled subdirectory integration to GitHub main and verify the result
