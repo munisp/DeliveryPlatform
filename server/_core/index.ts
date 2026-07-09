@@ -4,7 +4,7 @@ import { createHTTPHandler } from "@trpc/server/adapters/standalone";
 import { randomUUID } from "crypto";
 
 import { appRouter } from "../routers";
-import { appendLongCatTelephonyTranscript, startLongCatTelephonyIngressSession } from "./longcatVoice";
+import { appendLongCatTelephonyTranscript, closeLongCatTelephonyIngressSession, startLongCatTelephonyIngressSession } from "./longcatVoice";
 import { COOKIE_NAME } from "../../shared/const";
 import { ENV } from "./env";
 import { getCookieOptions } from "./cookies";
@@ -457,6 +457,23 @@ app.post("/api/internal/longcat/voice/transcript", rateLimit(120), async (req, r
   } catch (error) {
     console.error("[SwitchOS] Failed to append LongCat telephony transcript", error);
     res.status(500).json({ error: error instanceof Error ? error.message : "longcat_transcript_failed" });
+  }
+});
+
+app.post("/api/internal/longcat/voice/close", rateLimit(60), async (req, res) => {
+  if (!requireInternalServiceAccess(req, res)) return;
+  try {
+    const payload = await closeLongCatTelephonyIngressSession({
+      sessionId: `${req.body?.sessionId ?? ""}`.trim(),
+      externalCallId: `${req.body?.externalCallId ?? ""}`.trim(),
+      status: req.body?.status === "failed" || req.body?.status === "abandoned" ? req.body.status : "completed",
+      reason: typeof req.body?.reason === "string" ? req.body.reason : null,
+      metadata: req.body?.metadata && typeof req.body.metadata === "object" ? req.body.metadata : undefined,
+    });
+    res.status(200).json(payload);
+  } catch (error) {
+    console.error("[SwitchOS] Failed to close LongCat telephony session", error);
+    res.status(500).json({ error: error instanceof Error ? error.message : "longcat_close_failed" });
   }
 });
 

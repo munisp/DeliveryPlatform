@@ -57,6 +57,14 @@ type TranscriptRequest struct {
 	Metadata          map[string]any `json:"metadata,omitempty"`
 }
 
+type CloseRequest struct {
+	SessionID      string         `json:"sessionId"`
+	ExternalCallID string         `json:"externalCallId"`
+	Status         string         `json:"status,omitempty"`
+	Reason         string         `json:"reason,omitempty"`
+	Metadata       map[string]any `json:"metadata,omitempty"`
+}
+
 type GatewaySpeechResult struct {
 	Requested    bool    `json:"requested"`
 	Synthesized  bool    `json:"synthesized"`
@@ -257,22 +265,48 @@ func (s *GatewayService) handleAudioSocketConnection(conn net.Conn) {
 		ExternalCallID: fmt.Sprintf("audiosocket-%d", connectionID),
 		SampleRateHz:   16000,
 	}
+	closeStatus := "completed"
+	closeReason := "audiosocket_disconnect"
+	defer func() {
+		if strings.TrimSpace(state.SessionID) == "" {
+			return
+		}
+		if err := s.closeTelephonySession(CloseRequest{
+			SessionID:      state.SessionID,
+			ExternalCallID: state.ExternalCallID,
+			Status:         closeStatus,
+			Reason:         closeReason,
+			Metadata: map[string]any{
+				"transport":   "audiosocket",
+				"chunk_count": state.ChunkIndex,
+			},
+		}); err != nil {
+			log.Printf("[LongCat Voice Gateway] Failed to close AudioSocket session %s: %v", state.SessionID, err)
+		}
+	}()
 
 	for {
 		_ = conn.SetReadDeadline(time.Now().Add(60 * time.Second))
 		frame, err := readAudioSocketFrame(conn)
 		if err != nil {
 			if err != io.EOF {
+				closeStatus = "failed"
+				closeReason = fmt.Sprintf("audiosocket_error:%v", err)
 				log.Printf("[LongCat Voice Gateway] AudioSocket connection error: %v", err)
 			}
 			return
 		}
 
-		s.handleAudioSocketFrame(state, frame)
+		if err := s.handleAudioSocketFrame(state, frame); err != nil {
+			closeStatus = "failed"
+			closeReason = err.Error()
+			log.Printf("[LongCat Voice Gateway] AudioSocket frame handling failed: %v", err)
+			return
+		}
 	}
 }
 
-func (s *GatewayService) handleAudioSocketFrame(state *AudioSocketStreamState, frame AudioSocketFrame) {
+func (s *GatewayService) handleAudioSocketFrame(state *AudioSocketStreamState, frame AudioSocketFrame) error {
 	switch {
 	case frame.PacketType == audioSocketTypeUUID:
 		candidate := strings.TrimSpace(string(frame.Payload))
@@ -280,24 +314,24 @@ func (s *GatewayService) handleAudioSocketFrame(state *AudioSocketStreamState, f
 			state.ExternalCallID = sanitizeExternalCallID(candidate)
 		}
 		if state.SessionID == "" {
-			if sessionID, err := s.bootstrapTelephonySession(state); err == nil {
-				state.SessionID = sessionID
-			} else {
-				log.Printf("[LongCat Voice Gateway] Failed to bootstrap AudioSocket session: %v", err)
+			sessionID, err := s.bootstrapTelephonySession(state)
+			if err != nil {
+				return fmt.Errorf("bootstrap audiosocket session: %w", err)
 			}
+			state.SessionID = sessionID
 		}
+		return nil
 	case frame.PacketType == audioSocketTypeDTMF:
 		if state.SessionID == "" {
-			if sessionID, err := s.bootstrapTelephonySession(state); err == nil {
-				state.SessionID = sessionID
-			} else {
-				log.Printf("[LongCat Voice Gateway] Failed to bootstrap DTMF session: %v", err)
-				return
+			sessionID, err := s.bootstrapTelephonySession(state)
+			if err != nil {
+				return fmt.Errorf("bootstrap dtmf session: %w", err)
 			}
+			state.SessionID = sessionID
 		}
 		digits := strings.TrimSpace(string(frame.Payload))
 		if digits == "" {
-			return
+			return nil
 		}
 		_, err := s.forwardTranscript(TranscriptRequest{
 			SessionID:         state.SessionID,
@@ -312,26 +346,25 @@ func (s *GatewayService) handleAudioSocketFrame(state *AudioSocketStreamState, f
 			},
 		})
 		if err != nil {
-			log.Printf("[LongCat Voice Gateway] Failed to forward DTMF transcript: %v", err)
+			return fmt.Errorf("forward dtmf transcript: %w", err)
 		}
+		return nil
 	case isPCMFrameType(frame.PacketType):
 		if state.SessionID == "" {
-			if sessionID, err := s.bootstrapTelephonySession(state); err == nil {
-				state.SessionID = sessionID
-			} else {
-				log.Printf("[LongCat Voice Gateway] Failed to bootstrap PCM session: %v", err)
-				return
+			sessionID, err := s.bootstrapTelephonySession(state)
+			if err != nil {
+				return fmt.Errorf("bootstrap pcm session: %w", err)
 			}
+			state.SessionID = sessionID
 		}
 		state.SampleRateHz = sampleRateForPacket(frame.PacketType)
 		state.ChunkIndex++
 		result, err := s.sendAudioChunkForTranscription(state, frame)
 		if err != nil {
-			log.Printf("[LongCat Voice Gateway] Failed to transcribe audio chunk: %v", err)
-			return
+			return fmt.Errorf("transcribe audio chunk: %w", err)
 		}
 		if strings.TrimSpace(result.Transcript) == "" {
-			return
+			return nil
 		}
 		_, err = s.forwardTranscript(TranscriptRequest{
 			SessionID:         state.SessionID,
@@ -349,8 +382,11 @@ func (s *GatewayService) handleAudioSocketFrame(state *AudioSocketStreamState, f
 			},
 		})
 		if err != nil {
-			log.Printf("[LongCat Voice Gateway] Failed to forward transcript: %v", err)
+			return fmt.Errorf("forward transcript: %w", err)
 		}
+		return nil
+	default:
+		return nil
 	}
 }
 
@@ -412,6 +448,14 @@ func (s *GatewayService) forwardTranscript(req TranscriptRequest) (*GatewayTrans
 		return nil, err
 	}
 	return &result, nil
+}
+
+func (s *GatewayService) closeTelephonySession(req CloseRequest) error {
+	if strings.TrimSpace(req.SessionID) == "" || strings.TrimSpace(req.ExternalCallID) == "" {
+		return nil
+	}
+	_, _, err := s.forwardJSON(http.MethodPost, s.longcatCoreURL+"/api/internal/longcat/voice/close", req)
+	return err
 }
 
 func (s *GatewayService) requireInternalAccess(w http.ResponseWriter, r *http.Request) bool {

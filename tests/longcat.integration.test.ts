@@ -5,6 +5,7 @@ import {
   buildDispatchIntelligence,
   buildMerchantConsultant,
 } from "../server/_core/longcat";
+import { shouldAllowAutomaticCallbackDispatch } from "../server/_core/longcatVoice";
 
 describe("LongCat local AI integration", () => {
   beforeEach(() => {
@@ -114,5 +115,25 @@ describe("LongCat local AI integration", () => {
     expect(result.dispatch_brief).toMatch(/Rebalance airport-ready supply/i);
     expect(result.ranked_candidates.length).toBeGreaterThan(0);
     expect(result.risk_flags.join(" ")).toMatch(/Airport reserve|online driver/i);
+  });
+
+  it("requires explicit customer or operator confirmation before automatic callback dispatch", () => {
+    expect(shouldAllowAutomaticCallbackDispatch({
+      speaker: "customer",
+      utterance: "The merchant should probably confirm this later",
+      metadata: {},
+    })).toBe(false);
+
+    expect(shouldAllowAutomaticCallbackDispatch({
+      speaker: "customer",
+      utterance: "Please call me back when the item is available",
+      metadata: {},
+    })).toBe(true);
+
+    expect(shouldAllowAutomaticCallbackDispatch({
+      speaker: "agent",
+      utterance: "Need follow-up",
+      metadata: { allow_callback_dispatch: true },
+    })).toBe(true);
   });
 });

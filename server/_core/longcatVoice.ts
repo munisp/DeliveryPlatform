@@ -93,6 +93,15 @@ export type LongCatTelephonyTurnResult = LongCatVoiceTurnResult & {
   speech: LongCatSpeechSynthesisResult;
 };
 
+export type LongCatTelephonyCloseResult = {
+  session_id: string;
+  external_call_id: string;
+  status: string;
+  closed_at: string;
+  ingress_closed: boolean;
+  close_reason: string;
+};
+
 type RedisCacheClient = {
   connect(): Promise<void>;
   get(key: string): Promise<string | null>;
@@ -1095,6 +1104,94 @@ export async function appendLongCatTelephonyTranscript(input: AppendTelephonyTra
   };
 }
 
+export async function closeLongCatTelephonyIngressSession(input: {
+  sessionId: string;
+  externalCallId: string;
+  status?: "completed" | "failed" | "abandoned";
+  reason?: string | null;
+  metadata?: Record<string, unknown>;
+}): Promise<LongCatTelephonyCloseResult> {
+  await ensureSchema();
+  const db = getPool();
+  const closeReason = input.reason?.trim() || "telephony_session_closed";
+  const normalizedStatus = input.status === "failed" || input.status === "abandoned" ? input.status : "completed";
+
+  const ingressResult = await db.query(
+    `UPDATE longcat_voice_ingress_sessions
+     SET status = $3,
+         metadata = COALESCE(metadata, '{}'::jsonb) || $4::jsonb,
+         stream_last_activity_at = NOW(),
+         updated_at = NOW()
+     WHERE session_id = $1 AND external_call_id = $2
+     RETURNING ingress_id`,
+    [
+      input.sessionId,
+      input.externalCallId,
+      normalizedStatus,
+      JSON.stringify({
+        ...(input.metadata ?? {}),
+        close_reason: closeReason,
+        closed_at: new Date().toISOString(),
+      }),
+    ],
+  );
+
+  await db.query(
+    `UPDATE longcat_voice_sessions
+     SET status = CASE WHEN status = 'closed' THEN status ELSE $2 END,
+         closed_at = COALESCE(closed_at, NOW()),
+         last_turn_at = NOW(),
+         current_context = COALESCE(current_context, '{}'::jsonb) || jsonb_build_object('close_reason', $3, 'closed_via', 'telephony_ingress')
+     WHERE session_id = $1`,
+    [input.sessionId, normalizedStatus, closeReason],
+  );
+
+  await recordSpeechEvent({
+    sessionId: input.sessionId,
+    direction: "ingress",
+    engine: ENV.longcatSpeechSttEngine,
+    eventType: "telephony_session_closed",
+    degradedMode: false,
+    metadata: {
+      external_call_id: input.externalCallId,
+      status: normalizedStatus,
+      reason: closeReason,
+      ...(input.metadata ?? {}),
+    },
+  });
+
+  await ingestLakehouse("longcat_voice_ingress_lifecycle", [{
+    session_id: input.sessionId,
+    external_call_id: input.externalCallId,
+    status: normalizedStatus,
+    close_reason: closeReason,
+    timestamp: new Date().toISOString(),
+    created_at: new Date().toISOString(),
+    date: new Date().toISOString().slice(0, 10),
+  }]);
+
+  await recordOperationalEvent({
+    eventType: "longcat.voice.telephony_ingress_closed",
+    outcome: normalizedStatus === "failed" ? "failure" : "success",
+    payload: {
+      sessionId: input.sessionId,
+      externalCallId: input.externalCallId,
+      status: normalizedStatus,
+      reason: closeReason,
+      ingressClosed: ingressResult.rowCount > 0,
+    },
+  });
+
+  return {
+    session_id: input.sessionId,
+    external_call_id: input.externalCallId,
+    status: normalizedStatus,
+    closed_at: new Date().toISOString(),
+    ingress_closed: ingressResult.rowCount > 0,
+    close_reason: closeReason,
+  };
+}
+
 export async function appendLongCatVoiceTurn(input: VoiceTurnInput): Promise<LongCatVoiceTurnResult> {
   await ensureSchema();
   const db = getPool();
@@ -1149,8 +1246,14 @@ export async function appendLongCatVoiceTurn(input: VoiceTurnInput): Promise<Lon
     return buildFallbackNextActions(detectedIntent, memory);
   })();
 
+  const explicitCallbackRequest = /call me back|callback|call back|please ring|ring me|phone me/i.test(input.utterance);
   const callbackRequested = Boolean(generated?.callback_requested)
     || /call me back|callback|call back|merchant confirm/i.test(input.utterance);
+  const callbackDispatchAllowed = shouldAllowAutomaticCallbackDispatch({
+    speaker: input.speaker,
+    utterance: input.utterance,
+    metadata: input.metadata,
+  });
 
   const mergedPreferenceTags = [...new Set([...memory.preference_tags, ...toStringList(generated?.preference_tags)])].slice(0, 8);
   const mergedAccessibilityFlags = [...new Set([...memory.accessibility_flags, ...toStringList(generated?.accessibility_flags)])].slice(0, 8);
@@ -1203,9 +1306,18 @@ export async function appendLongCatVoiceTurn(input: VoiceTurnInput): Promise<Lon
     [input.sessionId, detectedIntent, JSON.stringify(nextActions)],
   );
 
-  const callbackDispatch = callbackRequested
+  if (callbackRequested && !callbackDispatchAllowed && !nextActions.some((action) => /confirm callback/i.test(action))) {
+    nextActions.unshift("Confirm callback consent explicitly before dispatching an outbound voice escalation.");
+  }
+
+  const callbackDispatch = callbackRequested && callbackDispatchAllowed
     ? await requestVoiceCallback(input.sessionId, updatedMemory, detectedIntent || "callback_requested")
-    : { attempted: false, accepted: false, request_id: null, error: null };
+    : {
+        attempted: false,
+        accepted: false,
+        request_id: null,
+        error: callbackRequested && !callbackDispatchAllowed ? "operator_confirmation_required" : null,
+      };
 
   await ingestLakehouse("longcat_voice_turns", [{
     turn_id: turnId,
@@ -1240,6 +1352,16 @@ export async function appendLongCatVoiceTurn(input: VoiceTurnInput): Promise<Lon
     callback_dispatch: callbackDispatch,
     updated_memory: updatedMemory,
   };
+}
+
+export function shouldAllowAutomaticCallbackDispatch(input: {
+  speaker: VoiceTurnInput["speaker"];
+  utterance: string;
+  metadata?: Record<string, unknown>;
+}) {
+  return /call me back|callback|call back|please ring|ring me|phone me/i.test(input.utterance)
+    || Boolean(input.metadata?.allow_callback_dispatch)
+    || input.speaker === "system";
 }
 
 function detectIntent(utterance: string) {
