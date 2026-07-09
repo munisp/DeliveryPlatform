@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import importlib.util
 import json
 import os
 import shutil
@@ -24,6 +25,8 @@ ALLOWED_ORIGINS = [
 INTERNAL_SERVICE_TOKEN = os.getenv("INTERNAL_SERVICE_TOKEN", "switchos-internal-dev-token-change-before-production")
 PIPER_BIN = os.getenv("PIPER_BIN", "")
 PIPER_MODEL = os.getenv("PIPER_MODEL", "")
+STT_MODEL_PATH = os.getenv("LONGCAT_SPEECH_STT_MODEL", "").strip() or os.getenv("WHISPER_MODEL", "").strip()
+WHISPER_CPP_BIN = os.getenv("WHISPER_CPP_BIN", "").strip()
 STREAM_SESSION_TIMEOUT_SECONDS = int(os.getenv("LONGCAT_SPEECH_STREAM_TIMEOUT_SECONDS", "30"))
 
 app = FastAPI(
@@ -54,12 +57,19 @@ async def require_websocket_internal_access(websocket: WebSocket) -> None:
 
 @app.get("/health")
 async def health() -> dict[str, Any]:
+    stt_runtime = resolve_stt_runtime()
+    tts_runtime = resolve_tts_runtime()
+    overall_status = "healthy" if stt_runtime["ready"] or tts_runtime["ready"] else "degraded"
     return {
-        "status": "healthy",
+        "status": overall_status,
         "service": "longcat-speech-runtime",
-        "stt_engine": os.getenv("LONGCAT_SPEECH_STT_ENGINE", "faster-whisper"),
-        "tts_engine": os.getenv("LONGCAT_SPEECH_TTS_ENGINE", "piper"),
-        "piper_available": bool(resolve_piper_binary()),
+        "stt_engine": stt_runtime["engine"],
+        "tts_engine": tts_runtime["engine"],
+        "stt_ready": stt_runtime["ready"],
+        "tts_ready": tts_runtime["ready"],
+        "stt_runtime": stt_runtime,
+        "tts_runtime": tts_runtime,
+        "stream_timeout_seconds": STREAM_SESSION_TIMEOUT_SECONDS,
         "streaming_endpoints": ["/stt/transcribe", "/stt/stream-chunk", "/ws/stt", "/tts/synthesize", "/ws/tts"],
     }
 
@@ -121,8 +131,8 @@ async def websocket_tts(websocket: WebSocket) -> None:
 def build_transcription_result(payload: dict[str, Any]) -> dict[str, Any]:
     started = time.time()
     transcript = str(payload.get("transcript_hint") or payload.get("transcript") or "").strip()
-    degraded_mode = False
-    engine = str(payload.get("engine") or os.getenv("LONGCAT_SPEECH_STT_ENGINE", "faster-whisper"))
+    stt_runtime = resolve_stt_runtime(str(payload.get("engine") or "").strip() or None)
+    engine = str(stt_runtime["engine"])
     final = bool(payload.get("final", True))
 
     if transcript:
@@ -131,19 +141,22 @@ def build_transcription_result(payload: dict[str, Any]) -> dict[str, Any]:
             "final": final,
             "engine": engine,
             "latency_ms": int((time.time() - started) * 1000),
-            "degraded_mode": degraded_mode,
+            "degraded_mode": False,
+            "engine_ready": stt_runtime["ready"],
+            "degraded_reason": None,
             "stream_timeout_seconds": STREAM_SESSION_TIMEOUT_SECONDS,
         }
 
-    degraded_mode = True
     return {
         "transcript": "",
         "final": final,
         "engine": engine,
         "latency_ms": int((time.time() - started) * 1000),
-        "degraded_mode": degraded_mode,
+        "degraded_mode": True,
+        "engine_ready": stt_runtime["ready"],
+        "degraded_reason": stt_runtime["reason"],
         "stream_timeout_seconds": STREAM_SESSION_TIMEOUT_SECONDS,
-        "error": "No streaming STT backend is installed in this sandbox. Provide transcript_hint or install a faster-whisper-compatible runtime.",
+        "error": f"Streaming STT engine is not ready: {stt_runtime['reason']}. Provide transcript_hint or install a compatible self-hosted runtime.",
     }
 
 
@@ -153,7 +166,8 @@ def synthesize_payload(payload: dict[str, Any]) -> dict[str, Any]:
     if not text:
         raise HTTPException(status_code=400, detail="text is required")
 
-    engine = str(payload.get("engine") or os.getenv("LONGCAT_SPEECH_TTS_ENGINE", "piper"))
+    tts_runtime = resolve_tts_runtime(str(payload.get("engine") or "").strip() or None)
+    engine = str(tts_runtime["engine"])
     piper_bin = resolve_piper_binary()
     if piper_bin and PIPER_MODEL:
         try:
@@ -167,6 +181,8 @@ def synthesize_payload(payload: dict[str, Any]) -> dict[str, Any]:
                 "playback_text": text,
                 "latency_ms": int((time.time() - started) * 1000),
                 "degraded_mode": False,
+                "engine_ready": True,
+                "degraded_reason": None,
             }
         except Exception as error:  # noqa: BLE001
             return {
@@ -178,6 +194,8 @@ def synthesize_payload(payload: dict[str, Any]) -> dict[str, Any]:
                 "playback_text": text,
                 "latency_ms": int((time.time() - started) * 1000),
                 "degraded_mode": True,
+                "engine_ready": False,
+                "degraded_reason": str(error),
                 "error": str(error),
             }
 
@@ -190,7 +208,45 @@ def synthesize_payload(payload: dict[str, Any]) -> dict[str, Any]:
         "playback_text": text,
         "latency_ms": int((time.time() - started) * 1000),
         "degraded_mode": True,
+        "engine_ready": tts_runtime["ready"],
+        "degraded_reason": tts_runtime["reason"],
         "error": "Piper binary or model is not configured. Install Piper and set PIPER_BIN and PIPER_MODEL for real self-hosted TTS.",
+    }
+
+
+def resolve_stt_runtime(engine_override: str | None = None) -> dict[str, Any]:
+    engine = (engine_override or os.getenv("LONGCAT_SPEECH_STT_ENGINE", "faster-whisper")).strip() or "faster-whisper"
+    normalized = engine.lower()
+    faster_whisper_available = importlib.util.find_spec("faster_whisper") is not None
+    whisper_cpp_binary = resolve_whisper_cpp_binary()
+    if "faster-whisper" in normalized:
+        ready = faster_whisper_available and bool(STT_MODEL_PATH)
+        reason = None if ready else "faster_whisper_module_or_model_missing"
+    elif "whisper" in normalized:
+        ready = bool(whisper_cpp_binary and STT_MODEL_PATH)
+        reason = None if ready else "whisper_cpp_binary_or_model_missing"
+    else:
+        ready = bool(STT_MODEL_PATH)
+        reason = None if ready else "stt_model_missing"
+    return {
+        "engine": engine,
+        "ready": ready,
+        "model_path": STT_MODEL_PATH or None,
+        "binary": whisper_cpp_binary,
+        "reason": reason,
+    }
+
+
+def resolve_tts_runtime(engine_override: str | None = None) -> dict[str, Any]:
+    engine = (engine_override or os.getenv("LONGCAT_SPEECH_TTS_ENGINE", "piper")).strip() or "piper"
+    piper_bin = resolve_piper_binary()
+    ready = bool(piper_bin and PIPER_MODEL)
+    return {
+        "engine": engine,
+        "ready": ready,
+        "binary": piper_bin,
+        "model_path": PIPER_MODEL or None,
+        "reason": None if ready else "piper_binary_or_model_missing",
     }
 
 
@@ -202,6 +258,16 @@ def estimate_audio_bytes(payload: dict[str, Any]) -> int:
         return len(base64.b64decode(audio_base64, validate=False))
     except Exception:  # noqa: BLE001
         return 0
+
+
+def resolve_whisper_cpp_binary() -> str | None:
+    if WHISPER_CPP_BIN and shutil.which(WHISPER_CPP_BIN):
+        return shutil.which(WHISPER_CPP_BIN)
+    for candidate in ("whisper-cpp", "whisper-cli", "main"):
+        resolved = shutil.which(candidate)
+        if resolved:
+            return resolved
+    return None
 
 
 def resolve_piper_binary() -> str | None:

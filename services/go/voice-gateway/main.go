@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -29,6 +30,20 @@ type GatewayService struct {
 	telephonyMode        string
 	audioSocketAddr      string
 	nextConnectionID     atomic.Uint64
+}
+
+var errTerminalSessionConflict = errors.New("terminal_session_conflict")
+
+type HTTPStatusError struct {
+	Status int
+	Body   []byte
+}
+
+func (e *HTTPStatusError) Error() string {
+	if len(e.Body) == 0 {
+		return fmt.Sprintf("upstream_status_%d", e.Status)
+	}
+	return fmt.Sprintf("upstream_status_%d: %s", e.Status, strings.TrimSpace(string(e.Body)))
 }
 
 type BootstrapRequest struct {
@@ -183,7 +198,7 @@ func (s *GatewayService) bootstrapHandler(w http.ResponseWriter, r *http.Request
 	}
 	payload, status, err := s.forwardJSON(http.MethodPost, s.longcatCoreURL+"/api/internal/longcat/voice/bootstrap", req)
 	if err != nil {
-		respondJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
+		respondForwardingError(w, status, err)
 		return
 	}
 	respondRawJSON(w, status, payload)
@@ -214,7 +229,7 @@ func (s *GatewayService) transcriptHandler(w http.ResponseWriter, r *http.Reques
 	}
 	payload, status, err := s.forwardJSON(http.MethodPost, s.longcatCoreURL+"/api/internal/longcat/voice/transcript", req)
 	if err != nil {
-		respondJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
+		respondForwardingError(w, status, err)
 		return
 	}
 	respondRawJSON(w, status, payload)
@@ -298,6 +313,12 @@ func (s *GatewayService) handleAudioSocketConnection(conn net.Conn) {
 		}
 
 		if err := s.handleAudioSocketFrame(state, frame); err != nil {
+			if errors.Is(err, errTerminalSessionConflict) {
+				closeStatus = "completed"
+				closeReason = "terminal_session_conflict"
+				log.Printf("[LongCat Voice Gateway] AudioSocket session %s reached terminal state; stopping stream ingestion", state.SessionID)
+				return
+			}
 			closeStatus = "failed"
 			closeReason = err.Error()
 			log.Printf("[LongCat Voice Gateway] AudioSocket frame handling failed: %v", err)
@@ -333,7 +354,8 @@ func (s *GatewayService) handleAudioSocketFrame(state *AudioSocketStreamState, f
 		if digits == "" {
 			return nil
 		}
-		_, err := s.forwardTranscript(TranscriptRequest{
+					_, err := s.forwardTranscript(TranscriptRequest{
+
 			SessionID:         state.SessionID,
 			ExternalCallID:    state.ExternalCallID,
 			TelephonyProvider: "asterisk",
@@ -345,9 +367,13 @@ func (s *GatewayService) handleAudioSocketFrame(state *AudioSocketStreamState, f
 				"signal": "dtmf",
 			},
 		})
-		if err != nil {
-			return fmt.Errorf("forward dtmf transcript: %w", err)
-		}
+					if err != nil {
+				if isHTTPStatus(err, http.StatusConflict) {
+					return errTerminalSessionConflict
+				}
+				return fmt.Errorf("forward dtmf transcript: %w", err)
+			}
+
 		return nil
 	case isPCMFrameType(frame.PacketType):
 		if state.SessionID == "" {
@@ -381,9 +407,13 @@ func (s *GatewayService) handleAudioSocketFrame(state *AudioSocketStreamState, f
 				"stt_degraded":   result.DegradedMode,
 			},
 		})
-		if err != nil {
-			return fmt.Errorf("forward transcript: %w", err)
-		}
+					if err != nil {
+				if isHTTPStatus(err, http.StatusConflict) {
+					return errTerminalSessionConflict
+				}
+				return fmt.Errorf("forward transcript: %w", err)
+			}
+
 		return nil
 	default:
 		return nil
@@ -487,7 +517,35 @@ func (s *GatewayService) forwardJSON(method string, url string, payload any) ([]
 	if err != nil {
 		return nil, http.StatusBadGateway, err
 	}
+	if resp.StatusCode >= http.StatusBadRequest {
+		return responseBody, resp.StatusCode, &HTTPStatusError{Status: resp.StatusCode, Body: responseBody}
+	}
 	return responseBody, resp.StatusCode, nil
+}
+
+func isHTTPStatus(err error, status int) bool {
+	var statusErr *HTTPStatusError
+	if !errors.As(err, &statusErr) {
+		return false
+	}
+	return statusErr.Status == status
+}
+
+func respondForwardingError(w http.ResponseWriter, fallbackStatus int, err error) {
+	var statusErr *HTTPStatusError
+	if errors.As(err, &statusErr) {
+		if len(statusErr.Body) > 0 && json.Valid(statusErr.Body) {
+			respondRawJSON(w, statusErr.Status, statusErr.Body)
+			return
+		}
+		respondJSON(w, statusErr.Status, map[string]any{"error": strings.TrimSpace(string(statusErr.Body))})
+		return
+	}
+	statusCode := fallbackStatus
+	if statusCode < http.StatusBadRequest {
+		statusCode = http.StatusBadGateway
+	}
+	respondJSON(w, statusCode, map[string]any{"error": err.Error()})
 }
 
 func readAudioSocketFrame(reader io.Reader) (AudioSocketFrame, error) {
