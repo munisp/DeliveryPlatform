@@ -69,6 +69,15 @@ struct EtaRequest {
     priority_delivery: Option<bool>,
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+struct VoicePriorityRequest {
+    active_calls: Option<f64>,
+    staffed_lines: Option<f64>,
+    substitution_cases: Option<f64>,
+    lifetime_orders: Option<f64>,
+    substitution_risk: Option<String>,
+}
+
 #[derive(Debug, Deserialize, Serialize, Clone)]
 struct DriverInput {
     driver_id: i64,
@@ -138,6 +147,13 @@ struct EtaResponse {
 }
 
 #[derive(Debug, Serialize)]
+struct VoicePriorityResponse {
+    band: String,
+    score: f64,
+    reason: String,
+}
+
+#[derive(Debug, Serialize)]
 struct RankedDriver {
     driver_id: i64,
     name: Option<String>,
@@ -178,6 +194,7 @@ async fn main() {
         .route("/trip-radar", post(trip_radar))
         .route("/batch-orders", post(batch_orders))
         .route("/eta", post(estimate_eta))
+        .route("/voice-priority", post(voice_priority))
         .with_state(Arc::new(AppState {
             service_name: "switchos-dispatch-optimizer".to_string(),
             database_url,
@@ -433,6 +450,65 @@ async fn batch_orders(
     };
     persist_run(&client, "batch_orders", &BatchRequest { orders: request_snapshot, max_batch_distance_km: request.max_batch_distance_km, max_batch_size: request.max_batch_size }, &response, None).await?;
     Ok(Json(response))
+}
+
+async fn voice_priority(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(request): Json<VoicePriorityRequest>,
+) -> Result<Json<VoicePriorityResponse>, (StatusCode, String)> {
+    require_internal_access(&headers, &state)?;
+
+    let active_calls = request.active_calls.unwrap_or(0.0).max(0.0);
+    let staffed_lines = request.staffed_lines.unwrap_or(1.0).max(1.0);
+    let substitution_cases = request.substitution_cases.unwrap_or(0.0).max(0.0);
+    let lifetime_orders = request.lifetime_orders.unwrap_or(0.0).max(0.0);
+    let substitution_risk = request.substitution_risk.unwrap_or_else(|| "low".to_string()).to_lowercase();
+
+    let queue_pressure = active_calls / staffed_lines;
+    let repeat_value = if lifetime_orders >= 20.0 {
+        10.0
+    } else if lifetime_orders >= 8.0 {
+        6.0
+    } else if lifetime_orders >= 3.0 {
+        3.0
+    } else {
+        0.0
+    };
+    let substitution_penalty = if substitution_risk == "high" {
+        18.0
+    } else if substitution_risk == "medium" {
+        9.0
+    } else {
+        0.0
+    };
+
+    let mut score = 35.0 + (queue_pressure * 18.0) + (substitution_cases * 4.5) + repeat_value + substitution_penalty;
+    if score > 100.0 {
+        score = 100.0;
+    }
+
+    let band = if score >= 82.0 {
+        "urgent"
+    } else if score >= 60.0 {
+        "priority"
+    } else {
+        "standard"
+    };
+
+    let reason = if band == "urgent" {
+        "Voice queue pressure and substitution sensitivity justify callback priority or rapid human takeover."
+    } else if band == "priority" {
+        "Voice session should stay near the front of the queue because repeat-order value or substitution complexity is material."
+    } else {
+        "Voice session can remain in the standard queue because current friction signals are limited."
+    };
+
+    Ok(Json(VoicePriorityResponse {
+        band: band.to_string(),
+        score: round2(score),
+        reason: reason.to_string(),
+    }))
 }
 
 async fn estimate_eta(

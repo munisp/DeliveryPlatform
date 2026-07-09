@@ -2,6 +2,7 @@ import pg from "pg";
 
 import { buildConsumerAssistant, buildDispatchIntelligence, buildMerchantConsultant } from "../_core/longcat";
 import { ENV } from "../_core/env";
+import { getLongCatCustomerMemory } from "../_core/longcatVoice";
 
 type Driver = {
   id: number;
@@ -452,13 +453,26 @@ export async function getPhoneOrderingWorkspace() {
     };
 
     const callFlows = flowRows.rows.map((row) => `${row.flow_name}: ${toNumber(row.flow_volume)} active cases`) || ["No live assisted-ordering flows detected in the current window"];
+    const memoryPreview = await getLongCatCustomerMemory({
+      customerPhone: "+15550001111",
+      customerName: "Repeat caller preview",
+      accessibilityFlags: substitutionCases > 0 ? ["voice-confirmation-preferred"] : [],
+    });
 
     return {
       summary: summaryPayload,
       call_flows: callFlows,
+      voice_assistant: {
+        channel: "phone_ordering",
+        live_voice_enabled: true,
+        callback_channel: ENV.notificationDispatcherUrl,
+        memory_preview: memoryPreview,
+      },
       longcat: await buildConsumerAssistant({
         ...summaryPayload,
         call_flows: callFlows,
+        memory_summary: memoryPreview.memory_summary,
+        live_voice_enabled: true,
       }),
     };
   } catch {
@@ -474,13 +488,26 @@ export async function getPhoneOrderingWorkspace() {
       "Substitution and unavailable-item resolution",
       "Kitchen handoff and fulfillment promise verification",
     ];
+    const memoryPreview = await getLongCatCustomerMemory({
+      customerPhone: "+15550001111",
+      customerName: "Repeat caller preview",
+      accessibilityFlags: ["voice-confirmation-preferred"],
+    });
 
     return {
       summary: summaryPayload,
       call_flows: callFlows,
+      voice_assistant: {
+        channel: "phone_ordering",
+        live_voice_enabled: true,
+        callback_channel: ENV.notificationDispatcherUrl,
+        memory_preview: memoryPreview,
+      },
       longcat: await buildConsumerAssistant({
         ...summaryPayload,
         call_flows: callFlows,
+        memory_summary: memoryPreview.memory_summary,
+        live_voice_enabled: true,
       }),
     };
   }

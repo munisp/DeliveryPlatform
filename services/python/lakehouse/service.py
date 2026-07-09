@@ -54,7 +54,15 @@ class LakehouseService:
                     f"CREATE INDEX IF NOT EXISTS idx_{self.schema_name}_events_payload ON {self.schema_name}.events USING GIN (payload)"
                 )
             conn.commit()
-        for table_name in ("orders", "drivers", "payments", "marketplace_events"):
+        for table_name in (
+            "orders",
+            "drivers",
+            "payments",
+            "marketplace_events",
+            "longcat_memory_events",
+            "longcat_voice_sessions",
+            "longcat_voice_turns",
+        ):
             await self.create_table(table_name, partition_by="date", fmt="jsonb")
 
     async def cleanup(self) -> None:
@@ -121,6 +129,9 @@ class LakehouseService:
         orders = self._load_rows("orders", limit=5000)
         drivers = self._load_rows("drivers", limit=2000)
         marketplace_events = self._load_rows("marketplace_events", limit=5000)
+        longcat_memory_events = self._load_rows("longcat_memory_events", limit=2000)
+        longcat_voice_sessions = self._load_rows("longcat_voice_sessions", limit=2000)
+        longcat_voice_turns = self._load_rows("longcat_voice_turns", limit=5000)
 
         order_stats = self._build_order_stats(orders)
         driver_stats = self._build_driver_stats(drivers)
@@ -133,6 +144,11 @@ class LakehouseService:
             "order_stats": order_stats,
             "driver_stats": driver_stats,
             "marketplace_overview": marketplace_overview,
+            "longcat_voice_overview": self._build_longcat_voice_overview(
+                longcat_memory_events,
+                longcat_voice_sessions,
+                longcat_voice_turns,
+            ),
         }
 
     async def list_tables(self) -> list[dict[str, Any]]:
@@ -282,6 +298,23 @@ class LakehouseService:
             "online": sum(1 for status in normalized_statuses if status in {"online", "available"}),
             "busy": sum(1 for status in normalized_statuses if status == "busy"),
             "offline": sum(1 for status in normalized_statuses if status not in {"online", "available", "busy"}),
+        }
+
+    def _build_longcat_voice_overview(
+        self,
+        longcat_memory_events: list[dict[str, Any]],
+        longcat_voice_sessions: list[dict[str, Any]],
+        longcat_voice_turns: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        callback_requests = sum(1 for row in longcat_voice_turns if bool(row.get("callback_requested")))
+        priority_sessions = sum(1 for row in longcat_voice_sessions if str(row.get("priority_band", "standard")).lower() in {"priority", "urgent"})
+        distinct_profiles = {str(row.get("profile_id")) for row in longcat_memory_events if row.get("profile_id")}
+        return {
+            "memory_profiles_seen": len(distinct_profiles),
+            "voice_sessions": len(longcat_voice_sessions),
+            "voice_turns": len(longcat_voice_turns),
+            "callback_requests": callback_requests,
+            "priority_sessions": priority_sessions,
         }
 
     def _build_marketplace_overview(

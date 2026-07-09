@@ -23,6 +23,7 @@ const (
 	ChannelSMS   Channel = "sms"
 	ChannelEmail Channel = "email"
 	ChannelPush  Channel = "push"
+	ChannelVoice Channel = "voice"
 )
 
 type DispatchRequest struct {
@@ -86,6 +87,7 @@ type Service struct {
 	smsProviderURL       string
 	emailProviderURL     string
 	pushProviderURL      string
+	voiceProviderURL     string
 }
 
 type providerPayload struct {
@@ -121,6 +123,7 @@ func main() {
 		smsProviderURL:       strings.TrimSpace(os.Getenv("SMS_PROVIDER_URL")),
 		emailProviderURL:     strings.TrimSpace(os.Getenv("EMAIL_PROVIDER_URL")),
 		pushProviderURL:      strings.TrimSpace(os.Getenv("PUSH_PROVIDER_URL")),
+		voiceProviderURL:     strings.TrimSpace(os.Getenv("VOICE_PROVIDER_URL")),
 	}
 	if err := service.ensureSchema(); err != nil {
 		log.Fatalf("ensure schema: %v", err)
@@ -481,6 +484,11 @@ func (s *Service) resolveProvider(channel Channel, recipient Recipient) (string,
 			return "", "push-webhook", "missing push token"
 		}
 		return s.pushProviderURL, "push-webhook", ""
+	case ChannelVoice:
+		if strings.TrimSpace(recipient.Phone) == "" {
+			return "", "voice-webhook", "missing phone recipient"
+		}
+		return s.voiceProviderURL, "voice-webhook", ""
 	default:
 		return "", "unsupported", "unsupported channel"
 	}
@@ -502,6 +510,9 @@ func renderTemplate(dispatchType string, payload map[string]any, recipient Recip
 		return fmt.Sprintf("Hi %s, a courier has been assigned to order %s. ETA is %s minutes.", customerName, orderID, eta)
 	case "order_delivered":
 		return fmt.Sprintf("Hi %s, order %s has been delivered. Thanks for using SwitchOS.", customerName, orderID)
+	case "longcat_voice_callback":
+		callbackReason := valueOrDefault(payload, "callback_reason", "operator follow-up")
+		return fmt.Sprintf("Hello %s, this is your SwitchOS callback regarding %s. An operator will continue your order shortly.", customerName, callbackReason)
 	default:
 		return fmt.Sprintf("Hi %s, there is an update for order %s.", customerName, orderID)
 	}
@@ -523,6 +534,13 @@ func valueOrDefault(payload map[string]any, key string, fallback string) string 
 func resolveFallbackChannel(channel Channel, recipient Recipient) Channel {
 	switch channel {
 	case ChannelPush:
+		if strings.TrimSpace(recipient.Phone) != "" {
+			return ChannelSMS
+		}
+		if strings.TrimSpace(recipient.Email) != "" {
+			return ChannelEmail
+		}
+	case ChannelVoice:
 		if strings.TrimSpace(recipient.Phone) != "" {
 			return ChannelSMS
 		}

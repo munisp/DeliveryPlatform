@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { analyticsReadProcedure, publicProcedure, router, workspaceReadProcedure } from "./_core/trpc";
+import { analyticsReadProcedure, protectedProcedure, publicProcedure, router, workspaceReadProcedure } from "./_core/trpc";
 import { systemRouter } from "./_core/systemRouter";
 import {
   getDriverMobilityWorkspace,
@@ -22,6 +22,7 @@ import {
   syncLakehouseFromPostgres,
 } from "./lib/lakehouse";
 import { getFundsReconciliationSnapshot } from "./db";
+import { appendLongCatVoiceTurn, getLongCatCustomerMemory, startLongCatVoiceSession } from "./_core/longcatVoice";
 
 const listInput = z.object({ limit: z.number().min(1).max(25).optional() }).optional();
 
@@ -72,6 +73,53 @@ export const appRouter = router({
 
   phoneOrdering: router({
     workspace: workspaceReadProcedure.query(() => getPhoneOrderingWorkspace()),
+    customerMemory: workspaceReadProcedure
+      .input(z.object({
+        userId: z.number().int().positive().optional(),
+        customerPhone: z.string().trim().min(5).max(64).optional(),
+        customerName: z.string().trim().min(1).max(255).optional(),
+        accessibilityFlags: z.array(z.string().trim().min(1).max(64)).max(8).optional(),
+      }).optional())
+      .query(({ input }) => getLongCatCustomerMemory({
+        userId: input?.userId ?? null,
+        customerPhone: input?.customerPhone ?? null,
+        customerName: input?.customerName ?? null,
+        accessibilityFlags: input?.accessibilityFlags ?? [],
+      })),
+    startVoiceSession: protectedProcedure
+      .input(z.object({
+        userId: z.number().int().positive().optional(),
+        customerPhone: z.string().trim().min(5).max(64).optional(),
+        customerName: z.string().trim().min(1).max(255).optional(),
+        voiceChannel: z.string().trim().min(2).max(64).optional(),
+        accessibilityFlags: z.array(z.string().trim().min(1).max(64)).max(8).optional(),
+        idempotencyKey: z.string().trim().min(4).max(255).optional(),
+        triggerReason: z.string().trim().min(2).max(255).optional(),
+      }))
+      .mutation(({ input }) => startLongCatVoiceSession({
+        userId: input.userId ?? null,
+        customerPhone: input.customerPhone ?? null,
+        customerName: input.customerName ?? null,
+        voiceChannel: input.voiceChannel ?? null,
+        accessibilityFlags: input.accessibilityFlags ?? [],
+        idempotencyKey: input.idempotencyKey ?? null,
+        triggerReason: input.triggerReason ?? null,
+      })),
+    appendVoiceTurn: protectedProcedure
+      .input(z.object({
+        sessionId: z.string().uuid(),
+        speaker: z.enum(["customer", "agent", "system"]),
+        utterance: z.string().trim().min(1).max(4_000),
+        channel: z.string().trim().min(2).max(64).optional(),
+        metadata: z.record(z.string(), z.unknown()).optional(),
+      }))
+      .mutation(({ input }) => appendLongCatVoiceTurn({
+        sessionId: input.sessionId,
+        speaker: input.speaker,
+        utterance: input.utterance,
+        channel: input.channel,
+        metadata: input.metadata,
+      })),
   }),
 });
 
