@@ -24,6 +24,7 @@ import {
 import { getFundsReconciliationSnapshot } from "./db";
 import { appendLongCatMessagingTurn, appendLongCatVoiceTurn, getLongCatCustomerMemory, startLongCatMessagingSession, startLongCatVoiceSession } from "./_core/longcatVoice";
 import { executeLongCatAction } from "./_core/longcatActions";
+import { buildLocalCommerceSuperGatewayWorkspace, planLocalCommerceConciergeIntent } from "./_core/localCommerceSuperGateway";
 
 const listInput = z.object({ limit: z.number().min(1).max(25).optional() }).optional();
 
@@ -70,6 +71,46 @@ export const appRouter = router({
 
   serviceRecovery: router({
     workspace: workspaceReadProcedure.query(() => getServiceRecoveryWorkspace()),
+  }),
+
+  localCommerceSuperGateway: router({
+    workspace: workspaceReadProcedure.query(() => buildLocalCommerceSuperGatewayWorkspace()),
+    plan: protectedProcedure
+      .input(z.object({
+        city: z.string().trim().min(2).max(128).optional(),
+        customerSegment: z.string().trim().min(2).max(128).optional(),
+        categories: z.array(z.string().trim().min(2).max(64)).max(8).optional(),
+        request: z.string().trim().min(3).max(1_000),
+        basket: z.array(z.object({
+          sku: z.string().trim().min(1).max(128),
+          quantity: z.number().positive(),
+          label: z.string().trim().min(1).max(255).optional(),
+          category: z.string().trim().min(1).max(128).optional(),
+          onHandUnits: z.number().min(0).optional(),
+          reservedUnits: z.number().min(0).optional(),
+          inboundUnits: z.number().min(0).optional(),
+          leadTimeHours: z.number().min(1).max(240).optional(),
+          eventMultiplier: z.number().min(0.5).max(3).optional(),
+          weatherMultiplier: z.number().min(0.5).max(2).optional(),
+          substitutionGroup: z.string().trim().min(1).max(128).optional(),
+          coldChainRequired: z.boolean().optional(),
+        })).max(20).optional(),
+        warehouseCandidates: z.array(z.object({
+          warehouseId: z.number().int().positive(),
+          label: z.string().trim().min(1).max(255),
+          zoneKey: z.string().trim().min(1).max(128).optional(),
+          distanceKm: z.number().min(0).max(200),
+          pickPackMinutes: z.number().min(0).max(240).optional(),
+          coldChainReady: z.boolean().optional(),
+          stockAccuracy: z.number().min(0).max(1).optional(),
+          inventory: z.array(z.object({
+            sku: z.string().trim().min(1).max(128),
+            availableUnits: z.number().min(0),
+            freshnessHours: z.number().min(0).max(720).optional(),
+          })).max(50),
+        })).max(12).optional(),
+      }))
+      .mutation(({ input }) => planLocalCommerceConciergeIntent(input)),
   }),
 
   phoneOrdering: router({

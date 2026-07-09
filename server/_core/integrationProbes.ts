@@ -268,8 +268,18 @@ export async function probeLongCatSpeechRuntime(): Promise<ProbeResult> {
   }
 }
 
+export async function probeLocalCommerceGateway(): Promise<ProbeResult> {
+  if (!ENV.localCommerceGatewayUrl?.trim()) return unconfigured(ENV.localCommerceGatewayUrl || null);
+  return probeUrl(ENV.localCommerceGatewayUrl, "/health");
+}
+
+export async function probeRetailForecastService(): Promise<ProbeResult> {
+  if (!ENV.retailForecastServiceUrl?.trim()) return unconfigured(ENV.retailForecastServiceUrl || null);
+  return probeUrl(ENV.retailForecastServiceUrl, "/health");
+}
+
 export async function probeServices() {
-  const [mojaloop, tigerbeetle, lakehouse, verticalProvisioning, intakeOrchestrator, longcatVoiceGateway, longcatSpeechRuntime] = await Promise.all([
+  const [mojaloop, tigerbeetle, lakehouse, verticalProvisioning, intakeOrchestrator, longcatVoiceGateway, longcatSpeechRuntime, localCommerceGateway, retailForecastService] = await Promise.all([
     probeUrl(ENV.mojaloopServiceUrl),
     probeUrl(ENV.tigerbeetleServiceUrl),
     probeUrl(ENV.lakehouseServiceUrl),
@@ -277,6 +287,8 @@ export async function probeServices() {
     probeUrl(ENV.intakeOrchestratorUrl),
     probeLongCatVoiceGateway(),
     probeLongCatSpeechRuntime(),
+    probeLocalCommerceGateway(),
+    probeRetailForecastService(),
   ]);
 
   return {
@@ -287,6 +299,8 @@ export async function probeServices() {
     intakeOrchestrator,
     longcatVoiceGateway,
     longcatSpeechRuntime,
+    localCommerceGateway,
+    retailForecastService,
   };
 }
 

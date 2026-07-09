@@ -78,6 +78,43 @@ struct VoicePriorityRequest {
     substitution_risk: Option<String>,
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+struct InstantRetailAllocationRequest {
+    order_id: Option<i64>,
+    city: Option<String>,
+    customer_zone: Option<String>,
+    cold_chain_required: Option<bool>,
+    priority_level: Option<String>,
+    items: Vec<InstantRetailItem>,
+    warehouses: Vec<WarehouseCandidate>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+struct InstantRetailItem {
+    sku: String,
+    quantity: f64,
+    substitution_group: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+struct WarehouseCandidate {
+    warehouse_id: i64,
+    label: String,
+    zone_key: Option<String>,
+    distance_km: f64,
+    pick_pack_minutes: Option<f64>,
+    cold_chain_ready: Option<bool>,
+    stock_accuracy: Option<f64>,
+    available_inventory: Vec<WarehouseInventory>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+struct WarehouseInventory {
+    sku: String,
+    available_units: f64,
+    freshness_hours: Option<f64>,
+}
+
 #[derive(Debug, Deserialize, Serialize, Clone)]
 struct DriverInput {
     driver_id: i64,
@@ -154,6 +191,31 @@ struct VoicePriorityResponse {
 }
 
 #[derive(Debug, Serialize)]
+struct InstantRetailAllocationResponse {
+    strategy: String,
+    selected_warehouse_id: Option<i64>,
+    selected_warehouse_label: Option<String>,
+    fill_rate: f64,
+    estimated_ready_minutes: u32,
+    split_shipment_required: bool,
+    suggested_substitutions: Vec<String>,
+    ranked_warehouses: Vec<WarehouseAllocationScore>,
+    rationale: String,
+}
+
+#[derive(Debug, Serialize)]
+struct WarehouseAllocationScore {
+    warehouse_id: i64,
+    label: String,
+    zone_key: String,
+    score: f64,
+    fill_rate: f64,
+    estimated_ready_minutes: u32,
+    cold_chain_ready: bool,
+    reason: String,
+}
+
+#[derive(Debug, Serialize)]
 struct RankedDriver {
     driver_id: i64,
     name: Option<String>,
@@ -195,6 +257,7 @@ async fn main() {
         .route("/batch-orders", post(batch_orders))
         .route("/eta", post(estimate_eta))
         .route("/voice-priority", post(voice_priority))
+        .route("/instant-retail-allocation", post(instant_retail_allocation))
         .with_state(Arc::new(AppState {
             service_name: "switchos-dispatch-optimizer".to_string(),
             database_url,
@@ -508,6 +571,108 @@ async fn voice_priority(
         band: band.to_string(),
         score: round2(score),
         reason: reason.to_string(),
+    }))
+}
+
+async fn instant_retail_allocation(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(request): Json<InstantRetailAllocationRequest>,
+) -> Result<Json<InstantRetailAllocationResponse>, (StatusCode, String)> {
+    require_internal_access(&headers, &state)?;
+
+    if request.items.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "at least one retail item is required".to_string()));
+    }
+    if request.warehouses.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "at least one warehouse candidate is required".to_string()));
+    }
+
+    let cold_chain_required = request.cold_chain_required.unwrap_or(false);
+    let priority_level = request.priority_level.unwrap_or_else(|| "standard".to_string()).to_lowercase();
+
+    let mut ranked = request
+        .warehouses
+        .iter()
+        .map(|warehouse| {
+            let requested_units: f64 = request.items.iter().map(|item| item.quantity.max(0.0)).sum();
+            let fulfilled_units: f64 = request
+                .items
+                .iter()
+                .map(|item| {
+                    warehouse
+                        .available_inventory
+                        .iter()
+                        .find(|inventory| inventory.sku == item.sku)
+                        .map(|inventory| inventory.available_units.min(item.quantity.max(0.0)))
+                        .unwrap_or(0.0)
+                })
+                .sum();
+            let fill_rate = if requested_units > 0.0 {
+                (fulfilled_units / requested_units).clamp(0.0, 1.0)
+            } else {
+                1.0
+            };
+            let pick_pack = warehouse.pick_pack_minutes.unwrap_or(8.0).max(2.0);
+            let cold_chain_ready = warehouse.cold_chain_ready.unwrap_or(false);
+            let stock_accuracy = warehouse.stock_accuracy.unwrap_or(0.92).clamp(0.4, 1.0);
+            let distance_penalty = (warehouse.distance_km / 16.0).clamp(0.0, 0.4);
+            let speed_score = (1.0 / (1.0 + (pick_pack + warehouse.distance_km * 3.1) / 30.0)).clamp(0.2, 1.0);
+            let cold_chain_penalty = if cold_chain_required && !cold_chain_ready { 0.35 } else { 0.0 };
+            let priority_boost = if priority_level == "urgent" || priority_level == "vip" { 1.08 } else { 1.0 };
+            let score = (((fill_rate * 0.55) + (speed_score * 0.2) + (stock_accuracy * 0.15) + if cold_chain_ready { 0.1 } else { 0.0 }) * priority_boost - distance_penalty - cold_chain_penalty)
+                .clamp(0.0, 1.2)
+                * 100.0;
+            let estimated_ready = (pick_pack + (warehouse.distance_km * 3.1)).round().clamp(5.0, 120.0) as u32;
+            let reason = if fill_rate >= 0.98 && (!cold_chain_required || cold_chain_ready) {
+                format!("Full-fill candidate with {:.0}% stock accuracy and {} minute ready time.", stock_accuracy * 100.0, estimated_ready)
+            } else if cold_chain_required && !cold_chain_ready {
+                "Candidate lacks cold-chain readiness for chilled or regulated inventory.".to_string()
+            } else {
+                format!("Can fulfill {:.0}% of the basket with {} minute ready time; substitutions or split shipment may be required.", fill_rate * 100.0, estimated_ready)
+            };
+
+            WarehouseAllocationScore {
+                warehouse_id: warehouse.warehouse_id,
+                label: warehouse.label.clone(),
+                zone_key: warehouse.zone_key.clone().unwrap_or_else(|| "unknown".to_string()),
+                score: round2(score),
+                fill_rate: round2(fill_rate),
+                estimated_ready_minutes: estimated_ready,
+                cold_chain_ready,
+                reason,
+            }
+        })
+        .collect::<Vec<_>>();
+
+    ranked.sort_by(|left, right| right.score.partial_cmp(&left.score).unwrap_or(Ordering::Equal));
+    let winner = ranked.first();
+    let suggested_substitutions = request
+        .items
+        .iter()
+        .filter(|item| {
+            winner
+                .and_then(|selected| request.warehouses.iter().find(|warehouse| warehouse.warehouse_id == selected.warehouse_id))
+                .and_then(|warehouse| warehouse.available_inventory.iter().find(|inventory| inventory.sku == item.sku))
+                .map(|inventory| inventory.available_units + 0.01 < item.quantity)
+                .unwrap_or(true)
+        })
+        .map(|item| item.substitution_group.clone().unwrap_or_else(|| format!("{} substitute", item.sku)))
+        .collect::<Vec<_>>();
+    let split_required = winner.map(|selected| selected.fill_rate < 0.95).unwrap_or(true) && request.warehouses.len() > 1;
+
+    Ok(Json(InstantRetailAllocationResponse {
+        strategy: if cold_chain_required { "cold_chain_nearest_full_fill".to_string() } else { "fastest_full_fill".to_string() },
+        selected_warehouse_id: winner.map(|selected| selected.warehouse_id),
+        selected_warehouse_label: winner.map(|selected| selected.label.clone()),
+        fill_rate: winner.map(|selected| selected.fill_rate).unwrap_or(0.0),
+        estimated_ready_minutes: winner.map(|selected| selected.estimated_ready_minutes).unwrap_or(0),
+        split_shipment_required: split_required,
+        suggested_substitutions,
+        rationale: winner
+            .map(|selected| format!("Selected {} in {} with {:.0}% fill and {} minute ready time.", selected.label, selected.zone_key, selected.fill_rate * 100.0, selected.estimated_ready_minutes))
+            .unwrap_or_else(|| "No warehouse candidate could be selected.".to_string()),
+        ranked_warehouses: ranked,
     }))
 }
 

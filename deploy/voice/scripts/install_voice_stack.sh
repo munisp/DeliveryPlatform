@@ -61,6 +61,8 @@ fi
 install -m 0644 "$SWITCHOS_ROOT/deploy/voice/systemd/longcat-speech-runtime.service" "$SYSTEMD_DIR/longcat-speech-runtime.service"
 install -m 0644 "$SWITCHOS_ROOT/deploy/voice/systemd/longcat-voice-gateway.service" "$SYSTEMD_DIR/longcat-voice-gateway.service"
 install -m 0644 "$SWITCHOS_ROOT/deploy/voice/systemd/longcat-notification-dispatcher.service" "$SYSTEMD_DIR/longcat-notification-dispatcher.service"
+install -m 0644 "$SWITCHOS_ROOT/deploy/voice/systemd/local-commerce-gateway.service" "$SYSTEMD_DIR/local-commerce-gateway.service"
+install -m 0644 "$SWITCHOS_ROOT/deploy/voice/systemd/retail-forecast.service" "$SYSTEMD_DIR/retail-forecast.service"
 install -m 0644 "$SWITCHOS_ROOT/deploy/voice/systemd/longcat-benchmark-refresh.service" "$SYSTEMD_DIR/longcat-benchmark-refresh.service"
 install -m 0644 "$SWITCHOS_ROOT/deploy/voice/systemd/longcat-benchmark-refresh.timer" "$SYSTEMD_DIR/longcat-benchmark-refresh.timer"
 install -m 0644 "$SWITCHOS_ROOT/deploy/voice/asterisk/extensions.switchos-longcat.conf" "$ASTERISK_AUDIOSOCKET_DIR/extensions.switchos-longcat.conf"
@@ -73,6 +75,8 @@ systemctl daemon-reload
 systemctl enable longcat-speech-runtime.service
 systemctl enable longcat-voice-gateway.service
 systemctl enable longcat-notification-dispatcher.service
+systemctl enable local-commerce-gateway.service
+systemctl enable retail-forecast.service
 systemctl enable longcat-benchmark-refresh.timer
 
-echo "LongCat voice and non-voice LongCat deployment assets applied. Start the services after verifying the env file, provider URLs, and repository paths."
+ echo "LongCat voice, cross-category concierge, retail forecasting, and non-voice deployment assets applied. Start the services after verifying the env file, provider URLs, middleware endpoints, and repository paths."

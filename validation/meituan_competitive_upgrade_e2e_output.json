@@ -1,0 +1,556 @@
+{
+  "generated_at": "2026-07-09T12:01:24.047Z",
+  "decision_summary": "Forecasted 2 SKUs over 24h; 2 require urgent inventory or substitution attention. Selected VI Dark Store in Victoria Island with 78% fill and 19 minute ready time. cross_category_concierge_with_retail_ops",
+  "workspace_summary": {
+    "unified_memberships": 0,
+    "cross_category_benefits": 6,
+    "travel_programs": 3,
+    "merchant_channels": 6,
+    "active_promotions": 4,
+    "support_threads": 2,
+    "recommended_action": "Operate one all-category membership and concierge layer spanning delivery, mobility, retail, and travel instead of separate feature silos."
+  },
+  "forecast_summary": "Forecasted 2 SKUs over 24h; 2 require urgent inventory or substitution attention.",
+  "allocation_summary": "Selected VI Dark Store in Victoria Island with 78% fill and 19 minute ready time.",
+  "gateway_strategy": "cross_category_concierge_with_retail_ops",
+  "gateway_event_id": "lcg-1783598484031271298",
+  "action_plan": [
+    {
+      "step": "triage",
+      "action": "Interpret the cross-category request and bind it to the best operational lane.",
+      "target": "delivery",
+      "urgency": "high"
+    },
+    {
+      "step": "loyalty",
+      "action": "Apply unified benefits, credits, and service-level entitlements before quoting next actions.",
+      "target": "switchos_one_member",
+      "urgency": "medium"
+    },
+    {
+      "step": "retail_ops",
+      "action": "Use restock and warehouse signals to protect fill rate and ETA honesty.",
+      "target": "instant_retail",
+      "urgency": "high"
+    },
+    {
+      "step": "travel",
+      "action": "Convert the request into an executable itinerary, approval, or reservation-ready plan.",
+      "target": "business_travel",
+      "urgency": "medium"
+    },
+    {
+      "step": "mobility",
+      "action": "Blend ride, courier, and scheduled-transfer options into one promised journey.",
+      "target": "mobility_ops",
+      "urgency": "medium"
+    },
+    {
+      "step": "follow_through",
+      "action": "Record the plan and hand the next action to the correct channel or workflow runtime.",
+      "target": "middleware_fanout",
+      "urgency": "high"
+    }
+  ],
+  "integration_status": {
+    "timestamp": "2026-07-09T12:01:24.047Z",
+    "edge": {
+      "apisix": {
+        "status": "degraded",
+        "target": "http://127.0.0.1:9180",
+        "details": {},
+        "error": "fetch failed"
+      }
+    },
+    "identity": {
+      "oidc": {
+        "status": "unconfigured",
+        "target": null,
+        "details": {},
+        "error": null
+      },
+      "permify": {
+        "status": "unconfigured",
+        "target": null,
+        "details": {},
+        "error": null
+      }
+    },
+    "messaging": {
+      "redis": {
+        "status": "unconfigured",
+        "target": null,
+        "details": {},
+        "error": null
+      },
+      "dapr": {
+        "status": "unconfigured",
+        "target": null,
+        "details": {},
+        "error": null
+      },
+      "openSearch": {
+        "status": "unconfigured",
+        "target": null,
+        "details": {},
+        "error": null
+      },
+      "temporal": {
+        "status": "unconfigured",
+        "target": null,
+        "details": {},
+        "error": null
+      },
+      "fluvio": {
+        "status": "degraded",
+        "target": "http://127.0.0.1:50055",
+        "details": {},
+        "error": "fetch failed"
+      }
+    },
+    "services": {
+      "mojaloop": {
+        "status": "degraded",
+        "target": "http://127.0.0.1:8086",
+        "details": {},
+        "error": "fetch failed"
+      },
+      "tigerbeetle": {
+        "status": "degraded",
+        "target": "http://127.0.0.1:8087",
+        "details": {},
+        "error": "fetch failed"
+      },
+      "lakehouse": {
+        "status": "healthy",
+        "target": "http://127.0.0.1:8007/health",
+        "details": {
+          "response": {
+            "status": "healthy",
+            "service": "lakehouse"
+          }
+        },
+        "error": null
+      },
+      "verticalProvisioning": {
+        "status": "degraded",
+        "target": "http://127.0.0.1:8112",
+        "details": {},
+        "error": "fetch failed"
+      },
+      "intakeOrchestrator": {
+        "status": "degraded",
+        "target": "http://127.0.0.1:8113",
+        "details": {},
+        "error": "fetch failed"
+      },
+      "longcatVoiceGateway": {
+        "status": "healthy",
+        "target": "http://127.0.0.1:8104/health",
+        "details": {
+          "service": "longcat-voice-gateway",
+          "telephony_mode": "asterisk-audiosocket",
+          "audio_socket_addr": "127.0.0.1:9104",
+          "speech_service_url": "http://127.0.0.1:8105",
+          "response": {
+            "audio_socket_addr": "127.0.0.1:9104",
+            "longcat_core_url": "http://127.0.0.1:3005",
+            "service": "longcat-voice-gateway",
+            "speech_service_url": "http://127.0.0.1:8105",
+            "status": "ok",
+            "telephony_mode": "asterisk-audiosocket",
+            "timestamp": "2026-07-09T12:01:24Z"
+          }
+        },
+        "error": null
+      },
+      "longcatSpeechRuntime": {
+        "status": "healthy",
+        "target": "http://127.0.0.1:8105/health",
+        "details": {
+          "service": "longcat-speech-runtime",
+          "stt_engine": "faster-whisper",
+          "tts_engine": "piper",
+          "stt_ready": true,
+          "tts_ready": false,
+          "response": {
+            "status": "healthy",
+            "service": "longcat-speech-runtime",
+            "stt_engine": "faster-whisper",
+            "tts_engine": "piper",
+            "stt_ready": true,
+            "tts_ready": false,
+            "stt_runtime": {
+              "engine": "faster-whisper",
+              "ready": true,
+              "model_path": "tiny.en",
+              "binary": null,
+              "reason": null
+            },
+            "tts_runtime": {
+              "engine": "piper",
+              "ready": false,
+              "binary": "/usr/local/bin/piper",
+              "model_path": null,
+              "reason": "piper_binary_or_model_missing"
+            },
+            "stream_timeout_seconds": 30,
+            "streaming_endpoints": [
+              "/stt/transcribe",
+              "/stt/stream-chunk",
+              "/ws/stt",
+              "/tts/synthesize",
+              "/ws/tts"
+            ]
+          }
+        },
+        "error": null
+      },
+      "localCommerceGateway": {
+        "status": "healthy",
+        "target": "http://127.0.0.1:8114/health",
+        "details": {
+          "response": {
+            "events": {
+              "dapr": {
+                "configured": false
+              },
+              "fluvio": {
+                "configured": false
+              },
+              "kafka": {
+                "configured": false
+              },
+              "temporal": {
+                "configured": false
+              }
+            },
+            "service": "switchos-local-commerce-gateway",
+            "status": "healthy"
+          }
+        },
+        "error": null
+      },
+      "retailForecastService": {
+        "status": "healthy",
+        "target": "http://127.0.0.1:8115/health",
+        "details": {
+          "response": {
+            "status": "healthy",
+            "service": "switchos-retail-forecast",
+            "version": "2026-07-09-meituan-gap-wave",
+            "ready": true,
+            "forecast_modes": [
+              "ewma",
+              "lead-time-buffer",
+              "freshness-aware"
+            ]
+          }
+        },
+        "error": null
+      }
+    }
+  },
+  "raw": {
+    "workspace": {
+      "summary": {
+        "unified_memberships": 0,
+        "cross_category_benefits": 6,
+        "travel_programs": 3,
+        "merchant_channels": 6,
+        "active_promotions": 4,
+        "support_threads": 2,
+        "recommended_action": "Operate one all-category membership and concierge layer spanning delivery, mobility, retail, and travel instead of separate feature silos."
+      },
+      "category_map": [
+        "rideshare",
+        "delivery",
+        "airport",
+        "healthcare",
+        "business",
+        "transit",
+        "Food Delivery"
+      ],
+      "loyalty_engine": {
+        "membership_summary": {
+          "active_memberships": 0,
+          "available_rewards": 6,
+          "payment_failures": 0,
+          "reorder_ready_orders": 2,
+          "avg_recommended_eta": 22,
+          "cart_conversion_recommendation": "Promote memberships, bundle offers, and sponsored merchants to lift checkout conversion."
+        },
+        "featured_memberships": [],
+        "rewards": [
+          {
+            "id": 1,
+            "reward_name": "Free Delivery",
+            "points_required": 300,
+            "reward_value": null,
+            "status": "active",
+            "expires_at": "2026-10-07T10:45:45.564Z"
+          },
+          {
+            "id": 2,
+            "reward_name": "10 Percent Off",
+            "points_required": 500,
+            "reward_value": null,
+            "status": "active",
+            "expires_at": "2026-10-07T10:45:45.564Z"
+          },
+          {
+            "id": 3,
+            "reward_name": "Priority Dispatch Pass",
+            "points_required": 900,
+            "reward_value": null,
+            "status": "active",
+            "expires_at": "2026-10-07T10:45:45.564Z"
+          },
+          {
+            "id": 4,
+            "reward_name": "Airport Pickup Upgrade",
+            "points_required": 1200,
+            "reward_value": null,
+            "status": "active",
+            "expires_at": "2026-10-07T10:45:45.564Z"
+          },
+          {
+            "id": 5,
+            "reward_name": "Partner Voucher",
+            "points_required": 1800,
+            "reward_value": null,
+            "status": "active",
+            "expires_at": "2026-10-07T10:45:45.564Z"
+          },
+          {
+            "id": 6,
+            "reward_name": "Premium Support Window",
+            "points_required": 2600,
+            "reward_value": null,
+            "status": "active",
+            "expires_at": "2026-10-07T10:45:45.564Z"
+          }
+        ],
+        "rider_context": {
+          "saved_places": 5,
+          "active_promotions": 4,
+          "membership_benefits": 6,
+          "support_threads": 2,
+          "recommended_next_step": "Unify ride booking, delivery ordering, loyalty, and support recovery in one rider-facing experience."
+        },
+        "cross_sell_prompts": [
+          "Convert high-frequency delivery members into airport, travel, and regulated-retail users through one shared benefits wallet.",
+          "Use support recovery and reorder signals to trigger retention offers across categories instead of isolated credits.",
+          "Elevate merchant CRM offers when the same customer shows repeat mobility, delivery, and travel behavior."
+        ]
+      },
+      "concierge_surfaces": {
+        "rider_booking_modes": [
+          {
+            "key": "rideshare",
+            "label": "Book a ride",
+            "eta_minutes": 4
+          },
+          {
+            "key": "delivery",
+            "label": "Order delivery",
+            "eta_minutes": 24
+          },
+          {
+            "key": "airport",
+            "label": "Reserve airport pickup",
+            "eta_minutes": 12
+          },
+          {
+            "key": "healthcare",
+            "label": "Schedule a care trip",
+            "eta_minutes": 35
+          },
+          {
+            "key": "business",
+            "label": "Request business travel",
+            "eta_minutes": 9
+          },
+          {
+            "key": "transit",
+            "label": "Plan transit connection",
+            "eta_minutes": 6
+          }
+        ],
+        "travel_programs": [
+          {
+            "id": 1,
+            "name": "Executive Mobility",
+            "approval_mode": "auto-with-cap",
+            "service_mix": "airport, comfort, business meals"
+          },
+          {
+            "id": 2,
+            "name": "Field Operations",
+            "approval_mode": "manager-review",
+            "service_mix": "courier, warehouse transfers, shift rides"
+          },
+          {
+            "id": 3,
+            "name": "Clinical Access",
+            "approval_mode": "care-coordinator",
+            "service_mix": "healthcare transport, pharmacy, caregiver meals"
+          }
+        ],
+        "merchant_channels": [
+          "Hosted web storefront",
+          "Embedded ordering widget",
+          "White-label branded app",
+          "Phone ordering agent",
+          "Tableside QR ordering",
+          "CRM-triggered reorder campaigns"
+        ],
+        "marketplace_categories": [
+          {
+            "id": 1,
+            "name": "Food Delivery",
+            "description": "Seed vertical for local verification",
+            "featured_badge": "Fast checkout enabled"
+          }
+        ]
+      }
+    },
+    "forecast": {
+      "service": "switchos-retail-forecast",
+      "generated_at": "2026-07-09T12:01:24.018950Z",
+      "merchant_name": "switchos_one_member",
+      "city": "Lagos",
+      "planning_horizon_hours": 24,
+      "recommendations": [
+        {
+          "sku": "milk-1l",
+          "label": "Milk 1L",
+          "forecast_units": 134.81,
+          "forecast_velocity_per_hour": 5.617,
+          "reorder_point_units": 39.77,
+          "recommended_restock_units": 169.58,
+          "stock_cover_hours": 0.89,
+          "stockout_risk": "critical",
+          "freshness_watchout": null,
+          "narrative": "Projected demand is 134.8 units over 24h at 5.62 units/hour. Net available stock covers roughly 0.9 hours. Recommended restock is 169.6 units to protect a 95% service level. Cold-chain handling is required, so keep warehouse allocation biased toward refrigerated nodes."
+        },
+        {
+          "sku": "pain-relief-24",
+          "label": "Pain Relief 24ct",
+          "forecast_units": 61.79,
+          "forecast_velocity_per_hour": 2.574,
+          "reorder_point_units": 12.15,
+          "recommended_restock_units": 68.94,
+          "stock_cover_hours": 1.94,
+          "stockout_risk": "critical",
+          "freshness_watchout": null,
+          "narrative": "Projected demand is 61.8 units over 24h at 2.57 units/hour. Net available stock covers roughly 1.9 hours. Recommended restock is 68.9 units to protect a 95% service level."
+        }
+      ],
+      "summary": "Forecasted 2 SKUs over 24h; 2 require urgent inventory or substitution attention."
+    },
+    "allocation": {
+      "strategy": "cold_chain_nearest_full_fill",
+      "selected_warehouse_id": 701,
+      "selected_warehouse_label": "VI Dark Store",
+      "fill_rate": 0.78,
+      "estimated_ready_minutes": 19,
+      "split_shipment_required": true,
+      "suggested_substitutions": [
+        "dairy_alt",
+        "analgesic_alt"
+      ],
+      "ranked_warehouses": [
+        {
+          "warehouse_id": 701,
+          "label": "VI Dark Store",
+          "zone_key": "Victoria Island",
+          "score": 59.59,
+          "fill_rate": 0.78,
+          "estimated_ready_minutes": 19,
+          "cold_chain_ready": true,
+          "reason": "Can fulfill 78% of the basket with 19 minute ready time; substitutions or split shipment may be required."
+        },
+        {
+          "warehouse_id": 703,
+          "label": "Yaba Pharmacy Node",
+          "zone_key": "Yaba",
+          "score": 33.48,
+          "fill_rate": 0.56,
+          "estimated_ready_minutes": 24,
+          "cold_chain_ready": true,
+          "reason": "Can fulfill 56% of the basket with 24 minute ready time; substitutions or split shipment may be required."
+        },
+        {
+          "warehouse_id": 702,
+          "label": "Lekki Retail Hub",
+          "zone_key": "Lekki",
+          "score": 4.32,
+          "fill_rate": 1,
+          "estimated_ready_minutes": 30,
+          "cold_chain_ready": false,
+          "reason": "Candidate lacks cold-chain readiness for chilled or regulated inventory."
+        }
+      ],
+      "rationale": "Selected VI Dark Store in Victoria Island with 78% fill and 19 minute ready time."
+    },
+    "gatewayPlan": {
+      "service": "switchos-local-commerce-gateway",
+      "strategy": "cross_category_concierge_with_retail_ops",
+      "event_id": "lcg-1783598484031271298",
+      "action_plan": [
+        {
+          "step": "triage",
+          "action": "Interpret the cross-category request and bind it to the best operational lane.",
+          "target": "delivery",
+          "urgency": "high"
+        },
+        {
+          "step": "loyalty",
+          "action": "Apply unified benefits, credits, and service-level entitlements before quoting next actions.",
+          "target": "switchos_one_member",
+          "urgency": "medium"
+        },
+        {
+          "step": "retail_ops",
+          "action": "Use restock and warehouse signals to protect fill rate and ETA honesty.",
+          "target": "instant_retail",
+          "urgency": "high"
+        },
+        {
+          "step": "travel",
+          "action": "Convert the request into an executable itinerary, approval, or reservation-ready plan.",
+          "target": "business_travel",
+          "urgency": "medium"
+        },
+        {
+          "step": "mobility",
+          "action": "Blend ride, courier, and scheduled-transfer options into one promised journey.",
+          "target": "mobility_ops",
+          "urgency": "medium"
+        },
+        {
+          "step": "follow_through",
+          "action": "Record the plan and hand the next action to the correct channel or workflow runtime.",
+          "target": "middleware_fanout",
+          "urgency": "high"
+        }
+      ],
+      "middleware": {
+        "dapr": {
+          "configured": false
+        },
+        "fluvio": {
+          "configured": false
+        },
+        "kafka": {
+          "configured": false
+        },
+        "temporal": {
+          "configured": false
+        }
+      }
+    },
+    "decision_summary": "Forecasted 2 SKUs over 24h; 2 require urgent inventory or substitution attention. Selected VI Dark Store in Victoria Island with 78% fill and 19 minute ready time. cross_category_concierge_with_retail_ops"
+  }
+}

@@ -133,6 +133,8 @@ export const ENV = {
   notificationDispatcherUrl: process.env.NOTIFICATION_DISPATCHER_URL ?? "http://127.0.0.1:8099",
   longcatVoiceGatewayUrl: process.env.LONGCAT_VOICE_GATEWAY_URL ?? "http://127.0.0.1:8104",
   longcatSpeechServiceUrl: process.env.LONGCAT_SPEECH_SERVICE_URL ?? "http://127.0.0.1:8105",
+  localCommerceGatewayUrl: process.env.LOCAL_COMMERCE_GATEWAY_URL ?? "http://127.0.0.1:8114",
+  retailForecastServiceUrl: process.env.RETAIL_FORECAST_SERVICE_URL ?? "http://127.0.0.1:8115",
   longcatTelephonyMode: (process.env.LONGCAT_TELEPHONY_MODE ?? "asterisk-audiosocket").trim(),
   longcatSpeechSttEngine: (process.env.LONGCAT_SPEECH_STT_ENGINE ?? "faster-whisper").trim(),
   longcatSpeechTtsEngine: (process.env.LONGCAT_SPEECH_TTS_ENGINE ?? "piper").trim(),

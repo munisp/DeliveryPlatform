@@ -1,0 +1,15 @@
+[Unit]
+Description=SwitchOS Retail Forecast Service
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/opt/switchos/services/python/retail-forecast
+EnvironmentFile=/etc/switchos/longcat-voice.env
+ExecStart=/usr/bin/env uvicorn main:app --host 0.0.0.0 --port 8115
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
