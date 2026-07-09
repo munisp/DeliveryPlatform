@@ -5,7 +5,10 @@ import {
   buildDispatchIntelligence,
   buildMerchantConsultant,
 } from "../server/_core/longcat";
-import { shouldAllowAutomaticCallbackDispatch } from "../server/_core/longcatVoice";
+import {
+  isLongCatVoiceSessionTerminal,
+  shouldAllowAutomaticCallbackDispatch,
+} from "../server/_core/longcatVoice";
 
 describe("LongCat local AI integration", () => {
   beforeEach(() => {
@@ -135,5 +138,14 @@ describe("LongCat local AI integration", () => {
       utterance: "Need follow-up",
       metadata: { allow_callback_dispatch: true },
     })).toBe(true);
+  });
+
+  it("treats completed, failed, abandoned, and closed LongCat sessions as terminal for new voice turns", () => {
+    expect(isLongCatVoiceSessionTerminal("completed")).toBe(true);
+    expect(isLongCatVoiceSessionTerminal("failed")).toBe(true);
+    expect(isLongCatVoiceSessionTerminal("abandoned")).toBe(true);
+    expect(isLongCatVoiceSessionTerminal("closed")).toBe(true);
+    expect(isLongCatVoiceSessionTerminal("active")).toBe(false);
+    expect(isLongCatVoiceSessionTerminal("open")).toBe(false);
   });
 });

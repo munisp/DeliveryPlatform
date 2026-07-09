@@ -456,7 +456,9 @@ app.post("/api/internal/longcat/voice/transcript", rateLimit(120), async (req, r
     res.status(200).json(payload);
   } catch (error) {
     console.error("[SwitchOS] Failed to append LongCat telephony transcript", error);
-    res.status(500).json({ error: error instanceof Error ? error.message : "longcat_transcript_failed" });
+    const message = error instanceof Error ? error.message : "longcat_transcript_failed";
+    const status = /already closed/i.test(message) ? 409 : 500;
+    res.status(status).json({ error: message });
   }
 });
 

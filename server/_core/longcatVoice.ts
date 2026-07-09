@@ -1209,6 +1209,9 @@ export async function appendLongCatVoiceTurn(input: VoiceTurnInput): Promise<Lon
   if (!session) {
     throw new Error("LongCat voice session not found.");
   }
+  if (isLongCatVoiceSessionTerminal(session.status)) {
+    throw new Error(`LongCat voice session is already closed (${session.status ?? "closed"}).`);
+  }
 
   const memory: LongCatCustomerMemory = {
     profile_id: `${session.profile_id ?? randomUUID()}`,
@@ -1362,6 +1365,14 @@ export function shouldAllowAutomaticCallbackDispatch(input: {
   return /call me back|callback|call back|please ring|ring me|phone me/i.test(input.utterance)
     || Boolean(input.metadata?.allow_callback_dispatch)
     || input.speaker === "system";
+}
+
+export function isLongCatVoiceSessionTerminal(status: unknown) {
+  const normalized = `${status ?? ""}`.trim().toLowerCase();
+  return normalized === "closed"
+    || normalized === "completed"
+    || normalized === "failed"
+    || normalized === "abandoned";
 }
 
 function detectIntent(utterance: string) {
