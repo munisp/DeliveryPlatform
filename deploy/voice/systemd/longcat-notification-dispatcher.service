@@ -1,0 +1,15 @@
+[Unit]
+Description=SwitchOS LongCat Notification Dispatcher
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/switchos/DeliveryPlatform/services/go/notification-dispatcher
+EnvironmentFile=/etc/switchos/longcat-voice.env
+ExecStart=/usr/bin/env go run main.go
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

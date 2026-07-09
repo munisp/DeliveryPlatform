@@ -14,6 +14,9 @@ type ConsumerWorkspaceInput = {
   substitution_cases: number;
   call_flows: string[];
   recommended_action: string;
+  memory_summary?: string;
+  live_voice_enabled?: boolean;
+  messaging_channels?: string[];
 };
 
 type MerchantWorkspaceInput = {
@@ -22,6 +25,8 @@ type MerchantWorkspaceInput = {
   partner_channels: number;
   channel_mix: string[];
   recommended_action: string;
+  benchmark_summary?: string;
+  forecast_inputs?: string[];
 };
 
 type DispatchWorkspaceInput = {
@@ -30,6 +35,8 @@ type DispatchWorkspaceInput = {
   airport_ready_drivers: number;
   avg_weekly_earnings: number;
   recommended_action: string;
+  telemetry_summary?: string;
+  telemetry_signals?: string[];
   supply_queue: Array<{
     driver: string;
     mode: string;
@@ -50,6 +57,8 @@ export type LongCatConsumerAssistant = {
   operator_script: string;
   accessibility_note: string;
   next_actions: string[];
+  memory_grounding: string;
+  channel_actions: string[];
 };
 
 export type LongCatMerchantConsultant = {
@@ -60,6 +69,8 @@ export type LongCatMerchantConsultant = {
   menu_actions: string[];
   channel_actions: string[];
   financial_watchouts: string[];
+  benchmark_summary: string;
+  benchmark_actions: string[];
 };
 
 export type LongCatDispatchIntelligence = {
@@ -69,6 +80,8 @@ export type LongCatDispatchIntelligence = {
   rider_guidance: string[];
   risk_flags: string[];
   ranked_candidates: Array<{ id: number | null; driver: string; score: number; zone: string }>;
+  telemetry_summary: string;
+  recommended_reallocations: string[];
 };
 
 type OllamaGenerateResponse = {
@@ -143,6 +156,8 @@ async function generateStructured<T>(prompt: string): Promise<{ data: T | null; 
 
 function fallbackConsumerAssistant(input: ConsumerWorkspaceInput, reason?: string): LongCatConsumerAssistant {
   const pressure = input.substitution_cases > 0 ? "substitution recovery" : input.active_calls > input.staffed_lines ? "call overflow containment" : "kitchen handoff consistency";
+  const messagingChannels = input.messaging_channels?.length ? input.messaging_channels.join(", ") : "sms follow-up";
+  const memoryGrounding = input.memory_summary?.trim() || "No durable customer memory has been summarized yet, so treat every interaction as a fresh assisted-ordering moment.";
   return {
     source: providerStatus("heuristic", false, reason ?? "Falling back to deterministic consumer-assistant guidance."),
     assistant_name: "LongCat Concierge",
@@ -161,10 +176,17 @@ function fallbackConsumerAssistant(input: ConsumerWorkspaceInput, reason?: strin
       "Capture unavailable-item intent explicitly so the merchant can learn recurring substitution demand.",
       "Escalate elderly or accessibility-sensitive callers to the shortest confirmation script.",
     ],
+    memory_grounding: memoryGrounding,
+    channel_actions: [
+      input.live_voice_enabled ? "Keep voice ordering live for high-friction cases and overflow recovery." : "Bring assisted voice ordering online for overflow and substitution-sensitive cases.",
+      `Use ${messagingChannels} for confirmations, reorder nudges, and callback consent capture.`,
+      "Unify the caller profile across assisted ordering, recovery, and follow-up channels so preferences persist beyond a single contact.",
+    ],
   };
 }
 
 function fallbackMerchantConsultant(input: MerchantWorkspaceInput, reason?: string): LongCatMerchantConsultant {
+  const benchmarkSummary = input.benchmark_summary?.trim() || "Peer benchmarking is currently limited to internal channel and campaign signals, so use internal cohort comparisons until external market feeds are attached.";
   return {
     source: providerStatus("heuristic", false, reason ?? "Falling back to deterministic merchant-consultant guidance."),
     consultant_name: "LongCat Merchant Copilot",
@@ -188,6 +210,12 @@ function fallbackMerchantConsultant(input: MerchantWorkspaceInput, reason?: stri
       "Watch contribution margin on channels that require heavy promotion to sustain volume.",
       "Avoid opening new merchant surfaces until post-click conversion and repeat-order retention stabilize.",
       "Track whether push-delivery volume is producing incremental orders or only shifting existing demand between channels.",
+    ],
+    benchmark_summary: benchmarkSummary,
+    benchmark_actions: [
+      "Compare owned-channel conversion against peer storefront cohorts before increasing paid partner spend.",
+      "Track whether push and campaign delivery volume produces repeat orders, not just short-lived traffic.",
+      "Use weekly benchmark deltas to decide which merchants need menu, pricing, or lifecycle-message intervention first.",
     ],
   };
 }
@@ -252,6 +280,12 @@ function fallbackDispatchIntelligence(input: DispatchWorkspaceInput, reason?: st
       score: byId.get(ranked.rankedCandidates[index]?.id ?? -1)?.score ?? 0,
       zone: entry.zone,
     })),
+    telemetry_summary: input.telemetry_summary?.trim() || "Dispatch guidance is using live supply and order pressure, but richer telemetry should remain attached whenever weather, traffic, or prep-delay signals are available.",
+    recommended_reallocations: [
+      "Shift the highest-confidence online drivers into the most backlogged zones first.",
+      "Use telemetry-backed batch windows only when queue density and courier confidence align.",
+      "Preserve a small airport-ready reserve until peak-transfer demand visibly drops.",
+    ],
   };
 }
 
@@ -263,14 +297,19 @@ export async function buildConsumerAssistant(input: ConsumerWorkspaceInput): Pro
     operator_script: string;
     accessibility_note: string;
     next_actions: string[];
+    memory_grounding: string;
+    channel_actions: string[];
   }>([
     "You are LongCat Concierge for a food delivery platform.",
-    "Return JSON only with keys conversation_goal, personalized_recommendations, operator_script, accessibility_note, next_actions.",
+    "Return JSON only with keys conversation_goal, personalized_recommendations, operator_script, accessibility_note, next_actions, memory_grounding, channel_actions.",
     "Each list must contain 3 concise items.",
     `Workspace snapshot: staffed_lines=${input.staffed_lines}, active_calls=${input.active_calls}, substitution_cases=${input.substitution_cases}.`,
     `Call flows: ${input.call_flows.join(" | ")}.`,
+    `Customer memory: ${input.memory_summary?.trim() || "No durable customer memory summary available."}`,
+    `Live voice enabled: ${input.live_voice_enabled ? "yes" : "no"}.`,
+    `Messaging channels: ${(input.messaging_channels?.length ? input.messaging_channels.join(", ") : "sms")}.`,
     `Current recommended action: ${input.recommended_action}.`,
-    "Optimize for voice ordering, personalization, accessibility, and conversion without inventing unavailable system capabilities.",
+    "Optimize for voice ordering, messaging follow-up, personalization, accessibility, and conversion without inventing unavailable system capabilities.",
   ].join("\n"));
 
   if (!data) return fallbackConsumerAssistant(input, reason);
@@ -283,6 +322,8 @@ export async function buildConsumerAssistant(input: ConsumerWorkspaceInput): Pro
     operator_script: toText(data.operator_script, fallback.operator_script),
     accessibility_note: toText(data.accessibility_note, fallback.accessibility_note),
     next_actions: toTextList(data.next_actions, fallback.next_actions),
+    memory_grounding: toText(data.memory_grounding, fallback.memory_grounding),
+    channel_actions: toTextList(data.channel_actions, fallback.channel_actions),
   };
 }
 
@@ -294,14 +335,18 @@ export async function buildMerchantConsultant(input: MerchantWorkspaceInput): Pr
     menu_actions: string[];
     channel_actions: string[];
     financial_watchouts: string[];
+    benchmark_summary: string;
+    benchmark_actions: string[];
   }>([
     "You are LongCat Merchant Copilot for a restaurant and merchant growth workspace.",
-    "Return JSON only with keys market_brief, demand_forecast, menu_actions, channel_actions, financial_watchouts.",
+    "Return JSON only with keys market_brief, demand_forecast, menu_actions, channel_actions, financial_watchouts, benchmark_summary, benchmark_actions.",
     "Each list must contain 3 concise items.",
     `Workspace snapshot: activated_channels=${input.activated_channels}, branded_storefronts=${input.branded_storefronts}, partner_channels=${input.partner_channels}.`,
     `Channel mix: ${input.channel_mix.join(" | ")}.`,
+    `Benchmark summary: ${input.benchmark_summary?.trim() || "Only internal merchant benchmark signals are currently attached."}`,
+    `Forecast inputs: ${(input.forecast_inputs?.length ? input.forecast_inputs.join(" | ") : "internal channel, campaign, and storefront health signals only")}.`,
     `Current recommended action: ${input.recommended_action}.`,
-    "Focus on market analysis, menu optimization, channel mix, and merchant financial planning. Avoid claiming unavailable external data.",
+    "Focus on market analysis, menu optimization, channel mix, merchant benchmarking, and merchant financial planning. Avoid claiming unavailable external data.",
   ].join("\n"));
 
   if (!data) return fallbackMerchantConsultant(input, reason);
@@ -314,6 +359,8 @@ export async function buildMerchantConsultant(input: MerchantWorkspaceInput): Pr
     menu_actions: toTextList(data.menu_actions, fallback.menu_actions),
     channel_actions: toTextList(data.channel_actions, fallback.channel_actions),
     financial_watchouts: toTextList(data.financial_watchouts, fallback.financial_watchouts),
+    benchmark_summary: toText(data.benchmark_summary, fallback.benchmark_summary),
+    benchmark_actions: toTextList(data.benchmark_actions, fallback.benchmark_actions),
   };
 }
 
@@ -324,14 +371,18 @@ export async function buildDispatchIntelligence(input: DispatchWorkspaceInput): 
     batching_strategy: string;
     rider_guidance: string[];
     risk_flags: string[];
+    telemetry_summary: string;
+    recommended_reallocations: string[];
   }>([
     "You are LongCat Dispatch Intelligence for a high-volume delivery marketplace.",
-    "Return JSON only with keys dispatch_brief, batching_strategy, rider_guidance, risk_flags.",
+    "Return JSON only with keys dispatch_brief, batching_strategy, rider_guidance, risk_flags, telemetry_summary, recommended_reallocations.",
     "Each list must contain 3 concise items.",
     `Workspace snapshot: online_drivers=${input.online_drivers}, trip_radar_candidates=${input.trip_radar_candidates}, airport_ready_drivers=${input.airport_ready_drivers}, avg_weekly_earnings=${input.avg_weekly_earnings}.`,
     `Supply queue: ${input.supply_queue.map((entry) => `${entry.driver}/${entry.zone}/${entry.status}/${entry.next_action}`).join(" | ")}.`,
+    `Telemetry summary: ${input.telemetry_summary?.trim() || "No enriched telemetry summary attached."}`,
+    `Telemetry signals: ${(input.telemetry_signals?.length ? input.telemetry_signals.join(" | ") : "supply and queue metrics only")}.`,
     `Current recommended action: ${input.recommended_action}.`,
-    "Optimize for real-time dispatch, batching, supply balancing, and operational explainability.",
+    "Optimize for real-time dispatch, batching, supply balancing, telemetry-backed explainability, and safe operational overrides.",
   ].join("\n"));
 
   if (!data) return fallbackDispatchIntelligence(input, reason);
@@ -343,5 +394,7 @@ export async function buildDispatchIntelligence(input: DispatchWorkspaceInput): 
     batching_strategy: toText(data.batching_strategy, fallback.batching_strategy),
     rider_guidance: toTextList(data.rider_guidance, fallback.rider_guidance),
     risk_flags: toTextList(data.risk_flags, fallback.risk_flags),
+    telemetry_summary: toText(data.telemetry_summary, fallback.telemetry_summary),
+    recommended_reallocations: toTextList(data.recommended_reallocations, fallback.recommended_reallocations),
   };
 }

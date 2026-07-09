@@ -42,7 +42,7 @@ if ! command -v go >/dev/null 2>&1; then
   exit 1
 fi
 
-python3 -m pip install --break-system-packages faster-whisper ctranslate2 fastapi uvicorn
+python3 -m pip install --break-system-packages faster-whisper ctranslate2 fastapi uvicorn requests python-dateutil
 
 if [[ ! -x /usr/local/bin/piper ]]; then
   ARCHIVE=/tmp/piper_linux_x86_64.tar.gz
@@ -60,6 +60,9 @@ fi
 
 install -m 0644 "$SWITCHOS_ROOT/deploy/voice/systemd/longcat-speech-runtime.service" "$SYSTEMD_DIR/longcat-speech-runtime.service"
 install -m 0644 "$SWITCHOS_ROOT/deploy/voice/systemd/longcat-voice-gateway.service" "$SYSTEMD_DIR/longcat-voice-gateway.service"
+install -m 0644 "$SWITCHOS_ROOT/deploy/voice/systemd/longcat-notification-dispatcher.service" "$SYSTEMD_DIR/longcat-notification-dispatcher.service"
+install -m 0644 "$SWITCHOS_ROOT/deploy/voice/systemd/longcat-benchmark-refresh.service" "$SYSTEMD_DIR/longcat-benchmark-refresh.service"
+install -m 0644 "$SWITCHOS_ROOT/deploy/voice/systemd/longcat-benchmark-refresh.timer" "$SYSTEMD_DIR/longcat-benchmark-refresh.timer"
 install -m 0644 "$SWITCHOS_ROOT/deploy/voice/asterisk/extensions.switchos-longcat.conf" "$ASTERISK_AUDIOSOCKET_DIR/extensions.switchos-longcat.conf"
 
 if [[ -f "$ASTERISK_EXTENSIONS" ]] && ! grep -q "switchos-longcat" "$ASTERISK_EXTENSIONS"; then
@@ -69,5 +72,7 @@ fi
 systemctl daemon-reload
 systemctl enable longcat-speech-runtime.service
 systemctl enable longcat-voice-gateway.service
+systemctl enable longcat-notification-dispatcher.service
+systemctl enable longcat-benchmark-refresh.timer
 
-echo "LongCat voice stack install assets applied. Start the services after verifying the env file and repository paths."
+echo "LongCat voice and non-voice LongCat deployment assets applied. Start the services after verifying the env file, provider URLs, and repository paths."

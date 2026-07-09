@@ -22,7 +22,8 @@ import {
   syncLakehouseFromPostgres,
 } from "./lib/lakehouse";
 import { getFundsReconciliationSnapshot } from "./db";
-import { appendLongCatVoiceTurn, getLongCatCustomerMemory, startLongCatVoiceSession } from "./_core/longcatVoice";
+import { appendLongCatMessagingTurn, appendLongCatVoiceTurn, getLongCatCustomerMemory, startLongCatMessagingSession, startLongCatVoiceSession } from "./_core/longcatVoice";
+import { executeLongCatAction } from "./_core/longcatActions";
 
 const listInput = z.object({ limit: z.number().min(1).max(25).optional() }).optional();
 
@@ -105,6 +106,25 @@ export const appRouter = router({
         idempotencyKey: input.idempotencyKey ?? null,
         triggerReason: input.triggerReason ?? null,
       })),
+    startMessagingSession: protectedProcedure
+      .input(z.object({
+        userId: z.number().int().positive().optional(),
+        customerPhone: z.string().trim().min(5).max(64).optional(),
+        customerName: z.string().trim().min(1).max(255).optional(),
+        messageChannel: z.string().trim().min(2).max(64).optional(),
+        accessibilityFlags: z.array(z.string().trim().min(1).max(64)).max(8).optional(),
+        idempotencyKey: z.string().trim().min(4).max(255).optional(),
+        triggerReason: z.string().trim().min(2).max(255).optional(),
+      }))
+      .mutation(({ input }) => startLongCatMessagingSession({
+        userId: input.userId ?? null,
+        customerPhone: input.customerPhone ?? null,
+        customerName: input.customerName ?? null,
+        voiceChannel: input.messageChannel ?? "sms_ordering",
+        accessibilityFlags: input.accessibilityFlags ?? [],
+        idempotencyKey: input.idempotencyKey ?? null,
+        triggerReason: input.triggerReason ?? null,
+      })),
     appendVoiceTurn: protectedProcedure
       .input(z.object({
         sessionId: z.string().uuid(),
@@ -119,6 +139,54 @@ export const appRouter = router({
         utterance: input.utterance,
         channel: input.channel,
         metadata: input.metadata,
+      })),
+    appendMessagingTurn: protectedProcedure
+      .input(z.object({
+        sessionId: z.string().uuid(),
+        speaker: z.enum(["customer", "agent", "system"]),
+        utterance: z.string().trim().min(1).max(4_000),
+        channel: z.string().trim().min(2).max(64).optional(),
+        metadata: z.record(z.string(), z.unknown()).optional(),
+        dispatchReply: z.boolean().optional(),
+      }))
+      .mutation(({ input }) => appendLongCatMessagingTurn({
+        sessionId: input.sessionId,
+        speaker: input.speaker,
+        utterance: input.utterance,
+        channel: input.channel,
+        metadata: input.metadata,
+        dispatchReply: input.dispatchReply,
+      })),
+    executeAction: protectedProcedure
+      .input(z.object({
+        sessionId: z.string().uuid().optional(),
+        customerPhone: z.string().trim().min(5).max(64).optional(),
+        customerName: z.string().trim().min(1).max(255).optional(),
+        merchantName: z.string().trim().min(1).max(255).optional(),
+        kind: z.enum(["sms_followup", "merchant_callback", "service_recovery_credit", "reservation_booking"]),
+        reason: z.string().trim().min(3).max(500),
+        notes: z.string().trim().min(1).max(2000).optional(),
+        reservation: z.object({
+          partySize: z.number().int().positive(),
+          requestedAt: z.string().trim().min(5).max(128),
+          location: z.string().trim().min(2).max(255),
+        }).optional(),
+        compensation: z.object({
+          amount: z.number().positive(),
+          currency: z.string().trim().min(3).max(12),
+          incidentType: z.string().trim().min(2).max(255),
+        }).optional(),
+      }))
+      .mutation(({ input }) => executeLongCatAction({
+        sessionId: input.sessionId ?? null,
+        customerPhone: input.customerPhone ?? null,
+        customerName: input.customerName ?? null,
+        merchantName: input.merchantName ?? null,
+        kind: input.kind,
+        reason: input.reason,
+        notes: input.notes ?? null,
+        reservation: input.reservation ?? null,
+        compensation: input.compensation ?? null,
       })),
   }),
 });

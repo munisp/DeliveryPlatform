@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { Pool } from "pg";
 
 import { ENV } from "./env";
+import { dispatchLongCatMessage } from "./notificationGateway";
 import { recordOperationalEvent } from "./operationalEvents";
 
 export type LongCatCustomerMemory = {
@@ -58,6 +59,15 @@ export type LongCatVoiceTurnResult = {
     error: string | null;
   };
   updated_memory: LongCatCustomerMemory;
+};
+
+export type LongCatMessagingTurnResult = LongCatVoiceTurnResult & {
+  message_dispatch: {
+    attempted: boolean;
+    accepted: boolean;
+    request_id: string | null;
+    error: string | null;
+  };
 };
 
 export type LongCatTelephonySession = {
@@ -443,6 +453,57 @@ async function loadRecentOrders(userId?: number | null) {
 
 async function persistMemory(memory: LongCatCustomerMemory) {
   const db = getPool();
+
+  if (memory.customer_phone) {
+    await db.query(
+      `INSERT INTO longcat_customer_memory_profiles (
+         profile_id,
+         user_id,
+         customer_phone,
+         customer_name,
+         lifetime_orders,
+         average_order_value,
+         last_ordered_at,
+         favorite_provider_ids,
+         preference_tags,
+         accessibility_flags,
+         substitution_risk,
+         memory_summary,
+         source,
+         updated_at
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10::jsonb, $11, $12, $13, NOW())
+       ON CONFLICT (customer_phone) DO UPDATE SET
+         user_id = EXCLUDED.user_id,
+         customer_name = EXCLUDED.customer_name,
+         lifetime_orders = EXCLUDED.lifetime_orders,
+         average_order_value = EXCLUDED.average_order_value,
+         last_ordered_at = EXCLUDED.last_ordered_at,
+         favorite_provider_ids = EXCLUDED.favorite_provider_ids,
+         preference_tags = EXCLUDED.preference_tags,
+         accessibility_flags = EXCLUDED.accessibility_flags,
+         substitution_risk = EXCLUDED.substitution_risk,
+         memory_summary = EXCLUDED.memory_summary,
+         source = EXCLUDED.source,
+         updated_at = NOW()`,
+      [
+        memory.profile_id,
+        memory.user_id,
+        memory.customer_phone,
+        memory.customer_name,
+        memory.lifetime_orders,
+        memory.average_order_value,
+        memory.last_ordered_at,
+        JSON.stringify(memory.favorite_provider_ids),
+        JSON.stringify(memory.preference_tags),
+        JSON.stringify(memory.accessibility_flags),
+        memory.substitution_risk,
+        memory.memory_summary,
+        memory.source,
+      ],
+    );
+    return;
+  }
+
   await db.query(
     `INSERT INTO longcat_customer_memory_profiles (
        profile_id,
@@ -617,6 +678,18 @@ export async function getLongCatCustomerMemory(input: {
   const cached = await readCachedMemory({ userId: input.userId, customerPhone: normalizedPhone });
   if (cached) return cached;
 
+  const db = getPool();
+  const existingProfile = normalizedPhone
+    ? await db.query<{ profile_id: string }>(
+        `SELECT profile_id
+         FROM longcat_customer_memory_profiles
+         WHERE customer_phone = $1
+         ORDER BY updated_at DESC
+         LIMIT 1`,
+        [normalizedPhone],
+      ).then((result) => result.rows[0] ?? null)
+    : null;
+
   const orders = await loadRecentOrders(input.userId);
   const lifetimeOrders = orders.length;
   const averageOrderValue = lifetimeOrders > 0
@@ -630,7 +703,7 @@ export async function getLongCatCustomerMemory(input: {
   const substitutionRisk = deriveSubstitutionRisk(orders);
 
   const memoryBase = {
-    profile_id: randomUUID(),
+    profile_id: existingProfile?.profile_id ?? randomUUID(),
     user_id: input.userId ?? null,
     customer_phone: normalizedPhone,
     customer_name: input.customerName?.trim() || null,
@@ -798,44 +871,33 @@ export async function startLongCatVoiceSession(input: StartVoiceSessionInput): P
   };
 }
 
+export async function startLongCatMessagingSession(input: StartVoiceSessionInput): Promise<LongCatVoiceSessionSnapshot> {
+  return startLongCatVoiceSession({
+    ...input,
+    voiceChannel: input.voiceChannel?.trim() || "sms_ordering",
+    triggerReason: input.triggerReason?.trim() || "messaging assistance",
+  });
+}
+
 async function requestVoiceCallback(sessionId: string, memory: LongCatCustomerMemory, reason: string) {
-  if (!ENV.notificationDispatcherUrl || !memory.customer_phone) {
-    return { attempted: false, accepted: false, request_id: null, error: "notification dispatcher or phone not configured" };
+  if (!memory.customer_phone) {
+    return { attempted: false, accepted: false, request_id: null, error: "customer phone not configured" };
   }
 
   try {
-    const requestId = `longcat-callback-${sessionId}`;
-    const response = await fetch(`${ENV.notificationDispatcherUrl.replace(/\/$/, "")}/dispatch`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Internal-Service-Token": ENV.internalServiceToken,
-        "X-Request-Id": requestId,
-      },
-      body: JSON.stringify({
-        type: "longcat_voice_callback",
-        recipient: {
-          phone: memory.customer_phone,
-          name: memory.customer_name,
-        },
-        channels: ["voice"],
-        metadata: {
-          sessionId,
-          reason,
-        },
-        payload: {
-          callback_reason: reason,
-          customer_name: memory.customer_name,
-        },
-      }),
-      signal: AbortSignal.timeout(10_000),
+    const payload = await dispatchLongCatMessage({
+      customerPhone: memory.customer_phone,
+      customerName: memory.customer_name,
+      sessionId,
+      message: reason,
+      channel: "voice",
+      reason,
     });
-    const payload = await response.json().catch(() => ({})) as { accepted?: boolean; requestId?: string };
     return {
       attempted: true,
-      accepted: Boolean(payload.accepted ?? response.ok),
-      request_id: payload.requestId ?? requestId,
-      error: response.ok ? null : `dispatcher_http_${response.status}`,
+      accepted: payload.accepted,
+      request_id: payload.requestId,
+      error: payload.accepted ? null : "callback_dispatch_rejected",
     };
   } catch (error) {
     return {
@@ -1422,6 +1484,77 @@ export async function appendLongCatVoiceTurn(input: VoiceTurnInput): Promise<Lon
     callback_dispatch: callbackDispatch,
     updated_memory: updatedMemory,
   };
+}
+
+export async function appendLongCatMessagingTurn(input: VoiceTurnInput & { dispatchReply?: boolean }): Promise<LongCatMessagingTurnResult> {
+  const result = await appendLongCatVoiceTurn({
+    ...input,
+    channel: input.channel?.trim() || "sms_ordering",
+  });
+
+  const dispatchReply = input.dispatchReply !== false;
+  if (!dispatchReply || !result.updated_memory.customer_phone) {
+    return {
+      ...result,
+      message_dispatch: {
+        attempted: false,
+        accepted: false,
+        request_id: null,
+        error: dispatchReply ? "customer_phone_unavailable" : null,
+      },
+    };
+  }
+
+  try {
+    const dispatch = await dispatchLongCatMessage({
+      customerPhone: result.updated_memory.customer_phone,
+      customerName: result.updated_memory.customer_name,
+      sessionId: result.session_id,
+      message: result.assistant_message,
+      channel: "sms",
+      reason: result.detected_intent || "message_reply",
+    });
+
+    await recordOperationalEvent({
+      eventType: "longcat.messaging.reply_dispatched",
+      outcome: dispatch.accepted ? "success" : "failure",
+      payload: {
+        sessionId: result.session_id,
+        requestId: dispatch.requestId,
+        detectedIntent: result.detected_intent,
+      },
+    });
+
+    return {
+      ...result,
+      message_dispatch: {
+        attempted: true,
+        accepted: dispatch.accepted,
+        request_id: dispatch.requestId,
+        error: dispatch.accepted ? null : "message_dispatch_rejected",
+      },
+    };
+  } catch (error) {
+    await recordOperationalEvent({
+      eventType: "longcat.messaging.reply_dispatched",
+      outcome: "failure",
+      payload: {
+        sessionId: result.session_id,
+        detectedIntent: result.detected_intent,
+        error: error instanceof Error ? error.message : "message_dispatch_failed",
+      },
+    });
+
+    return {
+      ...result,
+      message_dispatch: {
+        attempted: true,
+        accepted: false,
+        request_id: null,
+        error: error instanceof Error ? error.message : "message_dispatch_failed",
+      },
+    };
+  }
 }
 
 export function shouldAllowAutomaticCallbackDispatch(input: {

@@ -27,6 +27,9 @@ describe("LongCat local AI integration", () => {
         "Substitution handling: 4 active cases",
       ],
       recommended_action: "Escalate substitution-heavy calls before they turn into cancellations.",
+      memory_summary: "Repeat caller prefers family meals and voice confirmation before substitutions.",
+      live_voice_enabled: true,
+      messaging_channels: ["sms_ordering", "sms_follow_up"],
     });
 
     expect(result.source.provider).toBe("heuristic");
@@ -34,6 +37,8 @@ describe("LongCat local AI integration", () => {
     expect(result.source.reason).toMatch(/ollama offline/i);
     expect(result.assistant_name).toBe("LongCat Concierge");
     expect(result.personalized_recommendations.length).toBeGreaterThanOrEqual(3);
+    expect(result.memory_grounding).toMatch(/family meals|customer memory|fresh assisted-ordering moment/i);
+    expect(result.channel_actions.join(" ")).toMatch(/voice|sms/i);
     expect(result.next_actions[0]).toMatch(/Escalate substitution-heavy calls/i);
   });
 
@@ -61,6 +66,12 @@ describe("LongCat local AI integration", () => {
               "Avoid expanding channels before repeat rate stabilizes.",
               "Watch campaign volume that shifts rather than grows demand.",
             ],
+            benchmark_summary: "Owned channels outperform partner channels on retention and push conversion.",
+            benchmark_actions: [
+              "Keep owned conversion benchmarks visible each week.",
+              "Intervene when partner-led volume dilutes repeat rate.",
+              "Use campaign cohorts to prioritize merchant coaching.",
+            ],
           }),
         }),
       }),
@@ -72,12 +83,16 @@ describe("LongCat local AI integration", () => {
       partner_channels: 3,
       channel_mix: ["Owned storefront", "Marketplace", "Phone ordering"],
       recommended_action: "Stabilize live channels before expanding syndication.",
+      benchmark_summary: "Owned channels account for 62% of activated surfaces with stronger retention than partner channels.",
+      forecast_inputs: ["6 active channel surfaces", "14 branded storefronts", "3 partner-led channels"],
     });
 
     expect(result.source.provider).toBe("ollama");
     expect(result.source.available).toBe(true);
     expect(result.market_brief).toMatch(/Lunch demand/i);
     expect(result.menu_actions).toContain("Feature fast-prep bowls during lunch.");
+    expect(result.benchmark_summary).toMatch(/Owned channels outperform partner channels/i);
+    expect(result.benchmark_actions).toHaveLength(3);
     expect(result.financial_watchouts).toHaveLength(3);
   });
 
@@ -90,6 +105,11 @@ describe("LongCat local AI integration", () => {
       airport_ready_drivers: 1,
       avg_weekly_earnings: 751,
       recommended_action: "Rebalance airport-ready supply before the next peak.",
+      telemetry_summary: "Airport zone is critical with double-digit wait times while Victoria Island remains elevated.",
+      telemetry_signals: [
+        "Airport=critical pressure, wait 13.4m, 7 drivers available",
+        "Victoria Island=elevated pressure, wait 9.1m, 8 drivers available",
+      ],
       supply_queue: [
         {
           driver: "Amina Okafor",
@@ -117,6 +137,8 @@ describe("LongCat local AI integration", () => {
     expect(result.source.provider).toBe("heuristic");
     expect(result.dispatch_brief).toMatch(/Rebalance airport-ready supply/i);
     expect(result.ranked_candidates.length).toBeGreaterThan(0);
+    expect(result.telemetry_summary).toMatch(/Airport zone is critical|Dispatch guidance is using live supply/i);
+    expect(result.recommended_reallocations).toHaveLength(3);
     expect(result.risk_flags.join(" ")).toMatch(/Airport reserve|online driver/i);
   });
 

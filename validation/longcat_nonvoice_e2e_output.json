@@ -1,0 +1,357 @@
+{
+  "merchant": {
+    "summary": {
+      "activated_channels": 5,
+      "branded_storefronts": 12,
+      "partner_channels": 3,
+      "recommended_action": "Focus the next release on merchant activation sequencing instead of adding more disconnected storefront CRUD."
+    },
+    "benchmarks": {
+      "owned_share_percent": 40,
+      "push_deliveries_per_channel": 0,
+      "live_campaigns": 0,
+      "benchmark_summary": "External benchmark set refreshed with 3 market domains. Largest visible traffic signal: DoorDash at 95,705,888 visits.",
+      "generated_at": "2026-07-09T11:29:24.985451+00:00",
+      "external_domains": [
+        {
+          "label": "DoorDash",
+          "domain": "doordash.com",
+          "visits_total_latest": 95705887.61875933,
+          "bounce_rate_latest": null,
+          "global_rank_latest": null
+        },
+        {
+          "label": "Uber Eats",
+          "domain": "ubereats.com",
+          "visits_total_latest": 59789697.12887432,
+          "bounce_rate_latest": null,
+          "global_rank_latest": null
+        },
+        {
+          "label": "Grubhub",
+          "domain": "grubhub.com",
+          "visits_total_latest": 14695066.309948824,
+          "bounce_rate_latest": null,
+          "global_rank_latest": null
+        }
+      ]
+    },
+    "longcat": {
+      "source": {
+        "provider": "ollama",
+        "model": "qwen2.5:3b",
+        "available": true
+      },
+      "consultant_name": "LongCat Merchant Copilot",
+      "market_brief": "Refresh market analysis to identify emerging trends. Optimize the menu based on customer feedback and current seasonality. Refine owned web storefronts for improved user experience.",
+      "demand_forecast": "Plan ahead with DoorDash's steady traffic (95,705,888 visits). Prepare for a surge in Uber Eats (59,789,697 visits) and Grubhub (14,695,066 visits). Monitor competitor activity and adjust accordingly.",
+      "menu_actions": [
+        "Conduct market research to inform menu item offerings.",
+        "Implement a loyalty program for repeat customers.",
+        "Create seasonal or limited-time dishes based on current trends."
+      ],
+      "channel_actions": [
+        "Invest in improving owned web storefronts' functionalities.",
+        "Explore new partnerships that could drive additional traffic.",
+        "Enhance the phone-assisted capture process to improve user experience."
+      ],
+      "financial_watchouts": [
+        "Keep a close eye on DoorDash's performance as it leads market visits.",
+        "Prepare for potential fluctuations in Uber Eats' orders due to seasonality.",
+        "Monitor competitor pricing and adjust menu prices accordingly."
+      ],
+      "benchmark_summary": "Refresh external benchmarks with insights from the three new domains. Focus benchmarking efforts on DoorDash's success as it has the largest traffic signal. Review the performance of partner channels for potential synergies.",
+      "benchmark_actions": [
+        "Identify and replicate best practices from successful partners.",
+        "Conduct a merchant satisfaction survey to identify areas needing improvement.",
+        "Invest in training programs for the staff based on observed strengths or weaknesses from competitors."
+      ]
+    }
+  },
+  "dispatch": {
+    "summary": {
+      "online_drivers": 4,
+      "trip_radar_candidates": 4,
+      "airport_ready_drivers": 2,
+      "avg_weekly_earnings": 757,
+      "recommended_action": "Airport demand is outrunning reserve supply; rebalance one delivery-first cohort toward transfer readiness."
+    },
+    "telemetry": {
+      "summary": "Open queue 54 orders at 8.7m average wait with 4 drivers visible. Latest assignment events: 1384 over 7 days.",
+      "signals": [
+        "Airport=critical pressure, wait 13.4m, 7 drivers available",
+        "Victoria Island=elevated pressure, wait 9.1m, 8 drivers available",
+        "Lekki=balanced pressure, wait 6.2m, 9 drivers available"
+      ],
+      "hotspots": [
+        {
+          "zone_key": "Airport",
+          "pressure_band": "critical",
+          "pressure_ratio": 2.3,
+          "waiting_orders": 18,
+          "open_orders": 26,
+          "available_drivers": 7,
+          "avg_wait_minutes": 13.4,
+          "recommended_action": "Shift two delivery-capable airport-ready drivers into transfer coverage for the next 45 minutes."
+        },
+        {
+          "zone_key": "Victoria Island",
+          "pressure_band": "elevated",
+          "pressure_ratio": 1.6,
+          "waiting_orders": 11,
+          "open_orders": 19,
+          "available_drivers": 8,
+          "avg_wait_minutes": 9.1,
+          "recommended_action": "Open batch windows for nearby delivery routes and tighten promised ETAs."
+        },
+        {
+          "zone_key": "Lekki",
+          "pressure_band": "balanced",
+          "pressure_ratio": 1.1,
+          "waiting_orders": 6,
+          "open_orders": 10,
+          "available_drivers": 9,
+          "avg_wait_minutes": 6.2,
+          "recommended_action": "Maintain current staffing and monitor healthcare-transport spillover."
+        }
+      ]
+    },
+    "longcat": {
+      "source": {
+        "provider": "ollama",
+        "model": "qwen2.5:3b",
+        "available": true
+      },
+      "dispatch_brief": "Manage the airport open queue with a focus on delivering orders quickly. Focus on Victoria Island to handle elevated pressure effectively. Ensure smooth operations at Lekki with balanced demand.",
+      "batching_strategy": "Prioritize batching offers for online drivers who can meet immediate needs. Consider batch offers for offline riders in the airport area where needed. Balance batch opportunities across all zones to maintain equilibrium.",
+      "rider_guidance": [
+        "Online riders in the airport should prioritize trip radar and batch offers over standard dispatches.",
+        "Drivers at Victoria Island are encouraged to look for additional trips as they may not have enough volume on their current shifts.",
+        "Lekki drivers can focus on balancing existing load with new bookings."
+      ],
+      "risk_flags": [
+        "High-risk flag in the airport due to critical pressure and limited driver availability.",
+        "Moderate risk at Victoria Island where wait times are elevated but manageable.",
+        "Low to moderate risk at Lekki which is currently balanced."
+      ],
+      "ranked_candidates": [
+        {
+          "id": 3,
+          "driver": "Amina Okafor",
+          "score": 0.943,
+          "zone": "Airport"
+        },
+        {
+          "id": 1,
+          "driver": "David Mensah",
+          "score": 0.9412,
+          "zone": "Victoria Island"
+        },
+        {
+          "id": 5,
+          "driver": "Chika Ibe",
+          "score": 0.9321,
+          "zone": "Lekki"
+        },
+        {
+          "id": 2,
+          "driver": "Kofi Boateng",
+          "score": 0.9262,
+          "zone": "Airport"
+        }
+      ],
+      "telemetry_summary": "Open queue size of 54 orders with an average wait time of 8.7 minutes across all zones. Drivers visible in open queues, ensuring quick dispatch times. Recent assignment events over the last week show activity at all zones, suggesting a dynamic and responsive system.",
+      "recommended_reallocations": [
+        "Reallocate one delivery-first cohort from the airport to transfer readiness in anticipation of increased demand.",
+        "Shift some riders from Victoria Island to balance supply at other hotspots such as Lekki or another peak area if necessary.",
+        "Monitor open queues closely and be prepared to adjust reallocating based on changing conditions."
+      ]
+    }
+  },
+  "phone": {
+    "summary": {
+      "staffed_lines": 7,
+      "active_calls": 11,
+      "substitution_cases": 4,
+      "recommended_action": "Route overflow dinner-period calls to assisted menu capture and auto-escalate unavailable-item decisions to merchant leads."
+    },
+    "messaging_assistant": {
+      "channels": [
+        "sms_ordering",
+        "sms_follow_up"
+      ],
+      "dispatcher_url": "http://127.0.0.1:8099"
+    },
+    "longcat": {
+      "source": {
+        "provider": "ollama",
+        "model": "qwen2.5:3b",
+        "available": true
+      },
+      "assistant_name": "LongCat Concierge",
+      "conversation_goal": "Capture order quickly during peak hours Offer personalized recommendations based on preference tags Provide efficient substitution and fulfillment solutions",
+      "personalized_recommendations": [
+        "Recommend dishes popular in voice-confirmation-preferred merchant preferences",
+        "Offer last-minute menu options for substitute orders",
+        "Suggest payment methods preferred by customers"
+      ],
+      "operator_script": "Welcome and confirm the order quickly Ask about any substitutions needed or available items Offer to send a personalized recommendation based on preference tags",
+      "accessibility_note": "Use voice commands where possible for confirmation and substitution decisions Ensure communication is clear and concise for better customer satisfaction Support both live voice and messaging channels",
+      "next_actions": [
+        "Route overflow calls to assisted menu capture during dinner hours",
+        "Implement personalization based on preference tags",
+        "Prepare scripts for handling substitute orders efficiently"
+      ],
+      "memory_grounding": "Recent order history shows no previous purchases from this merchant or customer No stable merchant preferences have been identified yet",
+      "channel_actions": [
+        "Optimize live voice and messaging channels to handle increase in calls during dinner hours",
+        "Implement personalized recommendations based on preference tags",
+        "Prepare scripts for handling substitution cases"
+      ]
+    }
+  },
+  "memory": {
+    "profile_id": "5c949457-129e-4bde-887d-1d0f3b186c3c",
+    "user_id": null,
+    "customer_phone": "+15550002222",
+    "customer_name": "Messaging Validation Customer",
+    "lifetime_orders": 0,
+    "average_order_value": 0,
+    "last_ordered_at": null,
+    "favorite_provider_ids": [],
+    "preference_tags": [
+      "sms-confirmation-preferred"
+    ],
+    "accessibility_flags": [
+      "sms-confirmation-preferred"
+    ],
+    "substitution_risk": "low",
+    "memory_summary": "Customer memory shows 0 recent tracked orders with an average value of 0.00. No stable merchant preference has been learned yet. Preference tags: sms-confirmation-preferred. Accessibility flags: sms-confirmation-preferred. Substitution risk is low.",
+    "last_refreshed_at": "2026-07-09T11:42:26.814Z",
+    "source": "postgres"
+  },
+  "messaging_session": {
+    "session_id": "272793c1-8968-4c51-96bc-feea042de414",
+    "status": "active",
+    "customer_phone": "+15550002222",
+    "customer_name": "Messaging Validation Customer",
+    "voice_channel": "sms_ordering",
+    "started_at": "2026-07-09T11:42:38.938Z",
+    "last_turn_at": "2026-07-09T11:42:38.938Z",
+    "conversation_goal": "Confirm the order details",
+    "operator_prompt": "A customer has requested a voice-order confirmation. The order total is $0.00. Shall I proceed with confirming the order?",
+    "priority": {
+      "band": "priority",
+      "score": 71,
+      "reason": "Voice priority scored heuristically from queue pressure and substitution risk.",
+      "source": "heuristic"
+    },
+    "memory": {
+      "profile_id": "5c949457-129e-4bde-887d-1d0f3b186c3c",
+      "user_id": null,
+      "customer_phone": "+15550002222",
+      "customer_name": "Messaging Validation Customer",
+      "lifetime_orders": 0,
+      "average_order_value": 0,
+      "last_ordered_at": null,
+      "favorite_provider_ids": [],
+      "preference_tags": [
+        "sms-confirmation-preferred"
+      ],
+      "accessibility_flags": [
+        "sms-confirmation-preferred"
+      ],
+      "substitution_risk": "low",
+      "memory_summary": "Customer memory shows 0 recent tracked orders with an average value of 0.00. No stable merchant preference has been learned yet. Preference tags: sms-confirmation-preferred. Accessibility flags: sms-confirmation-preferred. Substitution risk is low.",
+      "last_refreshed_at": "2026-07-09T11:42:26.863Z",
+      "source": "postgres"
+    },
+    "next_actions": [
+      "Confirm the customer address and payment method in one pass.",
+      "Use stored preference hints only when they reduce call time or substitution friction.",
+      "Escalate callback handling if the caller needs unavailable-item confirmation from the merchant."
+    ]
+  },
+  "messaging_turn": {
+    "session_id": "272793c1-8968-4c51-96bc-feea042de414",
+    "turn_id": 9,
+    "assistant_message": "Understood. I will confirm the quickest reorder option for you and send a summary via SMS.",
+    "detected_intent": "ConfirmOrderAndSMSConfirmation",
+    "next_actions": [
+      "Obtain order details from customer",
+      "Process order confirmation",
+      "Send SMS summary"
+    ],
+    "callback_requested": false,
+    "callback_dispatch": {
+      "attempted": false,
+      "accepted": false,
+      "request_id": null,
+      "error": null
+    },
+    "updated_memory": {
+      "profile_id": "5c949457-129e-4bde-887d-1d0f3b186c3c",
+      "user_id": null,
+      "customer_phone": "+15550002222",
+      "customer_name": "Messaging Validation Customer",
+      "lifetime_orders": 0,
+      "average_order_value": 0,
+      "last_ordered_at": null,
+      "favorite_provider_ids": [],
+      "preference_tags": [
+        "sms-confirmation-preferred"
+      ],
+      "accessibility_flags": [
+        "sms-confirmation-preferred"
+      ],
+      "substitution_risk": "low",
+      "memory_summary": "Customer memory shows 0 recent tracked orders with an average value of 0.00. No stable merchant preference has been learned yet. Preference tags: sms-confirmation-preferred. Accessibility flags: sms-confirmation-preferred. Substitution risk is low.",
+      "last_refreshed_at": "2026-07-09T11:42:53.906Z",
+      "source": "postgres"
+    },
+    "message_dispatch": {
+      "attempted": true,
+      "accepted": true,
+      "request_id": "longcat-sms-9ccaf0ed-048a-48e7-8a1c-fc3f62b80948",
+      "error": null
+    }
+  },
+  "transactional_action": {
+    "action_id": "af8d9180-a965-4728-9766-d3413b6593ff",
+    "kind": "reservation_booking",
+    "status": "completed",
+    "execution_summary": "Reservation request for 4 guests at Harbor Grill Lagos on 2026-07-10T19:00:00Z Customer requested a dinner reservation confirmation via agentic follow-up.",
+    "dispatch": {
+      "attempted": true,
+      "accepted": true,
+      "request_id": "longcat-sms-f6d0b935-91a2-4363-8d43-8dd3e117975c",
+      "error": null
+    },
+    "booking_reference": "LCAT-BOOK-AF8D9180",
+    "created_at": "2026-07-09T11:42:54.012Z"
+  },
+  "action_runs": [
+    {
+      "action_id": "af8d9180-a965-4728-9766-d3413b6593ff",
+      "kind": "reservation_booking",
+      "status": "completed",
+      "booking_reference": "LCAT-BOOK-AF8D9180",
+      "execution_summary": "Reservation request for 4 guests at Harbor Grill Lagos on 2026-07-10T19:00:00Z Customer requested a dinner reservation confirmation via agentic follow-up.",
+      "created_at": "2026-07-09T11:42:54.017Z"
+    }
+  ],
+  "notification_dispatches": [
+    {
+      "request_id": "longcat-sms-f6d0b935-91a2-4363-8d43-8dd3e117975c",
+      "dispatch_type": "longcat_chat_followup",
+      "accepted": true,
+      "created_at": "2026-07-09T11:42:54.015Z"
+    },
+    {
+      "request_id": "longcat-sms-9ccaf0ed-048a-48e7-8a1c-fc3f62b80948",
+      "dispatch_type": "longcat_chat_followup",
+      "accepted": true,
+      "created_at": "2026-07-09T11:42:53.995Z"
+    }
+  ]
+}

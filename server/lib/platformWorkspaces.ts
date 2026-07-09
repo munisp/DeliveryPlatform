@@ -1,5 +1,7 @@
 import pg from "pg";
 
+import fs from "node:fs/promises";
+
 import { buildConsumerAssistant, buildDispatchIntelligence, buildMerchantConsultant } from "../_core/longcat";
 import { ENV } from "../_core/env";
 import { getLongCatCustomerMemory } from "../_core/longcatVoice";
@@ -64,6 +66,44 @@ function toNumber(value: unknown) {
     return Number.isFinite(parsed) ? parsed : 0;
   }
   return 0;
+}
+
+async function readMerchantBenchmarkSnapshot() {
+  try {
+    const raw = await fs.readFile("/home/ubuntu/merged_switchos_project_v2/validation/longcat_merchant_benchmarks.json", "utf8");
+    const parsed = JSON.parse(raw) as {
+      generated_at?: string;
+      benchmarks?: Array<{
+        domain?: string;
+        label?: string;
+        visits_total_latest?: number | null;
+        bounce_rate_latest?: number | null;
+        global_rank_latest?: number | null;
+      }>;
+    };
+
+    const benchmarks = (parsed.benchmarks ?? []).map((entry) => ({
+      label: entry.label ?? entry.domain ?? "unknown",
+      domain: entry.domain ?? "unknown",
+      visits_total_latest: toNumber(entry.visits_total_latest),
+      bounce_rate_latest: entry.bounce_rate_latest == null ? null : toNumber(entry.bounce_rate_latest),
+      global_rank_latest: entry.global_rank_latest == null ? null : toNumber(entry.global_rank_latest),
+    }));
+
+    return {
+      generated_at: parsed.generated_at ?? null,
+      benchmarks,
+      summary: benchmarks.length > 0
+        ? `External benchmark set refreshed with ${benchmarks.length} market domains. Largest visible traffic signal: ${benchmarks[0]?.label ?? "n/a"} at ${Math.round(benchmarks[0]?.visits_total_latest ?? 0).toLocaleString()} visits.`
+        : "External benchmark file is present but empty.",
+    };
+  } catch {
+    return {
+      generated_at: null,
+      benchmarks: [] as Array<{ label: string; domain: string; visits_total_latest: number; bounce_rate_latest: number | null; global_rank_latest: number | null }>,
+      summary: "External merchant benchmark snapshot has not been generated yet.",
+    };
+  }
 }
 
 const drivers: Driver[] = [
@@ -173,6 +213,7 @@ export function getMarketplaceOverview() {
 }
 
 export async function getDriverMobilityWorkspace(limit = 8) {
+  const marketplaceOverview = getMarketplaceOverview();
   const supplyQueue = drivers.slice(0, limit).map((driver) => ({
     driver: driver.name,
     mode: driver.mode,
@@ -192,6 +233,9 @@ export async function getDriverMobilityWorkspace(limit = 8) {
     recommended_action: "Airport demand is outrunning reserve supply; rebalance one delivery-first cohort toward transfer readiness.",
   };
 
+  const telemetrySignals = marketplaceOverview.hotspots.slice(0, 3).map((hotspot) => `${hotspot.zone_key}=${hotspot.pressure_band} pressure, wait ${hotspot.avg_wait_minutes}m, ${hotspot.available_drivers} drivers available`);
+  const telemetrySummary = `Open queue ${marketplaceOverview.queue.pending_orders} orders at ${marketplaceOverview.queue.avg_queue_minutes}m average wait with ${marketplaceOverview.drivers.available_drivers} drivers visible. Latest assignment events: ${marketplaceOverview.activity_signals.assignment_events_7d} over 7 days.`;
+
   return {
     summary,
     earning_streams: [
@@ -201,8 +245,15 @@ export async function getDriverMobilityWorkspace(limit = 8) {
       "High-reliability weekly guarantee programs",
     ],
     supply_queue: supplyQueue,
+    telemetry: {
+      summary: telemetrySummary,
+      signals: telemetrySignals,
+      hotspots: marketplaceOverview.hotspots,
+    },
     longcat: await buildDispatchIntelligence({
       ...summary,
+      telemetry_summary: telemetrySummary,
+      telemetry_signals: telemetrySignals,
       supply_queue: supplyQueue,
     }),
   };
@@ -263,6 +314,8 @@ export function getWhiteLabelAppsWorkspace(limit = 8) {
 }
 
 export async function getMerchantChannelWorkspace() {
+  const externalBenchmarks = await readMerchantBenchmarkSnapshot();
+
   try {
     const summary = await queryOne<{
       activated_channels: number | string;
@@ -296,6 +349,8 @@ export async function getMerchantChannelWorkspace() {
     const partnerChannels = toNumber(summary?.partner_channels);
     const recentPushDeliveries = toNumber(summary?.recent_push_deliveries);
     const campaignsRunning = toNumber(summary?.campaigns_running);
+    const ownedShare = activatedChannels > 0 ? ((Math.max(activatedChannels - partnerChannels, 0) / activatedChannels) * 100) : 0;
+    const channelVelocity = activatedChannels > 0 ? recentPushDeliveries / activatedChannels : 0;
 
     const summaryPayload = {
       activated_channels: activatedChannels,
@@ -312,13 +367,30 @@ export async function getMerchantChannelWorkspace() {
           "Owned web storefronts with active merchant records",
           "Managed campaign channels awaiting wider activation",
         ];
+    const benchmarkSummary = `${externalBenchmarks.summary} Owned channels represent ${ownedShare.toFixed(1)}% of activated surfaces, with ${channelVelocity.toFixed(1)} recent push deliveries per active channel and ${campaignsRunning} live campaigns currently in motion.`;
+    const forecastInputs = [
+      `${activatedChannels} active channel surfaces`,
+      `${brandedStorefronts} branded storefronts available for direct conversion`,
+      `${partnerChannels} partner-led channels affecting mix quality`,
+      `${recentPushDeliveries} push deliveries in the last 7 days`,
+    ];
 
     return {
       summary: summaryPayload,
       channel_mix: channelMix,
+      benchmarks: {
+        owned_share_percent: Number(ownedShare.toFixed(1)),
+        push_deliveries_per_channel: Number(channelVelocity.toFixed(1)),
+        live_campaigns: campaignsRunning,
+        benchmark_summary: benchmarkSummary,
+        generated_at: externalBenchmarks.generated_at,
+        external_domains: externalBenchmarks.benchmarks,
+      },
       longcat: await buildMerchantConsultant({
         ...summaryPayload,
         channel_mix: channelMix,
+        benchmark_summary: benchmarkSummary,
+        forecast_inputs: forecastInputs,
       }),
     };
   } catch {
@@ -339,9 +411,19 @@ export async function getMerchantChannelWorkspace() {
     return {
       summary: summaryPayload,
       channel_mix: channelMix,
+      benchmarks: {
+        owned_share_percent: 40,
+        push_deliveries_per_channel: 0,
+        live_campaigns: 0,
+        benchmark_summary: externalBenchmarks.summary,
+        generated_at: externalBenchmarks.generated_at,
+        external_domains: externalBenchmarks.benchmarks,
+      },
       longcat: await buildMerchantConsultant({
         ...summaryPayload,
         channel_mix: channelMix,
+        benchmark_summary: externalBenchmarks.summary,
+        forecast_inputs: externalBenchmarks.benchmarks.map((entry) => `${entry.label} ${Math.round(entry.visits_total_latest).toLocaleString()} visits`),
       }),
     };
   }
@@ -468,11 +550,16 @@ export async function getPhoneOrderingWorkspace() {
         callback_channel: ENV.notificationDispatcherUrl,
         memory_preview: memoryPreview,
       },
+      messaging_assistant: {
+        channels: ["sms_ordering", "sms_follow_up"],
+        dispatcher_url: ENV.notificationDispatcherUrl,
+      },
       longcat: await buildConsumerAssistant({
         ...summaryPayload,
         call_flows: callFlows,
         memory_summary: memoryPreview.memory_summary,
         live_voice_enabled: true,
+        messaging_channels: ["sms_ordering", "sms_follow_up"],
       }),
     };
   } catch {
@@ -503,11 +590,16 @@ export async function getPhoneOrderingWorkspace() {
         callback_channel: ENV.notificationDispatcherUrl,
         memory_preview: memoryPreview,
       },
+      messaging_assistant: {
+        channels: ["sms_ordering", "sms_follow_up"],
+        dispatcher_url: ENV.notificationDispatcherUrl,
+      },
       longcat: await buildConsumerAssistant({
         ...summaryPayload,
         call_flows: callFlows,
         memory_summary: memoryPreview.memory_summary,
         live_voice_enabled: true,
+        messaging_channels: ["sms_ordering", "sms_follow_up"],
       }),
     };
   }

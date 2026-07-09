@@ -1,0 +1,10 @@
+[Unit]
+Description=SwitchOS LongCat Merchant Benchmark Refresh
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/switchos/DeliveryPlatform
+EnvironmentFile=/etc/switchos/longcat-voice.env
+ExecStart=/usr/bin/env python3 scripts/refresh_longcat_benchmarks.py

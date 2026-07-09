@@ -1,0 +1,1911 @@
+{
+  "generated_at": "2026-07-09T11:29:24.985451+00:00",
+  "source": "similarweb",
+  "benchmarks": [
+    {
+      "domain": "doordash.com",
+      "label": "DoorDash",
+      "captured_at": "2026-07-09T11:29:20.430650+00:00",
+      "visits_total_latest": 95705887.61875933,
+      "bounce_rate_latest": null,
+      "global_rank_latest": null,
+      "traffic_sources_desktop": {
+        "meta": {
+          "request": {
+            "granularity": "Monthly",
+            "main_domain_only": true,
+            "mtd": false,
+            "show_verified": false,
+            "state": null,
+            "format": "json",
+            "domain": "doordash.com",
+            "start_date": null,
+            "end_date": null,
+            "country": "world"
+          },
+          "status": "Success",
+          "last_updated": "2026-07-05"
+        },
+        "visits": {
+          "doordash.com": [
+            {
+              "source_type": "Search",
+              "visits": [
+                {
+                  "date": "2025-07-01",
+                  "organic": 4367533.393000001,
+                  "paid": 1373681.5590000004
+                },
+                {
+                  "date": "2025-08-01",
+                  "organic": 4262487.254,
+                  "paid": 1523104.2920000001
+                },
+                {
+                  "date": "2025-09-01",
+                  "organic": 4039518.9989999994,
+                  "paid": 1621675.345
+                },
+                {
+                  "date": "2025-10-01",
+                  "organic": 4457217.313999999,
+                  "paid": 1838835.544
+                },
+                {
+                  "date": "2025-11-01",
+                  "organic": 4498664.290999999,
+                  "paid": 1647581.101
+                },
+                {
+                  "date": "2025-12-01",
+                  "organic": 4502993.697000001,
+                  "paid": 2168118.5020000003
+                },
+                {
+                  "date": "2026-01-01",
+                  "organic": 4203785.868000001,
+                  "paid": 1947096.728
+                },
+                {
+                  "date": "2026-02-01",
+                  "organic": 3837251.209,
+                  "paid": 1785766.0259999998
+                },
+                {
+                  "date": "2026-03-01",
+                  "organic": 4143071.7990000006,
+                  "paid": 1851667.6260000002
+                },
+                {
+                  "date": "2026-04-01",
+                  "organic": 4185264.1979999994,
+                  "paid": 2037741.208
+                },
+                {
+                  "date": "2026-05-01",
+                  "organic": 4528287.093999999,
+                  "paid": 2219937.0160000003
+                },
+                {
+                  "date": "2026-06-01",
+                  "organic": 4519435.366,
+                  "paid": 2447020.966
+                }
+              ]
+            },
+            {
+              "source_type": "Social",
+              "visits": [
+                {
+                  "date": "2025-07-01",
+                  "organic": 120355.88600000003,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2025-08-01",
+                  "organic": 112657.02399999998,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2025-09-01",
+                  "organic": 123564.20399999998,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2025-10-01",
+                  "organic": 132054.999,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2025-11-01",
+                  "organic": 106211.06800000001,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2025-12-01",
+                  "organic": 147047.574,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2026-01-01",
+                  "organic": 219143.39700000006,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2026-02-01",
+                  "organic": 253947.92700000003,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2026-03-01",
+                  "organic": 228888.09899999996,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2026-04-01",
+                  "organic": 203023.192,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2026-05-01",
+                  "organic": 238624.78100000002,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2026-06-01",
+                  "organic": 218921.91200000004,
+                  "paid": 0.0
+                }
+              ]
+            },
+            {
+              "source_type": "Mail",
+              "visits": [
+                {
+                  "date": "2025-07-01",
+                  "organic": 15035.654999999999,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2025-08-01",
+                  "organic": 15967.673,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2025-09-01",
+                  "organic": 13772.025999999998,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2025-10-01",
+                  "organic": 13342.555999999999,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2025-11-01",
+                  "organic": 11892.788999999997,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2025-12-01",
+                  "organic": 12984.770999999997,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2026-01-01",
+                  "organic": 11115.409999999998,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2026-02-01",
+                  "organic": 11743.523000000001,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2026-03-01",
+                  "organic": 13328.167999999996,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2026-04-01",
+                  "organic": 11450.985,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2026-05-01",
+                  "organic": 13582.223999999998,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2026-06-01",
+                  "organic": 12744.674,
+                  "paid": 0.0
+                }
+              ]
+            },
+            {
+              "source_type": "Display Ads",
+              "visits": [
+                {
+                  "date": "2025-07-01",
+                  "organic": 0.0,
+                  "paid": 56277.93
+                },
+                {
+                  "date": "2025-08-01",
+                  "organic": 0.0,
+                  "paid": 52401.297999999995
+                },
+                {
+                  "date": "2025-09-01",
+                  "organic": 0.0,
+                  "paid": 46452.183000000005
+                },
+                {
+                  "date": "2025-10-01",
+                  "organic": 0.0,
+                  "paid": 47100.56099999999
+                },
+                {
+                  "date": "2025-11-01",
+                  "organic": 0.0,
+                  "paid": 45737.108
+                },
+                {
+                  "date": "2025-12-01",
+                  "organic": 0.0,
+                  "paid": 58145.359
+                },
+                {
+                  "date": "2026-01-01",
+                  "organic": 0.0,
+                  "paid": 56949.53799999999
+                },
+                {
+                  "date": "2026-02-01",
+                  "organic": 0.0,
+                  "paid": 47660.84399999999
+                },
+                {
+                  "date": "2026-03-01",
+                  "organic": 0.0,
+                  "paid": 60997.322
+                },
+                {
+                  "date": "2026-04-01",
+                  "organic": 0.0,
+                  "paid": 63818.630000000005
+                },
+                {
+                  "date": "2026-05-01",
+                  "organic": 0.0,
+                  "paid": 64699.848000000005
+                },
+                {
+                  "date": "2026-06-01",
+                  "organic": 0.0,
+                  "paid": 75807.247
+                }
+              ]
+            },
+            {
+              "source_type": "Direct",
+              "visits": [
+                {
+                  "date": "2025-07-01",
+                  "organic": 17425491.828999996,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2025-08-01",
+                  "organic": 16796420.226999998,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2025-09-01",
+                  "organic": 15948509.917000001,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2025-10-01",
+                  "organic": 17308218.643,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2025-11-01",
+                  "organic": 16961155.494,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2025-12-01",
+                  "organic": 18986914.444,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2026-01-01",
+                  "organic": 18171958.157,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2026-02-01",
+                  "organic": 17070975.276,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2026-03-01",
+                  "organic": 18988728.727999993,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2026-04-01",
+                  "organic": 18774477.634999998,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2026-05-01",
+                  "organic": 20179497.678000003,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2026-06-01",
+                  "organic": 19908513.006,
+                  "paid": 0.0
+                }
+              ]
+            },
+            {
+              "source_type": "Referrals",
+              "visits": [
+                {
+                  "date": "2025-07-01",
+                  "organic": 819817.4050000004,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2025-08-01",
+                  "organic": 740675.443,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2025-09-01",
+                  "organic": 658598.449,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2025-10-01",
+                  "organic": 726848.18,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2025-11-01",
+                  "organic": 790192.8350000002,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2025-12-01",
+                  "organic": 900107.926,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2026-01-01",
+                  "organic": 854338.252,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2026-02-01",
+                  "organic": 890983.106,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2026-03-01",
+                  "organic": 1004723.883,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2026-04-01",
+                  "organic": 931232.809,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2026-05-01",
+                  "organic": 987508.004,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2026-06-01",
+                  "organic": 1062519.634,
+                  "paid": 0.0
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "top_countries": {
+        "meta": {
+          "query": {
+            "limit": 3,
+            "offset": 0,
+            "asc": null,
+            "sort": null
+          },
+          "request": {
+            "main_domain_only": true,
+            "show_verified": false,
+            "state": null,
+            "format": "json",
+            "domain": "doordash.com",
+            "start_date": null,
+            "end_date": null,
+            "country": "world"
+          },
+          "status": "Success",
+          "last_updated": "2026-07-05"
+        },
+        "records": [
+          {
+            "country": 840,
+            "share": 0.9059358391821284,
+            "visits": 82129125.31519428,
+            "pages_per_visit": 5.081835027446829,
+            "average_time": 453.1586889663406,
+            "bounce_rate": 0.39382610116080913,
+            "rank": null,
+            "country_name": "United States"
+          },
+          {
+            "country": 36,
+            "share": 0.042650892838747435,
+            "visits": 3866587.8655609684,
+            "pages_per_visit": 4.840570291143134,
+            "average_time": 430.25096920895083,
+            "bounce_rate": 0.4068284642504824,
+            "rank": null,
+            "country_name": "Australia"
+          },
+          {
+            "country": 124,
+            "share": 0.0376855031623105,
+            "visits": 3416442.1782648102,
+            "pages_per_visit": 5.8683000124994855,
+            "average_time": 552.3802667687024,
+            "bounce_rate": 0.31259037655646005,
+            "rank": null,
+            "country_name": "Canada"
+          }
+        ]
+      },
+      "raw": {
+        "visits": {
+          "meta": {
+            "request": {
+              "granularity": "Monthly",
+              "main_domain_only": true,
+              "mtd": false,
+              "show_verified": false,
+              "state": null,
+              "format": "json",
+              "domain": "doordash.com",
+              "start_date": null,
+              "end_date": null,
+              "country": "world"
+            },
+            "status": "Success",
+            "last_updated": "2026-07-05",
+            "device": "Total"
+          },
+          "visits": [
+            {
+              "date": "2025-07-01",
+              "visits": 64496301.502315894
+            },
+            {
+              "date": "2025-08-01",
+              "visits": 62799564.27526501
+            },
+            {
+              "date": "2025-09-01",
+              "visits": 61496929.22894194
+            },
+            {
+              "date": "2025-10-01",
+              "visits": 68650043.42609303
+            },
+            {
+              "date": "2025-11-01",
+              "visits": 71289964.52878755
+            },
+            {
+              "date": "2025-12-01",
+              "visits": 82926173.7107969
+            },
+            {
+              "date": "2026-01-01",
+              "visits": 83627208.33259293
+            },
+            {
+              "date": "2026-02-01",
+              "visits": 79718466.40772973
+            },
+            {
+              "date": "2026-03-01",
+              "visits": 85389102.11196025
+            },
+            {
+              "date": "2026-04-01",
+              "visits": 85652202.82524908
+            },
+            {
+              "date": "2026-05-01",
+              "visits": 93525531.01743749
+            },
+            {
+              "date": "2026-06-01",
+              "visits": 95705887.61875933
+            }
+          ]
+        },
+        "bounce": {
+          "meta": {
+            "request": {
+              "granularity": "Monthly",
+              "main_domain_only": true,
+              "mtd": false,
+              "show_verified": false,
+              "state": null,
+              "format": "json",
+              "domain": "doordash.com",
+              "start_date": null,
+              "end_date": null,
+              "country": "world"
+            },
+            "status": "Success",
+            "last_updated": "2026-07-05"
+          },
+          "bounce_rate": [
+            {
+              "date": "2025-07-01",
+              "bounce_rate": 0.3440403563400212
+            },
+            {
+              "date": "2025-08-01",
+              "bounce_rate": 0.33384289123105054
+            },
+            {
+              "date": "2025-09-01",
+              "bounce_rate": 0.34728131039370447
+            },
+            {
+              "date": "2025-10-01",
+              "bounce_rate": 0.34930945668312485
+            },
+            {
+              "date": "2025-11-01",
+              "bounce_rate": 0.3611774166866667
+            },
+            {
+              "date": "2025-12-01",
+              "bounce_rate": 0.36997602243808786
+            },
+            {
+              "date": "2026-01-01",
+              "bounce_rate": 0.38923048294081114
+            },
+            {
+              "date": "2026-02-01",
+              "bounce_rate": 0.4003915068494059
+            },
+            {
+              "date": "2026-03-01",
+              "bounce_rate": 0.3986228023694658
+            },
+            {
+              "date": "2026-04-01",
+              "bounce_rate": 0.395443870669691
+            },
+            {
+              "date": "2026-05-01",
+              "bounce_rate": 0.39236576887499464
+            },
+            {
+              "date": "2026-06-01",
+              "bounce_rate": 0.3933342617706067
+            }
+          ]
+        },
+        "rank": {
+          "meta": {
+            "request": {
+              "main_domain_only": true,
+              "show_verified": false,
+              "state": null,
+              "format": "json",
+              "domain": "doordash.com",
+              "start_date": null,
+              "end_date": null,
+              "country": "world"
+            },
+            "status": "Success",
+            "last_updated": "2026-07-05"
+          },
+          "global_rank": [
+            {
+              "date": "2026-07",
+              "global_rank": 286
+            }
+          ]
+        }
+      }
+    },
+    {
+      "domain": "ubereats.com",
+      "label": "Uber Eats",
+      "captured_at": "2026-07-09T11:29:22.783648+00:00",
+      "visits_total_latest": 59789697.12887432,
+      "bounce_rate_latest": null,
+      "global_rank_latest": null,
+      "traffic_sources_desktop": {
+        "meta": {
+          "request": {
+            "granularity": "Monthly",
+            "main_domain_only": true,
+            "mtd": false,
+            "show_verified": false,
+            "state": null,
+            "format": "json",
+            "domain": "ubereats.com",
+            "start_date": null,
+            "end_date": null,
+            "country": "world"
+          },
+          "status": "Success",
+          "last_updated": "2026-07-05"
+        },
+        "visits": {
+          "ubereats.com": [
+            {
+              "source_type": "Search",
+              "visits": [
+                {
+                  "date": "2025-07-01",
+                  "organic": 6548446.703999998,
+                  "paid": 1160317.402
+                },
+                {
+                  "date": "2025-08-01",
+                  "organic": 6181319.787999999,
+                  "paid": 1591157.742
+                },
+                {
+                  "date": "2025-09-01",
+                  "organic": 5699371.088,
+                  "paid": 1438802.1350000002
+                },
+                {
+                  "date": "2025-10-01",
+                  "organic": 6121314.584000001,
+                  "paid": 1589519.154
+                },
+                {
+                  "date": "2025-11-01",
+                  "organic": 6033735.854,
+                  "paid": 1478129.5480000002
+                },
+                {
+                  "date": "2025-12-01",
+                  "organic": 6229260.334000001,
+                  "paid": 1602050.528
+                },
+                {
+                  "date": "2026-01-01",
+                  "organic": 5560922.732999999,
+                  "paid": 1615023.1520000002
+                },
+                {
+                  "date": "2026-02-01",
+                  "organic": 4932995.421999999,
+                  "paid": 1619171.084
+                },
+                {
+                  "date": "2026-03-01",
+                  "organic": 5555314.904,
+                  "paid": 1402654.8210000005
+                },
+                {
+                  "date": "2026-04-01",
+                  "organic": 5395603.775,
+                  "paid": 1389315.51
+                },
+                {
+                  "date": "2026-05-01",
+                  "organic": 5756500.704,
+                  "paid": 1568529.7650000001
+                },
+                {
+                  "date": "2026-06-01",
+                  "organic": 5764544.296999999,
+                  "paid": 1309307.1280000003
+                }
+              ]
+            },
+            {
+              "source_type": "Social",
+              "visits": [
+                {
+                  "date": "2025-07-01",
+                  "organic": 79518.56199999998,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2025-08-01",
+                  "organic": 92000.09499999999,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2025-09-01",
+                  "organic": 125823.544,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2025-10-01",
+                  "organic": 147828.03899999996,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2025-11-01",
+                  "organic": 117655.216,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2025-12-01",
+                  "organic": 144048.35100000002,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2026-01-01",
+                  "organic": 185013.566,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2026-02-01",
+                  "organic": 178407.28399999999,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2026-03-01",
+                  "organic": 183625.181,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2026-04-01",
+                  "organic": 179533.03599999996,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2026-05-01",
+                  "organic": 194383.98599999995,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2026-06-01",
+                  "organic": 183519.49700000003,
+                  "paid": 0.0
+                }
+              ]
+            },
+            {
+              "source_type": "Mail",
+              "visits": [
+                {
+                  "date": "2025-07-01",
+                  "organic": 10751.487000000001,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2025-08-01",
+                  "organic": 11063.167000000003,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2025-09-01",
+                  "organic": 10005.688,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2025-10-01",
+                  "organic": 10600.921000000002,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2025-11-01",
+                  "organic": 10585.655,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2025-12-01",
+                  "organic": 11094.438,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2026-01-01",
+                  "organic": 9965.887,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2026-02-01",
+                  "organic": 8354.692000000001,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2026-03-01",
+                  "organic": 8813.110000000002,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2026-04-01",
+                  "organic": 8028.534,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2026-05-01",
+                  "organic": 8065.156999999999,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2026-06-01",
+                  "organic": 7591.133000000001,
+                  "paid": 0.0
+                }
+              ]
+            },
+            {
+              "source_type": "Display Ads",
+              "visits": [
+                {
+                  "date": "2025-07-01",
+                  "organic": 0.0,
+                  "paid": 69816.94900000001
+                },
+                {
+                  "date": "2025-08-01",
+                  "organic": 0.0,
+                  "paid": 73184.617
+                },
+                {
+                  "date": "2025-09-01",
+                  "organic": 0.0,
+                  "paid": 66300.08499999999
+                },
+                {
+                  "date": "2025-10-01",
+                  "organic": 0.0,
+                  "paid": 73010.50600000002
+                },
+                {
+                  "date": "2025-11-01",
+                  "organic": 0.0,
+                  "paid": 72061.292
+                },
+                {
+                  "date": "2025-12-01",
+                  "organic": 0.0,
+                  "paid": 80560.345
+                },
+                {
+                  "date": "2026-01-01",
+                  "organic": 0.0,
+                  "paid": 89364.171
+                },
+                {
+                  "date": "2026-02-01",
+                  "organic": 0.0,
+                  "paid": 87933.346
+                },
+                {
+                  "date": "2026-03-01",
+                  "organic": 0.0,
+                  "paid": 101549.03300000002
+                },
+                {
+                  "date": "2026-04-01",
+                  "organic": 0.0,
+                  "paid": 106803.25200000001
+                },
+                {
+                  "date": "2026-05-01",
+                  "organic": 0.0,
+                  "paid": 118935.63599999998
+                },
+                {
+                  "date": "2026-06-01",
+                  "organic": 0.0,
+                  "paid": 129806.177
+                }
+              ]
+            },
+            {
+              "source_type": "Direct",
+              "visits": [
+                {
+                  "date": "2025-07-01",
+                  "organic": 15362586.087000003,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2025-08-01",
+                  "organic": 15534175.047999999,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2025-09-01",
+                  "organic": 14847078.723000005,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2025-10-01",
+                  "organic": 16113057.166,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2025-11-01",
+                  "organic": 16165115.41,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2025-12-01",
+                  "organic": 16733223.019000001,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2026-01-01",
+                  "organic": 16245396.688,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2026-02-01",
+                  "organic": 14672371.193000002,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2026-03-01",
+                  "organic": 16061796.364000002,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2026-04-01",
+                  "organic": 15956639.039000003,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2026-05-01",
+                  "organic": 17184352.713000003,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2026-06-01",
+                  "organic": 16486315.393000001,
+                  "paid": 0.0
+                }
+              ]
+            },
+            {
+              "source_type": "Referrals",
+              "visits": [
+                {
+                  "date": "2025-07-01",
+                  "organic": 924578.5040000002,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2025-08-01",
+                  "organic": 913162.2250000001,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2025-09-01",
+                  "organic": 848615.6279999999,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2025-10-01",
+                  "organic": 905067.6100000001,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2025-11-01",
+                  "organic": 901055.3470000001,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2025-12-01",
+                  "organic": 934771.9130000001,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2026-01-01",
+                  "organic": 871284.1380000003,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2026-02-01",
+                  "organic": 783086.104,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2026-03-01",
+                  "organic": 825224.7660000002,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2026-04-01",
+                  "organic": 792328.5800000001,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2026-05-01",
+                  "organic": 824240.44,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2026-06-01",
+                  "organic": 820790.7889999999,
+                  "paid": 0.0
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "top_countries": {
+        "meta": {
+          "query": {
+            "limit": 3,
+            "offset": 0,
+            "asc": null,
+            "sort": null
+          },
+          "request": {
+            "main_domain_only": true,
+            "show_verified": false,
+            "state": null,
+            "format": "json",
+            "domain": "ubereats.com",
+            "start_date": null,
+            "end_date": null,
+            "country": "world"
+          },
+          "status": "Success",
+          "last_updated": "2026-07-05"
+        },
+        "records": [
+          {
+            "country": 840,
+            "share": 0.35476672699550627,
+            "visits": 20255468.78471604,
+            "pages_per_visit": 9.851388455895387,
+            "average_time": 467.69048932479484,
+            "bounce_rate": 0.30484261005225916,
+            "rank": null,
+            "country_name": "United States"
+          },
+          {
+            "country": 124,
+            "share": 0.09128531726089445,
+            "visits": 5211951.272714391,
+            "pages_per_visit": 9.564876348824567,
+            "average_time": 400.5368323741161,
+            "bounce_rate": 0.35167967972527986,
+            "rank": null,
+            "country_name": "Canada"
+          },
+          {
+            "country": 826,
+            "share": 0.07516496242155275,
+            "visits": 4291556.772891504,
+            "pages_per_visit": 9.692925322516563,
+            "average_time": 408.36254038724377,
+            "bounce_rate": 0.3844162691411581,
+            "rank": null,
+            "country_name": "United Kingdom"
+          }
+        ]
+      },
+      "raw": {
+        "visits": {
+          "meta": {
+            "request": {
+              "granularity": "Monthly",
+              "main_domain_only": true,
+              "mtd": false,
+              "show_verified": false,
+              "state": null,
+              "format": "json",
+              "domain": "ubereats.com",
+              "start_date": null,
+              "end_date": null,
+              "country": "world"
+            },
+            "status": "Success",
+            "last_updated": "2026-07-05",
+            "device": "Total"
+          },
+          "visits": [
+            {
+              "date": "2025-07-01",
+              "visits": 52846015.656738475
+            },
+            {
+              "date": "2025-08-01",
+              "visits": 54089107.29896196
+            },
+            {
+              "date": "2025-09-01",
+              "visits": 50749548.81113614
+            },
+            {
+              "date": "2025-10-01",
+              "visits": 55529784.05781175
+            },
+            {
+              "date": "2025-11-01",
+              "visits": 54824983.374926575
+            },
+            {
+              "date": "2025-12-01",
+              "visits": 58931941.1490022
+            },
+            {
+              "date": "2026-01-01",
+              "visits": 57919828.01256804
+            },
+            {
+              "date": "2026-02-01",
+              "visits": 52398013.45802984
+            },
+            {
+              "date": "2026-03-01",
+              "visits": 58106222.28391984
+            },
+            {
+              "date": "2026-04-01",
+              "visits": 57178415.719184235
+            },
+            {
+              "date": "2026-05-01",
+              "visits": 62082219.624633566
+            },
+            {
+              "date": "2026-06-01",
+              "visits": 59789697.12887432
+            }
+          ]
+        },
+        "bounce": {
+          "meta": {
+            "request": {
+              "granularity": "Monthly",
+              "main_domain_only": true,
+              "mtd": false,
+              "show_verified": false,
+              "state": null,
+              "format": "json",
+              "domain": "ubereats.com",
+              "start_date": null,
+              "end_date": null,
+              "country": "world"
+            },
+            "status": "Success",
+            "last_updated": "2026-07-05"
+          },
+          "bounce_rate": [
+            {
+              "date": "2025-07-01",
+              "bounce_rate": 0.3592746778823277
+            },
+            {
+              "date": "2025-08-01",
+              "bounce_rate": 0.36142675110300343
+            },
+            {
+              "date": "2025-09-01",
+              "bounce_rate": 0.36174138291039404
+            },
+            {
+              "date": "2025-10-01",
+              "bounce_rate": 0.35937611417213333
+            },
+            {
+              "date": "2025-11-01",
+              "bounce_rate": 0.35870431699996447
+            },
+            {
+              "date": "2025-12-01",
+              "bounce_rate": 0.3613161888119221
+            },
+            {
+              "date": "2026-01-01",
+              "bounce_rate": 0.3666795928764597
+            },
+            {
+              "date": "2026-02-01",
+              "bounce_rate": 0.36477791896192646
+            },
+            {
+              "date": "2026-03-01",
+              "bounce_rate": 0.3708731578617168
+            },
+            {
+              "date": "2026-04-01",
+              "bounce_rate": 0.37069289553968776
+            },
+            {
+              "date": "2026-05-01",
+              "bounce_rate": 0.373645152133574
+            },
+            {
+              "date": "2026-06-01",
+              "bounce_rate": 0.3761217811518349
+            }
+          ]
+        },
+        "rank": {
+          "meta": {
+            "request": {
+              "main_domain_only": true,
+              "show_verified": false,
+              "state": null,
+              "format": "json",
+              "domain": "ubereats.com",
+              "start_date": null,
+              "end_date": null,
+              "country": "world"
+            },
+            "status": "Success",
+            "last_updated": "2026-07-05"
+          },
+          "global_rank": [
+            {
+              "date": "2026-07",
+              "global_rank": 369
+            }
+          ]
+        }
+      }
+    },
+    {
+      "domain": "grubhub.com",
+      "label": "Grubhub",
+      "captured_at": "2026-07-09T11:29:24.985420+00:00",
+      "visits_total_latest": 14695066.309948824,
+      "bounce_rate_latest": null,
+      "global_rank_latest": null,
+      "traffic_sources_desktop": {
+        "meta": {
+          "request": {
+            "granularity": "Monthly",
+            "main_domain_only": true,
+            "mtd": false,
+            "show_verified": false,
+            "state": null,
+            "format": "json",
+            "domain": "grubhub.com",
+            "start_date": null,
+            "end_date": null,
+            "country": "world"
+          },
+          "status": "Success",
+          "last_updated": "2026-07-05"
+        },
+        "visits": {
+          "grubhub.com": [
+            {
+              "source_type": "Search",
+              "visits": [
+                {
+                  "date": "2025-07-01",
+                  "organic": 1372373.984,
+                  "paid": 384141.6320000001
+                },
+                {
+                  "date": "2025-08-01",
+                  "organic": 1293617.2360000003,
+                  "paid": 381824.329
+                },
+                {
+                  "date": "2025-09-01",
+                  "organic": 1225397.835,
+                  "paid": 434275.28400000004
+                },
+                {
+                  "date": "2025-10-01",
+                  "organic": 1284793.784,
+                  "paid": 494825.95800000004
+                },
+                {
+                  "date": "2025-11-01",
+                  "organic": 1162605.9470000002,
+                  "paid": 438888.26699999993
+                },
+                {
+                  "date": "2025-12-01",
+                  "organic": 1360671.4859999998,
+                  "paid": 516229.314
+                },
+                {
+                  "date": "2026-01-01",
+                  "organic": 1215770.9630000002,
+                  "paid": 415445.578
+                },
+                {
+                  "date": "2026-02-01",
+                  "organic": 1201704.255,
+                  "paid": 322250.351
+                },
+                {
+                  "date": "2026-03-01",
+                  "organic": 1210863.5770000003,
+                  "paid": 338381.669
+                },
+                {
+                  "date": "2026-04-01",
+                  "organic": 1043193.3739999998,
+                  "paid": 332542.841
+                },
+                {
+                  "date": "2026-05-01",
+                  "organic": 1144534.3769999999,
+                  "paid": 326533.52099999995
+                },
+                {
+                  "date": "2026-06-01",
+                  "organic": 1094067.276,
+                  "paid": 325063.4450000001
+                }
+              ]
+            },
+            {
+              "source_type": "Social",
+              "visits": [
+                {
+                  "date": "2025-07-01",
+                  "organic": 10710.943,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2025-08-01",
+                  "organic": 11297.893,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2025-09-01",
+                  "organic": 12550.283999999998,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2025-10-01",
+                  "organic": 11622.421999999997,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2025-11-01",
+                  "organic": 9278.274999999998,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2025-12-01",
+                  "organic": 18092.944,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2026-01-01",
+                  "organic": 40440.818999999996,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2026-02-01",
+                  "organic": 46099.905999999995,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2026-03-01",
+                  "organic": 41445.709,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2026-04-01",
+                  "organic": 37646.00600000001,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2026-05-01",
+                  "organic": 42279.44299999999,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2026-06-01",
+                  "organic": 38643.97,
+                  "paid": 0.0
+                }
+              ]
+            },
+            {
+              "source_type": "Mail",
+              "visits": [
+                {
+                  "date": "2025-07-01",
+                  "organic": 1441.7220000000002,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2025-08-01",
+                  "organic": 1866.6149999999996,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2025-09-01",
+                  "organic": 1578.5970000000004,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2025-10-01",
+                  "organic": 1571.2730000000001,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2025-11-01",
+                  "organic": 1546.665,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2025-12-01",
+                  "organic": 1644.075,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2026-01-01",
+                  "organic": 1230.914,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2026-02-01",
+                  "organic": 1216.968,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2026-03-01",
+                  "organic": 1505.1070000000004,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2026-04-01",
+                  "organic": 1452.9450000000002,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2026-05-01",
+                  "organic": 1916.3099999999997,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2026-06-01",
+                  "organic": 1499.7650000000003,
+                  "paid": 0.0
+                }
+              ]
+            },
+            {
+              "source_type": "Display Ads",
+              "visits": [
+                {
+                  "date": "2025-07-01",
+                  "organic": 0.0,
+                  "paid": 47792.61800000001
+                },
+                {
+                  "date": "2025-08-01",
+                  "organic": 0.0,
+                  "paid": 43424.126999999986
+                },
+                {
+                  "date": "2025-09-01",
+                  "organic": 0.0,
+                  "paid": 32769.447
+                },
+                {
+                  "date": "2025-10-01",
+                  "organic": 0.0,
+                  "paid": 31719.779
+                },
+                {
+                  "date": "2025-11-01",
+                  "organic": 0.0,
+                  "paid": 26701.493999999995
+                },
+                {
+                  "date": "2025-12-01",
+                  "organic": 0.0,
+                  "paid": 29742.096999999998
+                },
+                {
+                  "date": "2026-01-01",
+                  "organic": 0.0,
+                  "paid": 23271.837000000007
+                },
+                {
+                  "date": "2026-02-01",
+                  "organic": 0.0,
+                  "paid": 18899.446
+                },
+                {
+                  "date": "2026-03-01",
+                  "organic": 0.0,
+                  "paid": 20969.915999999997
+                },
+                {
+                  "date": "2026-04-01",
+                  "organic": 0.0,
+                  "paid": 19975.849999999995
+                },
+                {
+                  "date": "2026-05-01",
+                  "organic": 0.0,
+                  "paid": 21541.209999999992
+                },
+                {
+                  "date": "2026-06-01",
+                  "organic": 0.0,
+                  "paid": 20166.009999999995
+                }
+              ]
+            },
+            {
+              "source_type": "Direct",
+              "visits": [
+                {
+                  "date": "2025-07-01",
+                  "organic": 3406952.631,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2025-08-01",
+                  "organic": 3243688.5440000007,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2025-09-01",
+                  "organic": 2973264.9910000004,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2025-10-01",
+                  "organic": 3239101.9830000005,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2025-11-01",
+                  "organic": 3018803.9329999997,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2025-12-01",
+                  "organic": 3509672.536,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2026-01-01",
+                  "organic": 3273931.723,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2026-02-01",
+                  "organic": 2990091.9800000004,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2026-03-01",
+                  "organic": 3330340.746999999,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2026-04-01",
+                  "organic": 3250946.0049999994,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2026-05-01",
+                  "organic": 3503599.2269999995,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2026-06-01",
+                  "organic": 3154774.7939999998,
+                  "paid": 0.0
+                }
+              ]
+            },
+            {
+              "source_type": "Referrals",
+              "visits": [
+                {
+                  "date": "2025-07-01",
+                  "organic": 233036.346,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2025-08-01",
+                  "organic": 217713.25599999996,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2025-09-01",
+                  "organic": 201485.83799999996,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2025-10-01",
+                  "organic": 229856.103,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2025-11-01",
+                  "organic": 209955.09399999998,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2025-12-01",
+                  "organic": 243703.761,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2026-01-01",
+                  "organic": 222451.51900000003,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2026-02-01",
+                  "organic": 215290.908,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2026-03-01",
+                  "organic": 237494.666,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2026-04-01",
+                  "organic": 205031.383,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2026-05-01",
+                  "organic": 225892.00499999998,
+                  "paid": 0.0
+                },
+                {
+                  "date": "2026-06-01",
+                  "organic": 227600.67100000003,
+                  "paid": 0.0
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "top_countries": {
+        "meta": {
+          "query": {
+            "limit": 3,
+            "offset": 0,
+            "asc": null,
+            "sort": null
+          },
+          "request": {
+            "main_domain_only": true,
+            "show_verified": false,
+            "state": null,
+            "format": "json",
+            "domain": "grubhub.com",
+            "start_date": null,
+            "end_date": null,
+            "country": "world"
+          },
+          "status": "Success",
+          "last_updated": "2026-07-05"
+        },
+        "records": [
+          {
+            "country": 840,
+            "share": 0.989323874918229,
+            "visits": 13829121.734588012,
+            "pages_per_visit": 7.047746763176346,
+            "average_time": 365.66639305668605,
+            "bounce_rate": 0.3675242754156547,
+            "rank": null,
+            "country_name": "United States"
+          },
+          {
+            "country": 764,
+            "share": 0.0020825151393586987,
+            "visits": 29110.138859930303,
+            "pages_per_visit": 1.0,
+            "average_time": 0.1523256184939517,
+            "bounce_rate": 0.9663519282424233,
+            "rank": null,
+            "country_name": "Thailand"
+          },
+          {
+            "country": 630,
+            "share": 0.001418816838368638,
+            "visits": 19832.727455915203,
+            "pages_per_visit": 4.940140730349448,
+            "average_time": 82.22311805903853,
+            "bounce_rate": 0.43036128687540376,
+            "rank": null,
+            "country_name": "Puerto Rico"
+          }
+        ]
+      },
+      "raw": {
+        "visits": {
+          "meta": {
+            "request": {
+              "granularity": "Monthly",
+              "main_domain_only": true,
+              "mtd": false,
+              "show_verified": false,
+              "state": null,
+              "format": "json",
+              "domain": "grubhub.com",
+              "start_date": null,
+              "end_date": null,
+              "country": "world"
+            },
+            "status": "Success",
+            "last_updated": "2026-07-05",
+            "device": "Total"
+          },
+          "visits": [
+            {
+              "date": "2025-07-01",
+              "visits": 14732384.185385432
+            },
+            {
+              "date": "2025-08-01",
+              "visits": 13854862.463006202
+            },
+            {
+              "date": "2025-09-01",
+              "visits": 13064891.827014057
+            },
+            {
+              "date": "2025-10-01",
+              "visits": 13845591.36217307
+            },
+            {
+              "date": "2025-11-01",
+              "visits": 12875095.117396506
+            },
+            {
+              "date": "2025-12-01",
+              "visits": 14978876.108993642
+            },
+            {
+              "date": "2026-01-01",
+              "visits": 14414839.818972968
+            },
+            {
+              "date": "2026-02-01",
+              "visits": 13272723.776461853
+            },
+            {
+              "date": "2026-03-01",
+              "visits": 14693464.421532793
+            },
+            {
+              "date": "2026-04-01",
+              "visits": 13940685.199548155
+            },
+            {
+              "date": "2026-05-01",
+              "visits": 15261962.723131426
+            },
+            {
+              "date": "2026-06-01",
+              "visits": 14695066.309948824
+            }
+          ]
+        },
+        "bounce": {
+          "meta": {
+            "request": {
+              "granularity": "Monthly",
+              "main_domain_only": true,
+              "mtd": false,
+              "show_verified": false,
+              "state": null,
+              "format": "json",
+              "domain": "grubhub.com",
+              "start_date": null,
+              "end_date": null,
+              "country": "world"
+            },
+            "status": "Success",
+            "last_updated": "2026-07-05"
+          },
+          "bounce_rate": [
+            {
+              "date": "2025-07-01",
+              "bounce_rate": 0.37575647205445556
+            },
+            {
+              "date": "2025-08-01",
+              "bounce_rate": 0.3676196219916186
+            },
+            {
+              "date": "2025-09-01",
+              "bounce_rate": 0.3710743369440801
+            },
+            {
+              "date": "2025-10-01",
+              "bounce_rate": 0.360288541306289
+            },
+            {
+              "date": "2025-11-01",
+              "bounce_rate": 0.35771484279861565
+            },
+            {
+              "date": "2025-12-01",
+              "bounce_rate": 0.3523992020337871
+            },
+            {
+              "date": "2026-01-01",
+              "bounce_rate": 0.37041230694916916
+            },
+            {
+              "date": "2026-02-01",
+              "bounce_rate": 0.3752935210051306
+            },
+            {
+              "date": "2026-03-01",
+              "bounce_rate": 0.3797369362775713
+            },
+            {
+              "date": "2026-04-01",
+              "bounce_rate": 0.3672767209668266
+            },
+            {
+              "date": "2026-05-01",
+              "bounce_rate": 0.37799249861381257
+            },
+            {
+              "date": "2026-06-01",
+              "bounce_rate": 0.3732519678115349
+            }
+          ]
+        },
+        "rank": {
+          "meta": {
+            "request": {
+              "main_domain_only": true,
+              "show_verified": false,
+              "state": null,
+              "format": "json",
+              "domain": "grubhub.com",
+              "start_date": null,
+              "end_date": null,
+              "country": "world"
+            },
+            "status": "Success",
+            "last_updated": "2026-07-05"
+          },
+          "global_rank": [
+            {
+              "date": "2026-07",
+              "global_rank": 1992
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

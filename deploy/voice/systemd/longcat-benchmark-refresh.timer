@@ -1,0 +1,11 @@
+[Unit]
+Description=Run SwitchOS LongCat Merchant Benchmark Refresh Hourly
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=1h
+Unit=longcat-benchmark-refresh.service
+Persistent=true
+
+[Install]
+WantedBy=timers.target
