@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import os
 import shutil
 import subprocess
@@ -8,7 +9,7 @@ import tempfile
 import time
 from typing import Any
 
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect, status
 from fastapi.middleware.cors import CORSMiddleware
 
 
@@ -23,11 +24,12 @@ ALLOWED_ORIGINS = [
 INTERNAL_SERVICE_TOKEN = os.getenv("INTERNAL_SERVICE_TOKEN", "switchos-internal-dev-token-change-before-production")
 PIPER_BIN = os.getenv("PIPER_BIN", "")
 PIPER_MODEL = os.getenv("PIPER_MODEL", "")
+STREAM_SESSION_TIMEOUT_SECONDS = int(os.getenv("LONGCAT_SPEECH_STREAM_TIMEOUT_SECONDS", "30"))
 
 app = FastAPI(
     title="SwitchOS LongCat Speech Runtime",
     description="Self-hosted speech runtime for LongCat telephony ingress using open-source STT and TTS engines.",
-    version="1.0.0",
+    version="1.1.0",
 )
 app.add_middleware(
     CORSMiddleware,
@@ -43,6 +45,13 @@ async def require_internal_access(x_internal_service_token: str | None = Header(
         raise HTTPException(status_code=401, detail="invalid internal service token")
 
 
+async def require_websocket_internal_access(websocket: WebSocket) -> None:
+    provided = websocket.headers.get("X-Internal-Service-Token") or websocket.query_params.get("token")
+    if provided != INTERNAL_SERVICE_TOKEN:
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        raise HTTPException(status_code=401, detail="invalid internal service token")
+
+
 @app.get("/health")
 async def health() -> dict[str, Any]:
     return {
@@ -51,40 +60,94 @@ async def health() -> dict[str, Any]:
         "stt_engine": os.getenv("LONGCAT_SPEECH_STT_ENGINE", "faster-whisper"),
         "tts_engine": os.getenv("LONGCAT_SPEECH_TTS_ENGINE", "piper"),
         "piper_available": bool(resolve_piper_binary()),
+        "streaming_endpoints": ["/stt/transcribe", "/stt/stream-chunk", "/ws/stt", "/tts/synthesize", "/ws/tts"],
     }
 
 
 @app.post("/stt/transcribe")
 async def transcribe(payload: dict[str, Any], x_internal_service_token: str | None = Header(default=None)) -> dict[str, Any]:
     await require_internal_access(x_internal_service_token)
-    started = time.time()
-    transcript = str(payload.get("transcript_hint") or payload.get("transcript") or "").strip()
-    degraded_mode = False
-    engine = str(payload.get("engine") or os.getenv("LONGCAT_SPEECH_STT_ENGINE", "faster-whisper"))
+    return build_transcription_result(payload)
 
-    if transcript:
-        return {
-            "transcript": transcript,
-            "final": bool(payload.get("final", True)),
-            "engine": engine,
-            "latency_ms": int((time.time() - started) * 1000),
-            "degraded_mode": degraded_mode,
-        }
 
-    degraded_mode = True
-    return {
-        "transcript": "",
-        "final": bool(payload.get("final", True)),
-        "engine": engine,
-        "latency_ms": int((time.time() - started) * 1000),
-        "degraded_mode": degraded_mode,
-        "error": "No streaming STT backend is installed in this sandbox. Provide transcript_hint or install a faster-whisper-compatible runtime.",
-    }
+@app.post("/stt/stream-chunk")
+async def transcribe_stream_chunk(payload: dict[str, Any], x_internal_service_token: str | None = Header(default=None)) -> dict[str, Any]:
+    await require_internal_access(x_internal_service_token)
+    result = build_transcription_result(payload)
+    result["session_id"] = str(payload.get("session_id") or "").strip() or None
+    result["chunk_id"] = str(payload.get("chunk_id") or "").strip() or None
+    result["audio_bytes"] = estimate_audio_bytes(payload)
+    return result
 
 
 @app.post("/tts/synthesize")
 async def synthesize(payload: dict[str, Any], x_internal_service_token: str | None = Header(default=None)) -> dict[str, Any]:
     await require_internal_access(x_internal_service_token)
+    return synthesize_payload(payload)
+
+
+@app.websocket("/ws/stt")
+async def websocket_stt(websocket: WebSocket) -> None:
+    await require_websocket_internal_access(websocket)
+    await websocket.accept()
+    try:
+        while True:
+            message = await websocket.receive_text()
+            payload = json.loads(message)
+            result = build_transcription_result(payload)
+            result["session_id"] = str(payload.get("session_id") or "").strip() or None
+            result["chunk_id"] = str(payload.get("chunk_id") or "").strip() or None
+            result["audio_bytes"] = estimate_audio_bytes(payload)
+            await websocket.send_json(result)
+    except WebSocketDisconnect:
+        return
+
+
+@app.websocket("/ws/tts")
+async def websocket_tts(websocket: WebSocket) -> None:
+    await require_websocket_internal_access(websocket)
+    await websocket.accept()
+    try:
+        while True:
+            message = await websocket.receive_text()
+            payload = json.loads(message)
+            result = synthesize_payload(payload)
+            result["session_id"] = str(payload.get("session_id") or "").strip() or None
+            await websocket.send_json(result)
+    except WebSocketDisconnect:
+        return
+
+
+def build_transcription_result(payload: dict[str, Any]) -> dict[str, Any]:
+    started = time.time()
+    transcript = str(payload.get("transcript_hint") or payload.get("transcript") or "").strip()
+    degraded_mode = False
+    engine = str(payload.get("engine") or os.getenv("LONGCAT_SPEECH_STT_ENGINE", "faster-whisper"))
+    final = bool(payload.get("final", True))
+
+    if transcript:
+        return {
+            "transcript": transcript,
+            "final": final,
+            "engine": engine,
+            "latency_ms": int((time.time() - started) * 1000),
+            "degraded_mode": degraded_mode,
+            "stream_timeout_seconds": STREAM_SESSION_TIMEOUT_SECONDS,
+        }
+
+    degraded_mode = True
+    return {
+        "transcript": "",
+        "final": final,
+        "engine": engine,
+        "latency_ms": int((time.time() - started) * 1000),
+        "degraded_mode": degraded_mode,
+        "stream_timeout_seconds": STREAM_SESSION_TIMEOUT_SECONDS,
+        "error": "No streaming STT backend is installed in this sandbox. Provide transcript_hint or install a faster-whisper-compatible runtime.",
+    }
+
+
+def synthesize_payload(payload: dict[str, Any]) -> dict[str, Any]:
     started = time.time()
     text = str(payload.get("text") or "").strip()
     if not text:
@@ -129,6 +192,16 @@ async def synthesize(payload: dict[str, Any], x_internal_service_token: str | No
         "degraded_mode": True,
         "error": "Piper binary or model is not configured. Install Piper and set PIPER_BIN and PIPER_MODEL for real self-hosted TTS.",
     }
+
+
+def estimate_audio_bytes(payload: dict[str, Any]) -> int:
+    audio_base64 = str(payload.get("audio_base64") or "").strip()
+    if not audio_base64:
+        return 0
+    try:
+        return len(base64.b64decode(audio_base64, validate=False))
+    except Exception:  # noqa: BLE001
+        return 0
 
 
 def resolve_piper_binary() -> str | None:
