@@ -127,6 +127,57 @@ type NetworkHealthResponse = {
   metrics?: Record<string, unknown>;
 };
 
+type ProcurementPlanResponse = {
+  service?: string;
+  city?: string;
+  approval_mode?: string;
+  critical_items?: number;
+  summary?: string;
+  procurement_actions?: Array<{
+    sku: string;
+    label?: string | null;
+    warehouse_id: number;
+    warehouse_label: string;
+    supplier_id: string;
+    supplier_name: string;
+    recommended_units: number;
+    safety_stock_units: number;
+    lead_time_hours: number;
+    service_level: number;
+    risk_band: string;
+    action_mode: string;
+    narrative: string;
+    target_transfer_node_id?: number | null;
+    target_transfer_node_name?: string | null;
+  }>;
+  metrics?: Record<string, unknown>;
+};
+
+type SupplierHealthResponse = {
+  service?: string;
+  city?: string;
+  resilience_band?: string;
+  summary?: string;
+  suppliers?: Array<{
+    supplier_id: string;
+    supplier_name: string;
+    lead_time_hours: number;
+    fill_rate: number;
+    spoilage_risk: number;
+    reliability_band: string;
+    urgency: string;
+    narrative: string;
+  }>;
+  metrics?: Record<string, unknown>;
+};
+
+type InventoryMiddlewareStatusResponse = {
+  dapr?: { configured?: boolean };
+  kafka?: { configured?: boolean };
+  fluvio?: { configured?: boolean };
+  temporal?: { configured?: boolean };
+};
+
 type Workspace = Awaited<ReturnType<typeof assembleWorkspace>>;
 
 type TimedResult<T> = {
@@ -160,44 +211,59 @@ export async function buildLocalCommerceSuperGatewayWorkspace(options?: { forceR
 
 export async function buildLocalCommerceLogisticsControlTower(options?: { city?: string | null; traceId?: string | null; forceRefresh?: boolean }) {
   const traceId = options?.traceId ?? generateTraceId("lct");
+  const city = options?.city ?? "Lagos";
   const workspaceTimed = await timeAsync(
     () => buildLocalCommerceSuperGatewayWorkspace({ forceRefresh: options?.forceRefresh, traceId }),
     traceId,
     "control_tower.workspace",
   );
 
-  const [gatewayTimed, networkTimed] = await Promise.all([
+  const [gatewayTimed, networkTimed, inventoryTimed, supplierTimed] = await Promise.all([
     timeAsync(() => loadGatewayControlTower(traceId), traceId, "control_tower.gateway"),
-    timeAsync(() => loadNetworkHealth(options?.city ?? "Lagos", workspaceTimed.result, traceId), traceId, "control_tower.network"),
+    timeAsync(() => loadNetworkHealth(city, workspaceTimed.result, traceId), traceId, "control_tower.network"),
+    timeAsync(() => loadInventoryMiddlewareStatus(traceId), traceId, "control_tower.inventory"),
+    timeAsync(() => loadSupplierHealth(city, workspaceTimed.result, traceId), traceId, "control_tower.suppliers"),
   ]);
 
   const summaryParts = [
     gatewayTimed.result?.status ? `Gateway status is ${gatewayTimed.result.status}.` : null,
     networkTimed.result?.summary ?? null,
+    supplierTimed.result?.summary ?? null,
     workspaceTimed.result.summary.recommended_action,
   ].filter((value): value is string => typeof value === "string" && value.trim().length > 0);
+
+  const middlewareReadiness = inventoryTimed.result
+    ? Object.entries(inventoryTimed.result).map(([key, value]) => `${key}:${value?.configured ? "ready" : "off"}`)
+    : [];
 
   return {
     workspace: workspaceTimed.result,
     gateway: gatewayTimed.result,
     network: networkTimed.result,
+    inventory_control: inventoryTimed.result,
+    supplier_health: supplierTimed.result,
     summary: summaryParts.join(" "),
     alerts: [
       ...(gatewayTimed.result?.recommendations ?? []),
+      ...middlewareReadiness,
       ...((networkTimed.result?.nodes ?? []).filter((node) => node.risk_band !== "healthy").map((node) => node.narrative)),
-    ].slice(0, 8),
+      ...((supplierTimed.result?.suppliers ?? []).filter((supplier) => supplier.urgency !== "watch").map((supplier) => supplier.narrative)),
+    ].slice(0, 10),
     metrics: {
       trace_id: traceId,
       timings_ms: {
         workspace: workspaceTimed.duration_ms,
         gateway: gatewayTimed.duration_ms,
         network: networkTimed.duration_ms,
+        inventory: inventoryTimed.duration_ms,
+        suppliers: supplierTimed.duration_ms,
       },
     },
     mobile_shortcuts: [
       { label: "Run fast logistics plan", route: "/logistics-control-tower", action: "plan-fast" },
       { label: "Review supply risk", route: "/merchant-channels", action: "supply-risk" },
       { label: "Check driver readiness", route: "/driver-mobility", action: "driver-readiness" },
+      { label: "Queue replenishment", route: "/logistics-control-tower", action: "replenishment" },
     ],
   };
 }
@@ -234,11 +300,17 @@ export async function planLocalCommerceConciergeIntent(input: ConciergeIntent) {
 
   let forecastTimed: TimedResult<ForecastResponse | null> = { result: null, duration_ms: 0 };
   let allocationTimed: TimedResult<AllocationResponse | null> = { result: null, duration_ms: 0 };
+  let procurementTimed: TimedResult<ProcurementPlanResponse | null> = { result: null, duration_ms: 0 };
   if (includeEnrichment) {
     [forecastTimed, allocationTimed] = await Promise.all([
       timeAsync(() => maybeForecastRetailDemand(input, traceId), traceId, "forecast.load"),
       timeAsync(() => maybeAllocateInstantRetail(input, traceId), traceId, "allocation.load"),
     ]);
+    procurementTimed = await timeAsync(
+      () => maybePlanProcurement(input, forecastTimed.result, allocationTimed.result, traceId),
+      traceId,
+      "procurement.plan",
+    );
   }
 
   const gatewayTimed = await timeAsync(
@@ -250,6 +322,7 @@ export async function planLocalCommerceConciergeIntent(input: ConciergeIntent) {
   const prioritySignals = [
     forecastTimed.result?.summary,
     allocationTimed.result?.rationale,
+    procurementTimed.result?.summary,
     gatewayTimed.result?.strategy,
   ].filter((value): value is string => typeof value === "string" && value.trim().length > 0);
 
@@ -258,6 +331,7 @@ export async function planLocalCommerceConciergeIntent(input: ConciergeIntent) {
     workspace: workspaceTimed.result,
     forecast: forecastTimed.result,
     allocation: allocationTimed.result,
+    procurementPlan: procurementTimed.result,
     gatewayPlan: gatewayTimed.result,
     decision_summary:
       prioritySignals.length > 0
@@ -272,6 +346,7 @@ export async function planLocalCommerceConciergeIntent(input: ConciergeIntent) {
         workspace: workspaceTimed.duration_ms,
         forecast: forecastTimed.duration_ms,
         allocation: allocationTimed.duration_ms,
+        procurement: procurementTimed.duration_ms,
         gateway: gatewayTimed.duration_ms,
         total: Date.now() - overallStartedAt,
       },
@@ -505,6 +580,128 @@ async function loadNetworkHealth(city: string, workspace: Workspace, traceId: st
   }
 
   return response.json() as Promise<NetworkHealthResponse>;
+}
+
+async function loadInventoryMiddlewareStatus(traceId: string): Promise<InventoryMiddlewareStatusResponse | null> {
+  if (!ENV.inventoryControlServiceUrl) {
+    return null;
+  }
+  const response = await fetch(`${ENV.inventoryControlServiceUrl.replace(/\/$/, "")}/middleware-status`, {
+    method: "GET",
+    headers: baseHeaders(traceId),
+  }).catch(() => null);
+  if (!response?.ok) {
+    return null;
+  }
+  return response.json() as Promise<InventoryMiddlewareStatusResponse>;
+}
+
+async function loadSupplierHealth(city: string, workspace: Workspace, traceId: string): Promise<SupplierHealthResponse | null> {
+  if (!ENV.procurementPlannerServiceUrl) {
+    return null;
+  }
+  const payload = {
+    city,
+    suppliers: defaultSuppliersFromWorkspace(workspace),
+  };
+  const response = await fetch(`${ENV.procurementPlannerServiceUrl.replace(/\/$/, "")}/procurement/supplier-health`, {
+    method: "POST",
+    headers: baseHeaders(traceId),
+    body: JSON.stringify(payload),
+  }).catch(() => null);
+  if (!response?.ok) {
+    return null;
+  }
+  return response.json() as Promise<SupplierHealthResponse>;
+}
+
+async function maybePlanProcurement(
+  input: ConciergeIntent,
+  forecast: ForecastResponse | null,
+  allocation: AllocationResponse | null,
+  traceId: string,
+): Promise<ProcurementPlanResponse | null> {
+  if (!ENV.procurementPlannerServiceUrl || !forecast?.recommendations?.length || !input.warehouseCandidates?.length) {
+    return null;
+  }
+
+  const primaryWarehouse = input.warehouseCandidates[0];
+  const rankedFallback = allocation?.ranked_warehouses?.find((warehouse) => warehouse.warehouse_id !== primaryWarehouse.warehouseId);
+  const payload = {
+    city: input.city ?? "unknown",
+    planning_horizon_hours: 24,
+    trigger: "concierge_plan",
+    requested_by: "local_commerce_super_gateway",
+    workflow_reason: "Protect local fulfillment fill rate and replenish high-risk SKUs before stockout.",
+    skus: forecast.recommendations.map((recommendation, index) => ({
+      sku: recommendation.sku,
+      label: recommendation.label,
+      category: input.basket?.[index]?.category ?? null,
+      warehouse_id: primaryWarehouse.warehouseId,
+      warehouse_label: primaryWarehouse.label,
+      zone_key: primaryWarehouse.zoneKey,
+      current_available_units: input.basket?.[index]?.onHandUnits ?? 0,
+      current_reserved_units: input.basket?.[index]?.reservedUnits ?? 0,
+      current_inbound_units: input.basket?.[index]?.inboundUnits ?? 0,
+      forecast_units: recommendation.forecast_units,
+      recommended_restock_units: recommendation.recommended_restock_units,
+      safety_stock_units: Math.max(recommendation.recommended_restock_units * 0.7, 4),
+      stockout_risk: recommendation.stockout_risk,
+      supplier: {
+        supplier_id: `${(input.city ?? "city").toLowerCase().replace(/\s+/g, "-")}-${recommendation.sku}-supplier`,
+        supplier_name: `${recommendation.label ?? recommendation.sku} supplier lane`,
+        lead_time_hours: input.basket?.[index]?.leadTimeHours ?? 8,
+        fill_rate: allocation?.fill_rate ? Math.min(0.99, Math.max(0.75, allocation.fill_rate)) : 0.9,
+        spoilage_risk: input.basket?.[index]?.coldChainRequired ? 0.15 : 0.05,
+        reliability_band: recommendation.stockout_risk === "critical" ? "watch" : "stable",
+      },
+      target_transfer_node_id: rankedFallback?.warehouse_id ?? null,
+      target_transfer_node_name: rankedFallback?.label ?? null,
+    })),
+  };
+
+  const response = await fetch(`${ENV.procurementPlannerServiceUrl.replace(/\/$/, "")}/procurement/plan`, {
+    method: "POST",
+    headers: baseHeaders(traceId),
+    body: JSON.stringify(payload),
+  }).catch(() => null);
+
+  if (!response?.ok) {
+    return null;
+  }
+
+  return response.json() as Promise<ProcurementPlanResponse>;
+}
+
+function defaultSuppliersFromWorkspace(workspace: Workspace) {
+  const benefits = Number(workspace.summary.cross_category_benefits ?? 0);
+  const promotions = Number(workspace.summary.active_promotions ?? 0);
+  return [
+    {
+      supplier_id: "lagos-fresh-chain",
+      supplier_name: "Lagos Fresh Chain",
+      lead_time_hours: 12,
+      fill_rate: 0.93,
+      spoilage_risk: 0.08,
+      reliability_band: benefits > 10 ? "stable" : "watch",
+    },
+    {
+      supplier_id: "mainland-grocery-wholesale",
+      supplier_name: "Mainland Grocery Wholesale",
+      lead_time_hours: 18,
+      fill_rate: 0.88,
+      spoilage_risk: 0.05,
+      reliability_band: promotions > 5 ? "watch" : "stable",
+    },
+    {
+      supplier_id: "airport-cold-chain",
+      supplier_name: "Airport Cold Chain Relay",
+      lead_time_hours: 10,
+      fill_rate: 0.9,
+      spoilage_risk: 0.12,
+      reliability_band: "stable",
+    },
+  ];
 }
 
 function defaultNetworkNodesFromWorkspace(workspace: Workspace) {

@@ -1,22 +1,19 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
-  <title id="title">SwitchOS Operator Icon</title>
-  <desc id="desc">Teal and blue SwitchOS operator icon with layered logistics lanes.</desc>
+  <title id="title">SwitchOS Icon</title>
+  <desc id="desc">Cyan logistics and operations icon for the SwitchOS PWA.</desc>
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="#0891b2" />
-      <stop offset="100%" stop-color="#1d4ed8" />
+      <stop offset="0%" stop-color="#0f172a" />
+      <stop offset="100%" stop-color="#082f49" />
     </linearGradient>
-    <linearGradient id="lane" x1="0" y1="0" x2="1" y2="0">
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0%" stop-color="#67e8f9" />
-      <stop offset="100%" stop-color="#e0f2fe" />
+      <stop offset="100%" stop-color="#06b6d4" />
     </linearGradient>
   </defs>
-  <rect width="512" height="512" rx="112" fill="url(#bg)" />
-  <circle cx="390" cy="118" r="46" fill="rgba(255,255,255,0.14)" />
-  <path d="M112 172c0-26.51 21.49-48 48-48h192c26.51 0 48 21.49 48 48s-21.49 48-48 48H160c-26.51 0-48-21.49-48-48Z" fill="#082f49" opacity="0.88"/>
-  <path d="M112 256c0-26.51 21.49-48 48-48h112c26.51 0 48 21.49 48 48s-21.49 48-48 48H160c-26.51 0-48-21.49-48-48Z" fill="#0f172a" opacity="0.92"/>
-  <path d="M160 148h188a24 24 0 0 1 0 48H160a24 24 0 0 1 0-48Z" fill="url(#lane)" opacity="0.95"/>
-  <path d="M160 232h108a24 24 0 0 1 0 48H160a24 24 0 0 1 0-48Z" fill="url(#lane)" opacity="0.95"/>
-  <path d="M138 336c0-30.93 25.07-56 56-56h132c30.93 0 56 25.07 56 56v38c0 7.73-6.27 14-14 14H152c-7.73 0-14-6.27-14-14v-38Z" fill="#f8fafc" opacity="0.96"/>
-  <path d="M184 344h152v20H184zm0 40h96v20h-96z" fill="#0891b2" opacity="0.92"/>
+  <rect width="512" height="512" rx="120" fill="url(#bg)" />
+  <path d="M120 170c0-16.6 13.4-30 30-30h212c16.6 0 30 13.4 30 30v34c0 16.6-13.4 30-30 30H150c-16.6 0-30-13.4-30-30v-34Zm44 118h184c53 0 96 43 96 96v14c0 16.6-13.4 30-30 30H98c-16.6 0-30-13.4-30-30v-14c0-53 43-96 96-96Z" fill="url(#accent)" opacity="0.92" />
+  <circle cx="180" cy="187" r="20" fill="#0f172a" opacity="0.7" />
+  <circle cx="332" cy="187" r="20" fill="#0f172a" opacity="0.7" />
+  <path d="M190 322h130" stroke="#cffafe" stroke-width="24" stroke-linecap="round" />
 </svg>

@@ -25,6 +25,7 @@ import { getFundsReconciliationSnapshot } from "./db";
 import { appendLongCatMessagingTurn, appendLongCatVoiceTurn, getLongCatCustomerMemory, startLongCatMessagingSession, startLongCatVoiceSession } from "./_core/longcatVoice";
 import { executeLongCatAction } from "./_core/longcatActions";
 import { buildLocalCommerceLogisticsControlTower, buildLocalCommerceSuperGatewayWorkspace, planLocalCommerceConciergeIntent } from "./_core/localCommerceSuperGateway";
+import { applyLoyaltyIntervention, executeMerchantGrowthCampaign, getSupplyChainGrowthControl, queueReplenishmentWorkflow } from "./_core/supplyChainCommandCenter";
 
 const listInput = z.object({ limit: z.number().min(1).max(25).optional() }).optional();
 
@@ -78,6 +79,71 @@ export const appRouter = router({
     logisticsControlTower: workspaceReadProcedure
       .input(z.object({ city: z.string().trim().min(2).max(128).optional(), forceRefresh: z.boolean().optional() }).optional())
       .query(({ input }) => buildLocalCommerceLogisticsControlTower({ city: input?.city, forceRefresh: input?.forceRefresh })),
+    supplyChainGrowthControl: workspaceReadProcedure
+      .input(z.object({ city: z.string().trim().min(2).max(128).optional(), forceRefresh: z.boolean().optional() }).optional())
+      .query(({ input }) => getSupplyChainGrowthControl({ city: input?.city, forceRefresh: input?.forceRefresh })),
+    queueReplenishment: protectedProcedure
+      .input(z.object({
+        city: z.string().trim().min(2).max(128),
+        planningHorizonHours: z.number().int().min(4).max(720).optional(),
+        trigger: z.string().trim().min(2).max(128).optional(),
+        requestedBy: z.string().trim().min(2).max(255).optional(),
+        workflowReason: z.string().trim().min(3).max(500).optional(),
+        traceId: z.string().trim().min(3).max(128).optional(),
+        skus: z.array(z.object({
+          sku: z.string().trim().min(1).max(128),
+          label: z.string().trim().max(255).optional(),
+          category: z.string().trim().max(128).optional(),
+          warehouseId: z.number().int().positive(),
+          warehouseLabel: z.string().trim().min(1).max(255),
+          zoneKey: z.string().trim().max(128).optional(),
+          currentAvailableUnits: z.number().nonnegative(),
+          currentReservedUnits: z.number().nonnegative().optional(),
+          currentInboundUnits: z.number().nonnegative().optional(),
+          forecastUnits: z.number().nonnegative(),
+          recommendedRestockUnits: z.number().nonnegative(),
+          safetyStockUnits: z.number().nonnegative(),
+          stockoutRisk: z.string().trim().min(1).max(64),
+          supplier: z.object({
+            supplierId: z.string().trim().min(1).max(128),
+            supplierName: z.string().trim().min(1).max(255),
+            leadTimeHours: z.number().nonnegative(),
+            fillRate: z.number().min(0).max(1),
+            spoilageRisk: z.number().min(0).max(1),
+            reliabilityBand: z.string().trim().min(1).max(64),
+          }),
+          targetTransferNodeId: z.number().int().positive().optional(),
+          targetTransferNodeName: z.string().trim().min(1).max(255).optional(),
+        })).min(1).max(200),
+      }))
+      .mutation(({ input }) => queueReplenishmentWorkflow(input)),
+    loyaltyIntervention: protectedProcedure
+      .input(z.object({
+        userId: z.number().int().positive(),
+        points: z.number().int().optional(),
+        transactionType: z.string().trim().min(2).max(128).optional(),
+        description: z.string().trim().min(3).max(500).optional(),
+        orderId: z.number().int().positive().optional(),
+        rewardId: z.number().int().positive().optional(),
+        idempotencyKey: z.string().trim().min(3).max(255).optional(),
+      }))
+      .mutation(({ input }) => applyLoyaltyIntervention(input)),
+    merchantGrowthCampaign: protectedProcedure
+      .input(z.object({
+        campaignId: z.number().int().positive().optional(),
+        campaignName: z.string().trim().min(2).max(255).optional(),
+        campaignType: z.string().trim().min(2).max(128).optional(),
+        emailTemplate: z.string().trim().min(3).max(5000).optional(),
+        smsTemplate: z.string().trim().min(3).max(1000).optional(),
+        targetAudience: z.string().trim().min(2).max(128).optional(),
+        triggerCondition: z.record(z.any()).optional(),
+        activate: z.boolean().optional(),
+        audienceMode: z.enum(["single_user", "full_audience"]).optional(),
+        userId: z.number().int().positive().optional(),
+        channel: z.enum(["email", "sms"]).optional(),
+        idempotencyKey: z.string().trim().min(3).max(255).optional(),
+      }))
+      .mutation(({ input }) => executeMerchantGrowthCampaign(input)),
     plan: protectedProcedure
       .input(z.object({
         city: z.string().trim().min(2).max(128).optional(),
