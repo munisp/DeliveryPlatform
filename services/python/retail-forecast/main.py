@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import math
 import os
-from datetime import datetime, timedelta, timezone
+import time
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import FastAPI, Header, HTTPException
@@ -10,6 +11,7 @@ from pydantic import BaseModel, Field
 
 INTERNAL_SERVICE_TOKEN = os.getenv("INTERNAL_SERVICE_TOKEN", "switchos-internal-dev-token-change-before-production")
 APP_VERSION = "2026-07-09-meituan-gap-wave"
+TRACE_ENABLED = os.getenv("LOCAL_COMMERCE_ENABLE_TRACING", "true").strip().lower() == "true"
 
 app = FastAPI(title="switchos-retail-forecast", version=APP_VERSION)
 
@@ -44,6 +46,10 @@ class ForecastRequest(BaseModel):
     skus: list[ForecastSku] = Field(default_factory=list)
 
 
+class BatchForecastRequest(BaseModel):
+    requests: list[ForecastRequest] = Field(default_factory=list, min_length=1, max_length=100)
+
+
 class ForecastSkuResponse(BaseModel):
     sku: str
     label: str | None
@@ -57,6 +63,16 @@ class ForecastSkuResponse(BaseModel):
     narrative: str
 
 
+class ForecastMetrics(BaseModel):
+    trace_id: str
+    request_duration_ms: float
+    sku_count: int
+    payload_chars: int
+    demand_points: int
+    merchant_name: str | None = None
+    batch_size: int | None = None
+
+
 class ForecastResponse(BaseModel):
     service: str
     generated_at: datetime
@@ -65,6 +81,16 @@ class ForecastResponse(BaseModel):
     planning_horizon_hours: int
     recommendations: list[ForecastSkuResponse]
     summary: str
+    metrics: ForecastMetrics
+
+
+class BatchForecastResponse(BaseModel):
+    service: str
+    generated_at: datetime
+    batch_size: int
+    summaries: list[str]
+    forecasts: list[ForecastResponse]
+    metrics: ForecastMetrics
 
 
 class HealthResponse(BaseModel):
@@ -82,13 +108,61 @@ def health() -> HealthResponse:
         service="switchos-retail-forecast",
         version=APP_VERSION,
         ready=True,
-        forecast_modes=["ewma", "lead-time-buffer", "freshness-aware"],
+        forecast_modes=["ewma", "lead-time-buffer", "freshness-aware", "batch"],
     )
 
 
 @app.post("/forecast", response_model=ForecastResponse)
-def forecast(request: ForecastRequest, x_internal_service_token: str | None = Header(default=None)) -> ForecastResponse:
+def forecast(request: ForecastRequest, x_internal_service_token: str | None = Header(default=None), x_trace_id: str | None = Header(default=None)) -> ForecastResponse:
     _require_internal_token(x_internal_service_token)
+    trace_id = (x_trace_id or _trace_id()).strip()
+    started = time.perf_counter()
+    response = _forecast_request(request, trace_id=trace_id)
+    response.metrics.request_duration_ms = round((time.perf_counter() - started) * 1000, 2)
+    _trace("forecast.complete", response.metrics.model_dump())
+    return response
+
+
+@app.post("/forecast/batch", response_model=BatchForecastResponse)
+def forecast_batch(request: BatchForecastRequest, x_internal_service_token: str | None = Header(default=None), x_trace_id: str | None = Header(default=None)) -> BatchForecastResponse:
+    _require_internal_token(x_internal_service_token)
+    trace_id = (x_trace_id or _trace_id()).strip()
+    started = time.perf_counter()
+    forecasts = [_forecast_request(item, trace_id=f"{trace_id}-{index + 1}") for index, item in enumerate(request.requests)]
+    payload_chars = sum(len(item.model_dump_json()) for item in request.requests)
+    demand_points = sum(len(sku.demand_history) for item in request.requests for sku in item.skus)
+    response = BatchForecastResponse(
+        service="switchos-retail-forecast",
+        generated_at=datetime.now(timezone.utc),
+        batch_size=len(request.requests),
+        summaries=[item.summary for item in forecasts],
+        forecasts=forecasts,
+        metrics=ForecastMetrics(
+            trace_id=trace_id,
+            request_duration_ms=round((time.perf_counter() - started) * 1000, 2),
+            sku_count=sum(len(item.skus) for item in request.requests),
+            payload_chars=payload_chars,
+            demand_points=demand_points,
+            batch_size=len(request.requests),
+        ),
+    )
+    _trace("forecast.batch_complete", response.metrics.model_dump())
+    return response
+
+
+@app.post("/restock-plan", response_model=ForecastResponse)
+def restock_plan(request: ForecastRequest, x_internal_service_token: str | None = Header(default=None), x_trace_id: str | None = Header(default=None)) -> ForecastResponse:
+    return forecast(request, x_internal_service_token, x_trace_id)
+
+
+def _require_internal_token(provided: str | None) -> None:
+    if not INTERNAL_SERVICE_TOKEN:
+        return
+    if provided != INTERNAL_SERVICE_TOKEN:
+        raise HTTPException(status_code=401, detail="invalid internal service token")
+
+
+def _forecast_request(request: ForecastRequest, trace_id: str) -> ForecastResponse:
     if not request.skus:
         raise HTTPException(status_code=400, detail="at least one sku is required")
 
@@ -106,19 +180,15 @@ def forecast(request: ForecastRequest, x_internal_service_token: str | None = He
         planning_horizon_hours=request.planning_horizon_hours,
         recommendations=recommendations,
         summary=summary,
+        metrics=ForecastMetrics(
+            trace_id=trace_id,
+            request_duration_ms=0,
+            sku_count=len(request.skus),
+            payload_chars=len(request.model_dump_json()),
+            demand_points=sum(len(sku.demand_history) for sku in request.skus),
+            merchant_name=request.merchant_name,
+        ),
     )
-
-
-@app.post("/restock-plan", response_model=ForecastResponse)
-def restock_plan(request: ForecastRequest, x_internal_service_token: str | None = Header(default=None)) -> ForecastResponse:
-    return forecast(request, x_internal_service_token)
-
-
-def _require_internal_token(provided: str | None) -> None:
-    if not INTERNAL_SERVICE_TOKEN:
-        return
-    if provided != INTERNAL_SERVICE_TOKEN:
-        raise HTTPException(status_code=401, detail="invalid internal service token")
 
 
 def _forecast_sku(sku: ForecastSku, planning_horizon_hours: int) -> ForecastSkuResponse:
@@ -198,3 +268,13 @@ def _service_buffer_multiplier(service_level: float) -> float:
     if service_level >= 0.9:
         return 1.08
     return 1.0
+
+
+def _trace(event: str, payload: dict[str, Any]) -> None:
+    if not TRACE_ENABLED:
+        return
+    print(f"[retail-forecast-trace] {event} {payload}")
+
+
+def _trace_id() -> str:
+    return f"rf-{int(time.time() * 1000)}"

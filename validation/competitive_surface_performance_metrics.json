@@ -1,0 +1,635 @@
+{
+  "generated_at": "2026-07-09T12:15:59.952Z",
+  "targets": {
+    "dispatch_optimizer_url": "http://127.0.0.1:8090",
+    "local_commerce_gateway_url": "http://127.0.0.1:8114",
+    "retail_forecast_service_url": "http://127.0.0.1:8115"
+  },
+  "typescript_workspace": {
+    "count": 12,
+    "ok_count": 12,
+    "min_ms": 0.03,
+    "median_ms": 0.04,
+    "p95_ms": 0.19,
+    "max_ms": 0.19,
+    "avg_ms": 0.07,
+    "samples": [
+      {
+        "iteration": 1,
+        "duration_ms": 0.19,
+        "ok": true
+      },
+      {
+        "iteration": 2,
+        "duration_ms": 0.17,
+        "ok": true
+      },
+      {
+        "iteration": 3,
+        "duration_ms": 0.08,
+        "ok": true
+      },
+      {
+        "iteration": 4,
+        "duration_ms": 0.04,
+        "ok": true
+      },
+      {
+        "iteration": 5,
+        "duration_ms": 0.04,
+        "ok": true
+      },
+      {
+        "iteration": 6,
+        "duration_ms": 0.03,
+        "ok": true
+      },
+      {
+        "iteration": 7,
+        "duration_ms": 0.11,
+        "ok": true
+      },
+      {
+        "iteration": 8,
+        "duration_ms": 0.04,
+        "ok": true
+      },
+      {
+        "iteration": 9,
+        "duration_ms": 0.03,
+        "ok": true
+      },
+      {
+        "iteration": 10,
+        "duration_ms": 0.03,
+        "ok": true
+      },
+      {
+        "iteration": 11,
+        "duration_ms": 0.03,
+        "ok": true
+      },
+      {
+        "iteration": 12,
+        "duration_ms": 0.04,
+        "ok": true
+      }
+    ]
+  },
+  "typescript_fast_path": {
+    "count": 12,
+    "ok_count": 12,
+    "min_ms": 1.63,
+    "median_ms": 2.23,
+    "p95_ms": 5.71,
+    "max_ms": 5.71,
+    "avg_ms": 2.85,
+    "samples": [
+      {
+        "iteration": 1,
+        "duration_ms": 5.2,
+        "ok": true
+      },
+      {
+        "iteration": 2,
+        "duration_ms": 5.71,
+        "ok": true
+      },
+      {
+        "iteration": 3,
+        "duration_ms": 3.09,
+        "ok": true
+      },
+      {
+        "iteration": 4,
+        "duration_ms": 2.2,
+        "ok": true
+      },
+      {
+        "iteration": 5,
+        "duration_ms": 2.64,
+        "ok": true
+      },
+      {
+        "iteration": 6,
+        "duration_ms": 2.55,
+        "ok": true
+      },
+      {
+        "iteration": 7,
+        "duration_ms": 2.23,
+        "ok": true
+      },
+      {
+        "iteration": 8,
+        "duration_ms": 1.91,
+        "ok": true
+      },
+      {
+        "iteration": 9,
+        "duration_ms": 3.29,
+        "ok": true
+      },
+      {
+        "iteration": 10,
+        "duration_ms": 1.93,
+        "ok": true
+      },
+      {
+        "iteration": 11,
+        "duration_ms": 1.63,
+        "ok": true
+      },
+      {
+        "iteration": 12,
+        "duration_ms": 1.81,
+        "ok": true
+      }
+    ]
+  },
+  "typescript_concierge": {
+    "count": 12,
+    "ok_count": 12,
+    "min_ms": 0.04,
+    "median_ms": 0.04,
+    "p95_ms": 0.16,
+    "max_ms": 0.16,
+    "avg_ms": 0.06,
+    "samples": [
+      {
+        "iteration": 1,
+        "duration_ms": 0.16,
+        "ok": true
+      },
+      {
+        "iteration": 2,
+        "duration_ms": 0.06,
+        "ok": true
+      },
+      {
+        "iteration": 3,
+        "duration_ms": 0.04,
+        "ok": true
+      },
+      {
+        "iteration": 4,
+        "duration_ms": 0.04,
+        "ok": true
+      },
+      {
+        "iteration": 5,
+        "duration_ms": 0.04,
+        "ok": true
+      },
+      {
+        "iteration": 6,
+        "duration_ms": 0.06,
+        "ok": true
+      },
+      {
+        "iteration": 7,
+        "duration_ms": 0.06,
+        "ok": true
+      },
+      {
+        "iteration": 8,
+        "duration_ms": 0.04,
+        "ok": true
+      },
+      {
+        "iteration": 9,
+        "duration_ms": 0.05,
+        "ok": true
+      },
+      {
+        "iteration": 10,
+        "duration_ms": 0.05,
+        "ok": true
+      },
+      {
+        "iteration": 11,
+        "duration_ms": 0.04,
+        "ok": true
+      },
+      {
+        "iteration": 12,
+        "duration_ms": 0.04,
+        "ok": true
+      }
+    ]
+  },
+  "python_forecast": {
+    "count": 12,
+    "ok_count": 12,
+    "min_ms": 2.27,
+    "median_ms": 3.15,
+    "p95_ms": 5.68,
+    "max_ms": 5.68,
+    "avg_ms": 3.25,
+    "samples": [
+      {
+        "iteration": 1,
+        "duration_ms": 4.54,
+        "ok": true,
+        "status": 200
+      },
+      {
+        "iteration": 2,
+        "duration_ms": 3.37,
+        "ok": true,
+        "status": 200
+      },
+      {
+        "iteration": 3,
+        "duration_ms": 2.62,
+        "ok": true,
+        "status": 200
+      },
+      {
+        "iteration": 4,
+        "duration_ms": 3.25,
+        "ok": true,
+        "status": 200
+      },
+      {
+        "iteration": 5,
+        "duration_ms": 2.29,
+        "ok": true,
+        "status": 200
+      },
+      {
+        "iteration": 6,
+        "duration_ms": 3.15,
+        "ok": true,
+        "status": 200
+      },
+      {
+        "iteration": 7,
+        "duration_ms": 2.27,
+        "ok": true,
+        "status": 200
+      },
+      {
+        "iteration": 8,
+        "duration_ms": 3.16,
+        "ok": true,
+        "status": 200
+      },
+      {
+        "iteration": 9,
+        "duration_ms": 5.68,
+        "ok": true,
+        "status": 200
+      },
+      {
+        "iteration": 10,
+        "duration_ms": 2.51,
+        "ok": true,
+        "status": 200
+      },
+      {
+        "iteration": 11,
+        "duration_ms": 3.78,
+        "ok": true,
+        "status": 200
+      },
+      {
+        "iteration": 12,
+        "duration_ms": 2.36,
+        "ok": true,
+        "status": 200
+      }
+    ]
+  },
+  "python_batch_forecast": {
+    "count": 10,
+    "ok_count": 10,
+    "min_ms": 2.34,
+    "median_ms": 2.74,
+    "p95_ms": 3.87,
+    "max_ms": 3.87,
+    "avg_ms": 2.91,
+    "samples": [
+      {
+        "iteration": 1,
+        "duration_ms": 2.82,
+        "ok": true,
+        "status": 200
+      },
+      {
+        "iteration": 2,
+        "duration_ms": 3.75,
+        "ok": true,
+        "status": 200
+      },
+      {
+        "iteration": 3,
+        "duration_ms": 2.34,
+        "ok": true,
+        "status": 200
+      },
+      {
+        "iteration": 4,
+        "duration_ms": 3.3,
+        "ok": true,
+        "status": 200
+      },
+      {
+        "iteration": 5,
+        "duration_ms": 2.98,
+        "ok": true,
+        "status": 200
+      },
+      {
+        "iteration": 6,
+        "duration_ms": 2.74,
+        "ok": true,
+        "status": 200
+      },
+      {
+        "iteration": 7,
+        "duration_ms": 2.4,
+        "ok": true,
+        "status": 200
+      },
+      {
+        "iteration": 8,
+        "duration_ms": 2.45,
+        "ok": true,
+        "status": 200
+      },
+      {
+        "iteration": 9,
+        "duration_ms": 2.47,
+        "ok": true,
+        "status": 200
+      },
+      {
+        "iteration": 10,
+        "duration_ms": 3.87,
+        "ok": true,
+        "status": 200
+      }
+    ]
+  },
+  "rust_allocation": {
+    "count": 12,
+    "ok_count": 12,
+    "min_ms": 0.94,
+    "median_ms": 1.25,
+    "p95_ms": 5.6,
+    "max_ms": 5.6,
+    "avg_ms": 1.75,
+    "samples": [
+      {
+        "iteration": 1,
+        "duration_ms": 2.02,
+        "ok": true,
+        "status": 200
+      },
+      {
+        "iteration": 2,
+        "duration_ms": 1.96,
+        "ok": true,
+        "status": 200
+      },
+      {
+        "iteration": 3,
+        "duration_ms": 1.09,
+        "ok": true,
+        "status": 200
+      },
+      {
+        "iteration": 4,
+        "duration_ms": 1.11,
+        "ok": true,
+        "status": 200
+      },
+      {
+        "iteration": 5,
+        "duration_ms": 1.48,
+        "ok": true,
+        "status": 200
+      },
+      {
+        "iteration": 6,
+        "duration_ms": 1.25,
+        "ok": true,
+        "status": 200
+      },
+      {
+        "iteration": 7,
+        "duration_ms": 1.53,
+        "ok": true,
+        "status": 200
+      },
+      {
+        "iteration": 8,
+        "duration_ms": 5.6,
+        "ok": true,
+        "status": 200
+      },
+      {
+        "iteration": 9,
+        "duration_ms": 1.76,
+        "ok": true,
+        "status": 200
+      },
+      {
+        "iteration": 10,
+        "duration_ms": 1.16,
+        "ok": true,
+        "status": 200
+      },
+      {
+        "iteration": 11,
+        "duration_ms": 1.07,
+        "ok": true,
+        "status": 200
+      },
+      {
+        "iteration": 12,
+        "duration_ms": 0.94,
+        "ok": true,
+        "status": 200
+      }
+    ]
+  },
+  "go_gateway": {
+    "count": 12,
+    "ok_count": 12,
+    "min_ms": 1.3,
+    "median_ms": 1.61,
+    "p95_ms": 2.34,
+    "max_ms": 2.34,
+    "avg_ms": 1.7,
+    "samples": [
+      {
+        "iteration": 1,
+        "duration_ms": 1.93,
+        "ok": true,
+        "status": 200
+      },
+      {
+        "iteration": 2,
+        "duration_ms": 1.92,
+        "ok": true,
+        "status": 200
+      },
+      {
+        "iteration": 3,
+        "duration_ms": 1.9,
+        "ok": true,
+        "status": 200
+      },
+      {
+        "iteration": 4,
+        "duration_ms": 1.36,
+        "ok": true,
+        "status": 200
+      },
+      {
+        "iteration": 5,
+        "duration_ms": 1.61,
+        "ok": true,
+        "status": 200
+      },
+      {
+        "iteration": 6,
+        "duration_ms": 2.1,
+        "ok": true,
+        "status": 200
+      },
+      {
+        "iteration": 7,
+        "duration_ms": 1.74,
+        "ok": true,
+        "status": 200
+      },
+      {
+        "iteration": 8,
+        "duration_ms": 1.4,
+        "ok": true,
+        "status": 200
+      },
+      {
+        "iteration": 9,
+        "duration_ms": 1.3,
+        "ok": true,
+        "status": 200
+      },
+      {
+        "iteration": 10,
+        "duration_ms": 1.34,
+        "ok": true,
+        "status": 200
+      },
+      {
+        "iteration": 11,
+        "duration_ms": 2.34,
+        "ok": true,
+        "status": 200
+      },
+      {
+        "iteration": 12,
+        "duration_ms": 1.44,
+        "ok": true,
+        "status": 200
+      }
+    ]
+  },
+  "end_to_end_concierge": {
+    "count": 10,
+    "ok_count": 10,
+    "min_ms": 0.03,
+    "median_ms": 0.04,
+    "p95_ms": 0.24,
+    "max_ms": 0.24,
+    "avg_ms": 0.06,
+    "samples": [
+      {
+        "iteration": 1,
+        "duration_ms": 0.24,
+        "ok": true
+      },
+      {
+        "iteration": 2,
+        "duration_ms": 0.05,
+        "ok": true
+      },
+      {
+        "iteration": 3,
+        "duration_ms": 0.04,
+        "ok": true
+      },
+      {
+        "iteration": 4,
+        "duration_ms": 0.04,
+        "ok": true
+      },
+      {
+        "iteration": 5,
+        "duration_ms": 0.04,
+        "ok": true
+      },
+      {
+        "iteration": 6,
+        "duration_ms": 0.04,
+        "ok": true
+      },
+      {
+        "iteration": 7,
+        "duration_ms": 0.04,
+        "ok": true
+      },
+      {
+        "iteration": 8,
+        "duration_ms": 0.03,
+        "ok": true
+      },
+      {
+        "iteration": 9,
+        "duration_ms": 0.04,
+        "ok": true
+      },
+      {
+        "iteration": 10,
+        "duration_ms": 0.04,
+        "ok": true
+      }
+    ]
+  },
+  "concurrent_end_to_end": {
+    "concurrency": 6,
+    "rounds": 4,
+    "count": 4,
+    "ok_count": 4,
+    "min_ms": 0.21,
+    "median_ms": 0.21,
+    "p95_ms": 0.38,
+    "max_ms": 0.38,
+    "avg_ms": 0.26,
+    "samples": [
+      {
+        "iteration": 1,
+        "duration_ms": 0.38,
+        "ok": true
+      },
+      {
+        "iteration": 2,
+        "duration_ms": 0.23,
+        "ok": true
+      },
+      {
+        "iteration": 3,
+        "duration_ms": 0.21,
+        "ok": true
+      },
+      {
+        "iteration": 4,
+        "duration_ms": 0.21,
+        "ok": true
+      }
+    ]
+  }
+}

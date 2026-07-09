@@ -201,6 +201,14 @@ struct InstantRetailAllocationResponse {
     suggested_substitutions: Vec<String>,
     ranked_warehouses: Vec<WarehouseAllocationScore>,
     rationale: String,
+    metrics: ResponseMetrics,
+}
+
+#[derive(Debug, Serialize)]
+struct ResponseMetrics {
+    trace_id: String,
+    duration_ms: f64,
+    payload: serde_json::Value,
 }
 
 #[derive(Debug, Serialize)]
@@ -580,6 +588,19 @@ async fn instant_retail_allocation(
     Json(request): Json<InstantRetailAllocationRequest>,
 ) -> Result<Json<InstantRetailAllocationResponse>, (StatusCode, String)> {
     require_internal_access(&headers, &state)?;
+    let started_at = std::time::Instant::now();
+    let trace_id = headers
+        .get("x-trace-id")
+        .and_then(|value| value.to_str().ok())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| {
+            let millis = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_millis())
+                .unwrap_or(0);
+            format!("iro-{}", millis)
+        });
 
     if request.items.is_empty() {
         return Err((StatusCode::BAD_REQUEST, "at least one retail item is required".to_string()));
@@ -661,6 +682,9 @@ async fn instant_retail_allocation(
         .collect::<Vec<_>>();
     let split_required = winner.map(|selected| selected.fill_rate < 0.95).unwrap_or(true) && request.warehouses.len() > 1;
 
+    let duration_ms = started_at.elapsed().as_secs_f64() * 1000.0;
+    info!(trace_id = %trace_id, duration_ms = duration_ms, items = request.items.len(), warehouses = request.warehouses.len(), "instant retail allocation completed");
+
     Ok(Json(InstantRetailAllocationResponse {
         strategy: if cold_chain_required { "cold_chain_nearest_full_fill".to_string() } else { "fastest_full_fill".to_string() },
         selected_warehouse_id: winner.map(|selected| selected.warehouse_id),
@@ -673,6 +697,15 @@ async fn instant_retail_allocation(
             .map(|selected| format!("Selected {} in {} with {:.0}% fill and {} minute ready time.", selected.label, selected.zone_key, selected.fill_rate * 100.0, selected.estimated_ready_minutes))
             .unwrap_or_else(|| "No warehouse candidate could be selected.".to_string()),
         ranked_warehouses: ranked,
+        metrics: ResponseMetrics {
+            trace_id,
+            duration_ms: round2(duration_ms),
+            payload: serde_json::json!({
+                "item_count": request.items.len(),
+                "warehouse_count": request.warehouses.len(),
+                "cold_chain_required": cold_chain_required,
+            }),
+        },
     }))
 }
 

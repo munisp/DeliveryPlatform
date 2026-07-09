@@ -31,6 +31,7 @@ type planRequest struct {
 	MembershipSummary map[string]any         `json:"membership_summary"`
 	Allocation        map[string]any         `json:"allocation"`
 	Forecast          map[string]any         `json:"forecast"`
+	PayloadMetrics    map[string]any         `json:"payload_metrics"`
 }
 
 type planStep struct {
@@ -46,6 +47,7 @@ type planResponse struct {
 	EventID    string         `json:"event_id"`
 	ActionPlan []planStep     `json:"action_plan"`
 	Middleware map[string]any `json:"middleware"`
+	Metrics    map[string]any `json:"metrics"`
 }
 
 type envelope struct {
@@ -106,10 +108,12 @@ func (s *gatewayService) ensureSchema() error {
 }
 
 func (s *gatewayService) healthHandler(w http.ResponseWriter, r *http.Request) {
+	traceID := requestTraceID(r)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"status":  "healthy",
-		"service": s.serviceName,
-		"events":  s.middlewareStatus(),
+		"status":   "healthy",
+		"service":  s.serviceName,
+		"events":   s.middlewareStatus(),
+		"trace_id": traceID,
 	})
 }
 
@@ -118,27 +122,30 @@ func (s *gatewayService) middlewareStatusHandler(w http.ResponseWriter, r *http.
 }
 
 func (s *gatewayService) planHandler(w http.ResponseWriter, r *http.Request) {
+	startedAt := time.Now()
+	traceID := requestTraceID(r)
 	if r.Method != http.MethodPost {
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed", "trace_id": traceID})
 		return
 	}
 	if err := s.requireInternalAccess(r); err != nil {
-		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": err.Error()})
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": err.Error(), "trace_id": traceID})
 		return
 	}
 
 	var request planRequest
 	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid JSON payload"})
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid JSON payload", "trace_id": traceID})
 		return
 	}
 	if strings.TrimSpace(request.Request) == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "request is required"})
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "request is required", "trace_id": traceID})
 		return
 	}
 
 	eventID := fmt.Sprintf("lcg-%d", time.Now().UnixNano())
 	plan := buildPlan(request)
+	payloadMetrics := summarizeRequestPayload(request)
 	payload := map[string]any{
 		"city":               request.City,
 		"customer_segment":   request.CustomerSegment,
@@ -148,32 +155,49 @@ func (s *gatewayService) planHandler(w http.ResponseWriter, r *http.Request) {
 		"allocation":         request.Allocation,
 		"forecast":           request.Forecast,
 		"action_plan":        plan,
+		"payload_metrics":    payloadMetrics,
+		"trace_id":           traceID,
 	}
 
+	storeStartedAt := time.Now()
 	if err := s.storeEvent(eventID, "local_commerce_plan_created", request, payload); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error(), "trace_id": traceID})
 		return
 	}
-	if err := s.publishEnvelope(envelope{
+	storeDuration := time.Since(storeStartedAt)
+	publishMetrics := s.publishEnvelope(envelope{
 		Source:    s.serviceName,
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
 		EventType: "local_commerce_plan_created",
 		EventID:   eventID,
 		Payload:   payload,
-	}); err != nil {
-		payload["publish_warning"] = err.Error()
+	})
+	if publishMetrics.Error != "" {
+		payload["publish_warning"] = publishMetrics.Error
 	}
 
 	strategy := "cross_category_concierge"
 	if request.Forecast != nil || request.Allocation != nil {
 		strategy = "cross_category_concierge_with_retail_ops"
 	}
+	responseMetrics := map[string]any{
+		"trace_id": traceID,
+		"payload": payloadMetrics,
+		"timings_ms": map[string]any{
+			"store_event": roundDurationMs(storeDuration),
+			"publish_total": publishMetrics.TotalDurationMs,
+			"total": roundDurationMs(time.Since(startedAt)),
+		},
+		"middleware_publish": publishMetrics.ByTarget,
+	}
+	trace(traceID, "gateway.plan.complete", responseMetrics)
 	writeJSON(w, http.StatusOK, planResponse{
 		Service:    s.serviceName,
 		Strategy:   strategy,
 		EventID:    eventID,
 		ActionPlan: plan,
 		Middleware: s.middlewareStatus(),
+		Metrics:    responseMetrics,
 	})
 }
 
@@ -207,88 +231,121 @@ func (s *gatewayService) storeEvent(eventID string, eventType string, request pl
 	return err
 }
 
-func (s *gatewayService) publishEnvelope(evt envelope) error {
-	if err := s.publishToDapr(evt); err != nil {
-		return err
-	}
-	if err := s.publishToKafkaCompatible(getenv("KAFKA_BROKERS", ""), getenv("KAFKA_LOCAL_COMMERCE_TOPIC", ""), evt, "kafka"); err != nil {
-		return err
-	}
-	if err := s.publishToKafkaCompatible(getenv("FLUVIO_KAFKA_BROKERS", ""), getenv("FLUVIO_LOCAL_COMMERCE_TOPIC", ""), evt, "fluvio"); err != nil {
-		return err
-	}
-	if err := s.publishToTemporal(evt); err != nil {
-		return err
-	}
-	return nil
+type publishMetrics struct {
+	TotalDurationMs float64        `json:"total_duration_ms"`
+	ByTarget        map[string]any `json:"by_target"`
+	Error           string         `json:"error,omitempty"`
 }
 
-func (s *gatewayService) publishToDapr(evt envelope) error {
+func (s *gatewayService) publishEnvelope(evt envelope) publishMetrics {
+	startedAt := time.Now()
+	metrics := publishMetrics{ByTarget: map[string]any{}}
+	if duration, err := s.publishToDapr(evt); err != nil {
+		metrics.TotalDurationMs = roundDurationMs(time.Since(startedAt))
+		metrics.ByTarget["dapr"] = map[string]any{"duration_ms": duration, "ok": false, "error": err.Error()}
+		metrics.Error = err.Error()
+		return metrics
+	} else {
+		metrics.ByTarget["dapr"] = map[string]any{"duration_ms": duration, "ok": true}
+	}
+	if duration, err := s.publishToKafkaCompatible(getenv("KAFKA_BROKERS", ""), getenv("KAFKA_LOCAL_COMMERCE_TOPIC", ""), evt, "kafka"); err != nil {
+		metrics.TotalDurationMs = roundDurationMs(time.Since(startedAt))
+		metrics.ByTarget["kafka"] = map[string]any{"duration_ms": duration, "ok": false, "error": err.Error()}
+		metrics.Error = err.Error()
+		return metrics
+	} else {
+		metrics.ByTarget["kafka"] = map[string]any{"duration_ms": duration, "ok": true}
+	}
+	if duration, err := s.publishToKafkaCompatible(getenv("FLUVIO_KAFKA_BROKERS", ""), getenv("FLUVIO_LOCAL_COMMERCE_TOPIC", ""), evt, "fluvio"); err != nil {
+		metrics.TotalDurationMs = roundDurationMs(time.Since(startedAt))
+		metrics.ByTarget["fluvio"] = map[string]any{"duration_ms": duration, "ok": false, "error": err.Error()}
+		metrics.Error = err.Error()
+		return metrics
+	} else {
+		metrics.ByTarget["fluvio"] = map[string]any{"duration_ms": duration, "ok": true}
+	}
+	if duration, err := s.publishToTemporal(evt); err != nil {
+		metrics.TotalDurationMs = roundDurationMs(time.Since(startedAt))
+		metrics.ByTarget["temporal"] = map[string]any{"duration_ms": duration, "ok": false, "error": err.Error()}
+		metrics.Error = err.Error()
+		return metrics
+	} else {
+		metrics.ByTarget["temporal"] = map[string]any{"duration_ms": duration, "ok": true}
+	}
+	metrics.TotalDurationMs = roundDurationMs(time.Since(startedAt))
+	return metrics
+}
+
+func (s *gatewayService) publishToDapr(evt envelope) (float64, error) {
+	startedAt := time.Now()
 	daprPort := strings.TrimSpace(getenv("DAPR_HTTP_PORT", ""))
 	pubsubName := strings.TrimSpace(getenv("DAPR_PUBSUB_NAME", ""))
 	topicName := strings.TrimSpace(getenv("DAPR_LOCAL_COMMERCE_TOPIC", ""))
 	if daprPort == "" || pubsubName == "" || topicName == "" {
-		return nil
+		return roundDurationMs(time.Since(startedAt)), nil
 	}
 	body, _ := json.Marshal(evt)
 	request, err := http.NewRequest(http.MethodPost, fmt.Sprintf("http://127.0.0.1:%s/v1.0/publish/%s/%s", daprPort, pubsubName, topicName), bytes.NewReader(body))
 	if err != nil {
-		return err
+		return roundDurationMs(time.Since(startedAt)), err
 	}
 	request.Header.Set("Content-Type", "application/json")
 	response, err := s.httpClient.Do(request)
 	if err != nil {
-		return err
+		return roundDurationMs(time.Since(startedAt)), err
 	}
 	defer response.Body.Close()
 	if response.StatusCode >= 400 {
-		return fmt.Errorf("dapr publish returned status %d", response.StatusCode)
+		return roundDurationMs(time.Since(startedAt)), fmt.Errorf("dapr publish returned status %d", response.StatusCode)
 	}
-	return nil
+	return roundDurationMs(time.Since(startedAt)), nil
 }
 
-func (s *gatewayService) publishToKafkaCompatible(brokersRaw string, topic string, evt envelope, brokerName string) error {
+func (s *gatewayService) publishToKafkaCompatible(brokersRaw string, topic string, evt envelope, brokerName string) (float64, error) {
+	startedAt := time.Now()
 	brokers := splitAndTrim(brokersRaw)
 	if len(brokers) == 0 || strings.TrimSpace(topic) == "" {
-		return nil
+		return roundDurationMs(time.Since(startedAt)), nil
 	}
 	body, _ := json.Marshal(evt)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	writer := &kafka.Writer{Addr: kafka.TCP(brokers...), Topic: topic, RequiredAcks: kafka.RequireAll, Balancer: &kafka.LeastBytes{}}
 	defer writer.Close()
-	return writer.WriteMessages(ctx, kafka.Message{
+	err := writer.WriteMessages(ctx, kafka.Message{
 		Key:   []byte(evt.EventID),
 		Value: body,
 		Time:  time.Now().UTC(),
 		Headers: []kafka.Header{{Key: "event-type", Value: []byte(evt.EventType)}, {Key: "broker", Value: []byte(brokerName)}},
 	})
+	return roundDurationMs(time.Since(startedAt)), err
 }
 
-func (s *gatewayService) publishToTemporal(evt envelope) error {
+func (s *gatewayService) publishToTemporal(evt envelope) (float64, error) {
+	startedAt := time.Now()
 	temporalBridgeURL := strings.TrimSpace(getenv("TEMPORAL_BRIDGE_URL", ""))
 	taskQueue := strings.TrimSpace(getenv("TEMPORAL_TASK_QUEUE", ""))
 	if temporalBridgeURL == "" && taskQueue == "" {
-		return nil
+		return roundDurationMs(time.Since(startedAt)), nil
 	}
 	payload := map[string]any{"taskQueue": taskQueue, "event": evt}
 	body, _ := json.Marshal(payload)
 	if temporalBridgeURL != "" {
 		request, err := http.NewRequest(http.MethodPost, strings.TrimRight(temporalBridgeURL, "/")+"/local-commerce/workflows", bytes.NewReader(body))
 		if err != nil {
-			return err
+			return roundDurationMs(time.Since(startedAt)), err
 		}
 		request.Header.Set("Content-Type", "application/json")
 		response, err := s.httpClient.Do(request)
 		if err != nil {
-			return err
+			return roundDurationMs(time.Since(startedAt)), err
 		}
 		defer response.Body.Close()
 		if response.StatusCode >= 400 {
-			return fmt.Errorf("temporal bridge returned status %d", response.StatusCode)
+			return roundDurationMs(time.Since(startedAt)), fmt.Errorf("temporal bridge returned status %d", response.StatusCode)
 		}
 	}
-	return nil
+	return roundDurationMs(time.Since(startedAt)), nil
 }
 
 func (s *gatewayService) middlewareStatus() map[string]any {
@@ -367,6 +424,38 @@ func nullable(value string) any {
 		return nil
 	}
 	return trimmed
+}
+
+func summarizeRequestPayload(request planRequest) map[string]any {
+	requestChars := len(strings.TrimSpace(request.Request))
+	categories := len(request.Categories)
+	membershipKeys := len(request.MembershipSummary)
+	forecastKeys := len(request.Forecast)
+	allocationKeys := len(request.Allocation)
+	return map[string]any{
+		"request_chars": requestChars,
+		"category_count": categories,
+		"membership_keys": membershipKeys,
+		"forecast_keys": forecastKeys,
+		"allocation_keys": allocationKeys,
+		"provided_payload_metrics": request.PayloadMetrics,
+	}
+}
+
+func requestTraceID(r *http.Request) string {
+	traceID := strings.TrimSpace(r.Header.Get("X-Trace-Id"))
+	if traceID != "" {
+		return traceID
+	}
+	return fmt.Sprintf("lcg-%d", time.Now().UnixNano())
+}
+
+func roundDurationMs(duration time.Duration) float64 {
+	return float64(duration.Microseconds()) / 1000
+}
+
+func trace(traceID string, event string, payload map[string]any) {
+	log.Printf("[local-commerce-gateway-trace] event=%s trace_id=%s payload=%v", event, traceID, payload)
 }
 
 func getenv(name string, fallback string) string {

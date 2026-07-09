@@ -88,6 +88,12 @@ function parseBoolean(value: string | undefined, fallback: boolean) {
   return value.trim().toLowerCase() === "true";
 }
 
+function parseInteger(value: string | undefined, fallback: number) {
+  if (value == null || value.trim() === "") return fallback;
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
 export const ENV = {
   appId: getRequiredEnv("VITE_APP_ID", "switchos-operator-dashboard"),
   cookieSecret: getCookieSecret(),
@@ -135,6 +141,11 @@ export const ENV = {
   longcatSpeechServiceUrl: process.env.LONGCAT_SPEECH_SERVICE_URL ?? "http://127.0.0.1:8105",
   localCommerceGatewayUrl: process.env.LOCAL_COMMERCE_GATEWAY_URL ?? "http://127.0.0.1:8114",
   retailForecastServiceUrl: process.env.RETAIL_FORECAST_SERVICE_URL ?? "http://127.0.0.1:8115",
+  localCommerceWorkspaceCacheTtlMs: parseInteger(process.env.LOCAL_COMMERCE_WORKSPACE_CACHE_TTL_MS, 15000),
+  localCommercePlanCacheTtlMs: parseInteger(process.env.LOCAL_COMMERCE_PLAN_CACHE_TTL_MS, 5000),
+  localCommerceEnableAsyncEnrichment: parseBoolean(process.env.LOCAL_COMMERCE_ENABLE_ASYNC_ENRICHMENT, true),
+  localCommerceEnableTracing: parseBoolean(process.env.LOCAL_COMMERCE_ENABLE_TRACING, true),
+  localCommerceTraceSampleRate: parseInteger(process.env.LOCAL_COMMERCE_TRACE_SAMPLE_RATE, 100),
   longcatTelephonyMode: (process.env.LONGCAT_TELEPHONY_MODE ?? "asterisk-audiosocket").trim(),
   longcatSpeechSttEngine: (process.env.LONGCAT_SPEECH_STT_ENGINE ?? "faster-whisper").trim(),
   longcatSpeechTtsEngine: (process.env.LONGCAT_SPEECH_TTS_ENGINE ?? "piper").trim(),
