@@ -81,6 +81,8 @@ export type LongCatSpeechSynthesisResult = {
   playback_text: string;
   latency_ms: number | null;
   degraded_mode: boolean;
+  engine_ready: boolean;
+  degraded_reason: string | null;
   error: string | null;
 };
 
@@ -302,6 +304,17 @@ function toNumber(value: unknown) {
     return Number.isFinite(parsed) ? parsed : 0;
   }
   return 0;
+}
+
+function toBoolean(value: unknown, fallback = false) {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return value !== 0;
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (["true", "1", "yes", "y", "ready"].includes(normalized)) return true;
+    if (["false", "0", "no", "n", "not_ready"].includes(normalized)) return false;
+  }
+  return fallback;
 }
 
 function buildCacheKey(input: { userId?: number | null; customerPhone?: string | null }) {
@@ -894,6 +907,8 @@ export async function synthesizeLongCatSpeech(input: {
       playback_text: "",
       latency_ms: null,
       degraded_mode: true,
+      engine_ready: false,
+      degraded_reason: "empty_playback_text",
       error: "empty_playback_text",
     };
   }
@@ -917,6 +932,8 @@ export async function synthesizeLongCatSpeech(input: {
       signal: AbortSignal.timeout(20_000),
     });
     const payload = await response.json().catch(() => ({})) as Record<string, unknown>;
+    const degradedMode = toBoolean(payload.degraded_mode, !response.ok);
+    const degradedReason = payload.degraded_reason ? String(payload.degraded_reason) : (response.ok ? null : `${payload.error ?? `speech_service_http_${response.status}`}`);
     const result: LongCatSpeechSynthesisResult = {
       requested: true,
       synthesized: Boolean(payload.synthesized ?? response.ok),
@@ -925,7 +942,9 @@ export async function synthesizeLongCatSpeech(input: {
       audio_base64: payload.audio_base64 ? String(payload.audio_base64) : null,
       playback_text: payload.playback_text ? String(payload.playback_text) : playbackText,
       latency_ms: toNumber(payload.latency_ms) || Date.now() - start,
-      degraded_mode: Boolean(payload.degraded_mode ?? !response.ok),
+      degraded_mode: degradedMode,
+      engine_ready: toBoolean(payload.engine_ready, !degradedMode),
+      degraded_reason: degradedReason,
       error: response.ok ? null : `${payload.error ?? `speech_service_http_${response.status}`}`,
     };
     await recordSpeechEvent({
@@ -937,7 +956,11 @@ export async function synthesizeLongCatSpeech(input: {
       audioFormat: result.audio_format,
       degradedMode: result.degraded_mode,
       latencyMs: result.latency_ms,
-      metadata: input.metadata,
+      metadata: {
+        ...(input.metadata ?? {}),
+        engine_ready: result.engine_ready,
+        degraded_reason: result.degraded_reason,
+      },
     });
     return result;
   } catch (error) {
@@ -950,6 +973,8 @@ export async function synthesizeLongCatSpeech(input: {
       playback_text: playbackText,
       latency_ms: Date.now() - start,
       degraded_mode: true,
+      engine_ready: false,
+      degraded_reason: error instanceof Error ? error.message : "speech_service_unavailable",
       error: error instanceof Error ? error.message : "speech_service_unavailable",
     };
     await recordSpeechEvent({
@@ -960,7 +985,12 @@ export async function synthesizeLongCatSpeech(input: {
       playbackText: result.playback_text,
       degradedMode: true,
       latencyMs: result.latency_ms,
-      metadata: { ...(input.metadata ?? {}), error: result.error },
+      metadata: {
+        ...(input.metadata ?? {}),
+        error: result.error,
+        engine_ready: result.engine_ready,
+        degraded_reason: result.degraded_reason,
+      },
     });
     return result;
   }
@@ -1068,17 +1098,30 @@ export async function appendLongCatTelephonyTranscript(input: AppendTelephonyTra
     [input.sessionId, input.externalCallId],
   );
 
+  const sttEngine = typeof input.metadata?.stt_engine === "string" && input.metadata.stt_engine.trim()
+    ? input.metadata.stt_engine.trim()
+    : ENV.longcatSpeechSttEngine;
+  const sttDegradedMode = toBoolean(input.metadata?.stt_degraded_mode ?? input.metadata?.stt_degraded, false);
+  const sttEngineReady = toBoolean(input.metadata?.stt_engine_ready, !sttDegradedMode);
+  const sttDegradedReason = typeof input.metadata?.stt_degraded_reason === "string" && input.metadata.stt_degraded_reason.trim()
+    ? input.metadata.stt_degraded_reason.trim()
+    : null;
+  const sttLatencyMs = toNumber(input.metadata?.stt_latency_ms) || null;
+
   await recordSpeechEvent({
     sessionId: input.sessionId,
     direction: "ingress",
-    engine: ENV.longcatSpeechSttEngine,
+    engine: sttEngine,
     eventType: input.finalSegment ? "stt_final" : "stt_partial",
     transcript: input.transcript,
-    degradedMode: false,
+    degradedMode: sttDegradedMode,
+    latencyMs: sttLatencyMs,
     metadata: {
       ...(input.metadata ?? {}),
       external_call_id: input.externalCallId,
       telephony_provider: input.telephonyProvider ?? "asterisk",
+      engine_ready: sttEngineReady,
+      degraded_reason: sttDegradedReason,
     },
   });
 
@@ -1090,6 +1133,30 @@ export async function appendLongCatTelephonyTranscript(input: AppendTelephonyTra
       external_call_id: input.externalCallId,
       telephony_provider: input.telephonyProvider ?? "asterisk",
       detected_intent: baseResult.detected_intent,
+    },
+  });
+
+  await recordOperationalEvent({
+    eventType: "longcat.voice.telephony_turn_processed",
+    outcome: speech.degraded_mode || sttDegradedMode ? "info" : "success",
+    payload: {
+      sessionId: input.sessionId,
+      externalCallId: input.externalCallId,
+      provider: input.telephonyProvider ?? "asterisk",
+      transport: input.transport ?? ENV.longcatTelephonyMode,
+      finalSegment: Boolean(input.finalSegment),
+      transcriptLength: input.transcript.trim().length,
+      sttEngine,
+      sttEngineReady,
+      sttDegradedMode,
+      sttDegradedReason,
+      sttLatencyMs,
+      ttsEngine: speech.engine,
+      ttsEngineReady: speech.engine_ready,
+      ttsDegradedMode: speech.degraded_mode,
+      ttsDegradedReason: speech.degraded_reason,
+      callbackRequested: baseResult.callback_requested,
+      detectedIntent: baseResult.detected_intent,
     },
   });
 

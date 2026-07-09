@@ -57,6 +57,8 @@ describe("SwitchOS live integration probes", () => {
     LAKEHOUSE_SERVICE_URL: process.env.LAKEHOUSE_SERVICE_URL,
     VERTICAL_PROVISIONING_URL: process.env.VERTICAL_PROVISIONING_URL,
     INTAKE_ORCHESTRATOR_URL: process.env.INTAKE_ORCHESTRATOR_URL,
+    LONGCAT_VOICE_GATEWAY_URL: process.env.LONGCAT_VOICE_GATEWAY_URL,
+    LONGCAT_SPEECH_SERVICE_URL: process.env.LONGCAT_SPEECH_SERVICE_URL,
   };
 
   beforeEach(() => {
@@ -81,6 +83,8 @@ describe("SwitchOS live integration probes", () => {
     process.env.LAKEHOUSE_SERVICE_URL = "http://127.0.0.1:8007";
     process.env.VERTICAL_PROVISIONING_URL = "http://127.0.0.1:8088";
     process.env.INTAKE_ORCHESTRATOR_URL = "http://127.0.0.1:8091";
+    process.env.LONGCAT_VOICE_GATEWAY_URL = "";
+    process.env.LONGCAT_SPEECH_SERVICE_URL = "";
   });
 
   afterEach(() => {
@@ -102,6 +106,8 @@ describe("SwitchOS live integration probes", () => {
     expect(status.messaging.redis.status).toBe("unconfigured");
     expect(status.messaging.dapr.status).toBe("unconfigured");
     expect(status.messaging.openSearch.status).toBe("unconfigured");
+    expect(status.services.longcatVoiceGateway.status).toBe("unconfigured");
+    expect(status.services.longcatSpeechRuntime.status).toBe("unconfigured");
   });
 
   it("reports healthy middleware checks when configured endpoints respond successfully", async () => {
@@ -115,18 +121,44 @@ describe("SwitchOS live integration probes", () => {
     process.env.OPENSEARCH_PASSWORD = "admin-password";
     process.env.TEMPORAL_ADDRESS = "127.0.0.1:7233";
     process.env.FLUVIO_SERVICE_URL = "http://127.0.0.1:50055";
+    process.env.LONGCAT_VOICE_GATEWAY_URL = "http://127.0.0.1:8104";
+    process.env.LONGCAT_SPEECH_SERVICE_URL = "http://127.0.0.1:8105";
 
-    fetchMock
-      .mockResolvedValueOnce({ ok: true, headers: new Headers({ "content-type": "application/json" }), json: async () => ({ routes: [] }) })
-      .mockResolvedValueOnce({ ok: true, headers: new Headers({ "content-type": "application/json" }), json: async () => ({ issuer: process.env.OIDC_ISSUER_URL, authorization_endpoint: "https://identity/auth", token_endpoint: "https://identity/token", jwks_uri: "https://identity/jwks" }) })
-      .mockResolvedValueOnce({ ok: true, headers: new Headers({ "content-type": "application/json" }), json: async () => ({ status: "ok" }) })
-      .mockResolvedValueOnce({ ok: true, headers: new Headers({ "content-type": "application/json" }), json: async () => ({ id: "dapr" }) })
-      .mockResolvedValueOnce({ ok: true, headers: new Headers({ "content-type": "application/json" }), json: async () => ({ status: "green" }) })
-      .mockResolvedValueOnce({ ok: true, headers: new Headers({ "content-type": "application/json" }), json: async () => ({ status: "ok" }) })
-      .mockResolvedValueOnce({ ok: true, headers: new Headers({ "content-type": "application/json" }), json: async () => ({ status: "ok" }) })
-      .mockResolvedValueOnce({ ok: true, headers: new Headers({ "content-type": "application/json" }), json: async () => ({ status: "ok" }) })
-      .mockResolvedValueOnce({ ok: true, headers: new Headers({ "content-type": "application/json" }), json: async () => ({ status: "ok" }) })
-      .mockResolvedValueOnce({ ok: true, headers: new Headers({ "content-type": "application/json" }), json: async () => ({ status: "ok" }) });
+    fetchMock.mockImplementation(async (input: string | URL | Request) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      const body =
+        url === "http://127.0.0.1:9000/v1/schema"
+          ? { routes: [] }
+          : url === process.env.OIDC_ISSUER_URL + "/.well-known/openid-configuration"
+            ? { issuer: process.env.OIDC_ISSUER_URL, authorization_endpoint: "https://identity/auth", token_endpoint: "https://identity/token", jwks_uri: "https://identity/jwks" }
+            : url === "http://127.0.0.1:3476/healthz"
+              ? { status: "ok" }
+              : url === "http://127.0.0.1:3500/v1.0/metadata"
+                ? { id: "dapr" }
+                : url === "http://127.0.0.1:9200/_cluster/health"
+                  ? { status: "green" }
+                  : url === "http://127.0.0.1:50055/health"
+                    ? { status: "ok" }
+                    : url === "http://127.0.0.1:8086/health"
+                      ? { status: "ok" }
+                      : url === "http://127.0.0.1:8087/health"
+                        ? { status: "ok" }
+                        : url === "http://127.0.0.1:8007/health"
+                          ? { status: "ok" }
+                          : url === "http://127.0.0.1:8088/health"
+                            ? { status: "ok" }
+                            : url === "http://127.0.0.1:8091/health"
+                              ? { status: "ok" }
+                              : url === "http://127.0.0.1:8104/health"
+                                ? { status: "ok", service: "longcat-voice-gateway", telephony_mode: "asterisk-audiosocket", speech_service_url: "http://127.0.0.1:8105" }
+                                : url === "http://127.0.0.1:8105/health"
+                                  ? { status: "healthy", service: "longcat-speech-runtime", stt_engine: "faster-whisper", tts_engine: "piper", stt_ready: true, tts_ready: true }
+                                  : null;
+      if (!body) {
+        return { ok: false, status: 404, text: async () => `unmocked ${url}`, headers: new Headers({ "content-type": "text/plain" }) };
+      }
+      return { ok: true, headers: new Headers({ "content-type": "application/json" }), json: async () => body };
+    });
 
     temporalSocketConnectMock.mockImplementation(({ handlers }) => {
       handlers.connect?.();
@@ -153,6 +185,9 @@ describe("SwitchOS live integration probes", () => {
     expect(status.messaging.temporal.status).toBe("healthy");
     expect(status.messaging.temporal.details).toMatchObject({ protocol: "tcp" });
     expect(status.messaging.fluvio.status).toBe("healthy");
+    expect(status.services.longcatVoiceGateway.status).toBe("healthy");
+    expect(status.services.longcatSpeechRuntime.status).toBe("healthy");
+    expect(status.services.longcatSpeechRuntime.details).toMatchObject({ stt_ready: true, tts_ready: true });
   });
 
   it("returns degraded results when configured services reject health checks", async () => {
@@ -164,5 +199,30 @@ describe("SwitchOS live integration probes", () => {
 
     expect(result.status).toBe("degraded");
     expect(result.error).toContain("503");
+  });
+
+  it("surfaces a degraded speech runtime when neither STT nor TTS engine is ready", async () => {
+    process.env.LONGCAT_SPEECH_SERVICE_URL = "http://127.0.0.1:8105";
+    fetchMock.mockResolvedValue({
+      ok: true,
+      headers: new Headers({ "content-type": "application/json" }),
+      json: async () => ({
+        status: "degraded",
+        service: "longcat-speech-runtime",
+        stt_engine: "whisper.cpp",
+        tts_engine: "piper",
+        stt_ready: false,
+        tts_ready: false,
+        stt_runtime: { reason: "whisper_cpp_binary_or_model_missing" },
+        tts_runtime: { reason: "piper_binary_or_model_missing" },
+      }),
+    });
+
+    const { probeLongCatSpeechRuntime } = await loadModule();
+    const result = await probeLongCatSpeechRuntime();
+
+    expect(result.status).toBe("degraded");
+    expect(result.details).toMatchObject({ stt_ready: false, tts_ready: false });
+    expect(result.error).toContain("speech runtime reported status degraded");
   });
 });

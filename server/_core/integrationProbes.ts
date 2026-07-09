@@ -62,6 +62,17 @@ async function probeUrl(url: string | null | undefined, path = "/health"): Promi
   }
 }
 
+function normalizeBoolean(value: unknown, fallback = false) {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return value !== 0;
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (["true", "1", "yes", "y", "ready"].includes(normalized)) return true;
+    if (["false", "0", "no", "n", "not_ready"].includes(normalized)) return false;
+  }
+  return fallback;
+}
+
 async function probeTcpSocket(address: string, defaultPort: number): Promise<ProbeResult> {
   const normalized = address.includes("://") ? new URL(address) : new URL(`http://${address}`);
   const host = normalized.hostname;
@@ -208,13 +219,64 @@ export async function probeFluvio(): Promise<ProbeResult> {
   return probeUrl(normalized, "/health");
 }
 
+export async function probeLongCatVoiceGateway(): Promise<ProbeResult> {
+  if (!ENV.longcatVoiceGatewayUrl?.trim()) return unconfigured(ENV.longcatVoiceGatewayUrl || null);
+  try {
+    const target = `${ENV.longcatVoiceGatewayUrl.replace(/\/$/, "")}/health`;
+    const payload = await fetchJson(target) as Record<string, unknown>;
+    const status = `${payload.status ?? "ok"}`.toLowerCase();
+    if (status !== "ok" && status !== "healthy") {
+      return degraded(target, new Error(`gateway reported status ${status}`), { response: payload });
+    }
+    return ok(target, {
+      service: payload.service ?? null,
+      telephony_mode: payload.telephony_mode ?? null,
+      audio_socket_addr: payload.audio_socket_addr ?? null,
+      speech_service_url: payload.speech_service_url ?? null,
+      response: payload,
+    });
+  } catch (error) {
+    return degraded(ENV.longcatVoiceGatewayUrl, error);
+  }
+}
+
+export async function probeLongCatSpeechRuntime(): Promise<ProbeResult> {
+  if (!ENV.longcatSpeechServiceUrl?.trim()) return unconfigured(ENV.longcatSpeechServiceUrl || null);
+  try {
+    const target = `${ENV.longcatSpeechServiceUrl.replace(/\/$/, "")}/health`;
+    const payload = await fetchJson(target) as Record<string, unknown>;
+    const status = `${payload.status ?? "healthy"}`.toLowerCase();
+    const sttReady = normalizeBoolean(payload.stt_ready, false);
+    const ttsReady = normalizeBoolean(payload.tts_ready, false);
+    if (status !== "healthy" || (!sttReady && !ttsReady)) {
+      return degraded(target, new Error(`speech runtime reported status ${status}`), {
+        response: payload,
+        stt_ready: sttReady,
+        tts_ready: ttsReady,
+      });
+    }
+    return ok(target, {
+      service: payload.service ?? null,
+      stt_engine: payload.stt_engine ?? null,
+      tts_engine: payload.tts_engine ?? null,
+      stt_ready: sttReady,
+      tts_ready: ttsReady,
+      response: payload,
+    });
+  } catch (error) {
+    return degraded(ENV.longcatSpeechServiceUrl, error);
+  }
+}
+
 export async function probeServices() {
-  const [mojaloop, tigerbeetle, lakehouse, verticalProvisioning, intakeOrchestrator] = await Promise.all([
+  const [mojaloop, tigerbeetle, lakehouse, verticalProvisioning, intakeOrchestrator, longcatVoiceGateway, longcatSpeechRuntime] = await Promise.all([
     probeUrl(ENV.mojaloopServiceUrl),
     probeUrl(ENV.tigerbeetleServiceUrl),
     probeUrl(ENV.lakehouseServiceUrl),
     probeUrl(ENV.verticalProvisioningUrl),
     probeUrl(ENV.intakeOrchestratorUrl),
+    probeLongCatVoiceGateway(),
+    probeLongCatSpeechRuntime(),
   ]);
 
   return {
@@ -223,6 +285,8 @@ export async function probeServices() {
     lakehouse,
     verticalProvisioning,
     intakeOrchestrator,
+    longcatVoiceGateway,
+    longcatSpeechRuntime,
   };
 }
 

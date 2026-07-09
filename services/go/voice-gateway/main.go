@@ -103,15 +103,17 @@ type GatewayTranscriptResponse struct {
 }
 
 type SpeechChunkResponse struct {
-	Transcript    string `json:"transcript"`
-	Final         bool   `json:"final"`
-	Engine        string `json:"engine"`
-	DegradedMode  bool   `json:"degraded_mode"`
-	LatencyMS     int64  `json:"latency_ms"`
-	ChunkID       string `json:"chunk_id"`
-	SessionID     string `json:"session_id"`
-	AudioBytes    int    `json:"audio_bytes"`
-	Error         string `json:"error"`
+	Transcript     string `json:"transcript"`
+	Final          bool   `json:"final"`
+	Engine         string `json:"engine"`
+	EngineReady    bool   `json:"engine_ready"`
+	DegradedMode   bool   `json:"degraded_mode"`
+	DegradedReason string `json:"degraded_reason"`
+	LatencyMS      int64  `json:"latency_ms"`
+	ChunkID        string `json:"chunk_id"`
+	SessionID      string `json:"session_id"`
+	AudioBytes     int    `json:"audio_bytes"`
+	Error          string `json:"error"`
 }
 
 type AudioSocketFrame struct {
@@ -401,10 +403,14 @@ func (s *GatewayService) handleAudioSocketFrame(state *AudioSocketStreamState, f
 			Transcript:        result.Transcript,
 			FinalSegment:      result.Final,
 			Metadata: map[string]any{
-				"audio_chunk_id": result.ChunkID,
-				"audio_bytes":    result.AudioBytes,
-				"stt_engine":     result.Engine,
-				"stt_degraded":   result.DegradedMode,
+				"audio_chunk_id":       result.ChunkID,
+				"audio_bytes":          result.AudioBytes,
+				"stt_engine":           result.Engine,
+				"stt_engine_ready":     result.EngineReady,
+				"stt_degraded":         result.DegradedMode,
+				"stt_degraded_mode":    result.DegradedMode,
+				"stt_degraded_reason":  strings.TrimSpace(result.DegradedReason),
+				"stt_latency_ms":       result.LatencyMS,
 			},
 		})
 					if err != nil {

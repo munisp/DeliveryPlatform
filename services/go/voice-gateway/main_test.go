@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -95,6 +96,50 @@ func TestHandleAudioSocketFrameReturnsTerminalConflictOnTranscript409(t *testing
 	err := gateway.handleAudioSocketFrame(state, frame)
 	if !errors.Is(err, errTerminalSessionConflict) {
 		t.Fatalf("expected terminal session conflict, got %v", err)
+	}
+}
+
+func TestHandleAudioSocketFrameForwardsSpeechReadinessMetadata(t *testing.T) {
+	var forwarded TranscriptRequest
+	coreServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/api/internal/longcat/voice/transcript" {
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Fatalf("failed to read transcript body: %v", err)
+			}
+			if err := json.Unmarshal(body, &forwarded); err != nil {
+				t.Fatalf("failed to decode transcript body: %v", err)
+			}
+		}
+		_, _ = w.Write([]byte(`{"session_id":"voice-123","assistant_message":"ok","detected_intent":"place_order","callback_requested":false,"speech":{"requested":true,"synthesized":false,"engine":"piper","playback_text":"ok","degraded_mode":true}}`))
+	}))
+	defer coreServer.Close()
+
+	speechServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"transcript":"customer wants dumplings","final":true,"engine":"whisper.cpp","engine_ready":false,"degraded_mode":true,"degraded_reason":"whisper_cpp_binary_or_model_missing","latency_ms":17,"chunk_id":"call-123-1","session_id":"voice-123","audio_bytes":4}`))
+	}))
+	defer speechServer.Close()
+
+	gateway := newTestGateway(coreServer.URL, speechServer.URL)
+	state := &AudioSocketStreamState{SessionID: "voice-123", ExternalCallID: "call-123", SampleRateHz: 8000}
+	frame := AudioSocketFrame{PacketType: 0x10, Payload: []byte{0x01, 0x02, 0x03, 0x04}}
+
+	if err := gateway.handleAudioSocketFrame(state, frame); err != nil {
+		t.Fatalf("expected successful frame handling, got %v", err)
+	}
+	if forwarded.Metadata["stt_engine"] != "whisper.cpp" {
+		t.Fatalf("expected stt_engine metadata, got %+v", forwarded.Metadata)
+	}
+	if forwarded.Metadata["stt_engine_ready"] != false {
+		t.Fatalf("expected false stt_engine_ready metadata, got %+v", forwarded.Metadata)
+	}
+	if forwarded.Metadata["stt_degraded_reason"] != "whisper_cpp_binary_or_model_missing" {
+		t.Fatalf("expected degraded reason metadata, got %+v", forwarded.Metadata)
+	}
+	if forwarded.Metadata["stt_latency_ms"] != float64(17) {
+		t.Fatalf("expected latency metadata, got %+v", forwarded.Metadata)
 	}
 }
 
