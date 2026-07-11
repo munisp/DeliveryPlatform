@@ -2,9 +2,19 @@ import PlatformSummaryPage from "@/components/PlatformSummaryPage";
 import { trpc } from "@/lib/trpc";
 import { CarFront } from "lucide-react";
 
+type LogisticsTowerSummary = {
+  summary?: string;
+  network?: {
+    resilience_band?: string;
+    critical_nodes?: number;
+    constrained_nodes?: number;
+  };
+};
+
 export default function DriverMobility() {
   const query = trpc.driverMobility.summary.useQuery({ limit: 8 });
   const logisticsQuery = trpc.localCommerceSuperGateway.logisticsControlTower.useQuery({ city: "Lagos" });
+  const logisticsTower = logisticsQuery.data as LogisticsTowerSummary | undefined;
   const data = query.data;
 
   return (
@@ -23,7 +33,7 @@ export default function DriverMobility() {
       highlights={[
         ...(data?.earning_streams ?? []),
         ...(data?.longcat?.rider_guidance ?? []),
-        logisticsQuery.data?.summary ?? "Loading logistics control-tower summary…",
+        logisticsTower?.summary ?? "Loading logistics control-tower summary…",
       ]}
       sections={[
         {
@@ -52,10 +62,10 @@ export default function DriverMobility() {
         {
           title: "Logistics Control Tower",
           description: "Supply-chain and warehouse resilience context that can change dispatch routing and ETA honesty.",
-          items: logisticsQuery.data
+          items: logisticsTower
             ? [
-                logisticsQuery.data.summary,
-                `Route: /logistics-control-tower · risk band ${logisticsQuery.data.network?.resilience_band ?? "unknown"} · critical nodes ${logisticsQuery.data.network?.critical_nodes ?? 0}`,
+                logisticsTower.summary ?? "Loading logistics control-tower summary…",
+                `Route: /logistics-control-tower · risk band ${logisticsTower.network?.resilience_band ?? "unknown"} · critical nodes ${logisticsTower.network?.critical_nodes ?? 0}`,
               ]
             : [],
         },

@@ -11,6 +11,7 @@ import { getCookieOptions } from "./cookies";
 import {
   buildOidcAuthorizationUrl,
   createSessionToken,
+  exchangeAuthorizationCode,
   getOidcDiscoveryDocument,
   getSessionUserFromRequest,
   resolveUserFromExternalTokens,
@@ -18,11 +19,14 @@ import {
 import { authenticateOperator, ensureOperatorAuthStore } from "./operatorAuthStore";
 import { recordOperationalEvent } from "./operationalEvents";
 import { consumeRateLimit, getRateLimiterStatus } from "./rateLimiter";
+import type { SessionUser } from "./trpc";
 
 const OIDC_STATE_COOKIE = "switchos_oidc_state";
 const OIDC_NONCE_COOKIE = "switchos_oidc_nonce";
 const OIDC_VERIFIER_COOKIE = "switchos_oidc_verifier";
 const OIDC_RETURN_TO_COOKIE = "switchos_oidc_return_to";
+
+type AppRequest = express.Request & { user: SessionUser | null };
 
 const app = express();
 const allowedOrigins = ENV.allowedOrigins
@@ -267,12 +271,8 @@ app.get("/api/auth/oidc/callback", rateLimit(30), async (req, res) => {
 
   try {
     const origin = getRequestOrigin(req);
-    const identity = await resolveUserFromExternalTokens({
-      code,
-      nonce: storedNonce,
-      codeVerifier: storedVerifier,
-      origin,
-    });
+    const tokens = await exchangeAuthorizationCode(code, storedVerifier, origin);
+    const identity = await resolveUserFromExternalTokens(tokens, storedNonce);
 
     if (!identity?.email) {
       clearOidcFlowCookies(res);
@@ -377,11 +377,12 @@ app.post("/api/auth/login", rateLimit(15), async (req, res) => {
 });
 
 app.post("/api/auth/logout", rateLimit(20), async (req, res) => {
+  const request = req as AppRequest;
   await recordOperationalEvent({
     eventType: "auth.logout",
-    actorId: req.user ? `${req.user.id}` : null,
-    actorRole: req.user?.role ?? null,
-    tenantId: req.user?.tenantId ?? null,
+    actorId: request.user ? `${request.user.id}` : null,
+    actorRole: request.user?.role ?? null,
+    tenantId: request.user?.tenantId ?? null,
     route: req.path,
     outcome: "info",
   });
@@ -391,11 +392,12 @@ app.post("/api/auth/logout", rateLimit(20), async (req, res) => {
 });
 
 app.use(async (req, _res, next) => {
+  const request = req as AppRequest;
   try {
-    req.user = await getSessionUserFromRequest(req);
+    request.user = await getSessionUserFromRequest(req.headers);
   } catch (error) {
     console.warn("[SwitchOS] Failed to resolve session user", error);
-    req.user = null;
+    request.user = null;
   }
   next();
 });
@@ -405,10 +407,11 @@ app.use(
   createHTTPHandler({
     router: appRouter,
     createContext({ req, res }) {
+      const request = req as typeof req & { user?: SessionUser | null };
       return {
         req,
         res,
-        user: req.user ?? null,
+        user: request.user ?? null,
       };
     },
     onError({ error, path }) {

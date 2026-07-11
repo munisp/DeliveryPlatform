@@ -26,6 +26,61 @@ type CampaignDraft = {
   userId: string;
 };
 
+type ControlTowerPayload = {
+  summary?: string;
+  gateway?: {
+    status?: string;
+    recent_plan_count?: number;
+  };
+  inventory_control?: Record<string, { configured?: boolean }>;
+  mobile_shortcuts?: Array<{
+    route: string;
+    action: string;
+    label: string;
+  }>;
+  network?: {
+    resilience_band?: string;
+    critical_nodes?: number;
+    constrained_nodes?: number;
+    nodes?: Array<{
+      warehouse_id: number;
+      label: string;
+      zone_key?: string | null;
+      stock_cover_hours: number;
+      critical_skus: number;
+      recommended_restock_units: number;
+      risk_band: string;
+      narrative?: string;
+    }>;
+  };
+  supplier_health?: {
+    suppliers?: Array<{
+      supplier_id?: string;
+      supplier_name?: string;
+      lead_time_hours?: number;
+      fill_rate?: number;
+      spoilage_risk?: number;
+      reliability_band?: string;
+      urgency?: string;
+      narrative?: string;
+    }>;
+  };
+};
+
+type GrowthControlPayload = {
+  summary?: string;
+  control_tower?: ControlTowerPayload;
+  campaigns?: {
+    active_campaigns?: string[];
+  };
+  loyalty?: {
+    active_rewards?: unknown[];
+    stats?: {
+      total_accounts?: number;
+    };
+  };
+};
+
 const DEFAULT_DRAFT: ReplenishmentDraft = {
   city: "Lagos",
   requestedBy: "operator-control-tower",
@@ -75,7 +130,7 @@ export default function LogisticsControlTower() {
     },
   });
 
-  const data = growthControl.data;
+  const data = growthControl.data as GrowthControlPayload | undefined;
   const tower = data?.control_tower;
   const networkNodes = tower?.network?.nodes ?? [];
   const supplierSignals = tower?.supplier_health?.suppliers ?? [];

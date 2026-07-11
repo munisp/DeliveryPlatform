@@ -23,7 +23,7 @@ describe("mobile manifest branding", () => {
 
 describe("tab navigation shell", () => {
   it("declares all five core operational tabs in the router layout", () => {
-    const layoutPath = join(process.cwd(), "app/(tabs)/_layout.tsx");
+    const layoutPath = join(process.cwd(), "mobile/switchos-native/app/(tabs)/_layout.tsx");
     const contents = readFileSync(layoutPath, "utf8");
 
     expect(contents).toContain('name="index"');

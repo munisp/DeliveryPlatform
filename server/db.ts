@@ -410,18 +410,18 @@ export async function upsertUser(user: InsertUser): Promise<void> {
     };
     const updateSet: Record<string, unknown> = {};
 
-    const textFields = ["name", "email", "loginMethod"] as const;
-    type TextField = (typeof textFields)[number];
-
-    const assignNullable = (field: TextField) => {
-      const value = user[field];
-      if (value === undefined) return;
-      const normalized = value ?? null;
-      values[field] = normalized;
-      updateSet[field] = normalized;
-    };
-
-    textFields.forEach(assignNullable);
+    if (user.name !== undefined) {
+      values.name = user.name ?? null;
+      updateSet.name = user.name ?? null;
+    }
+    if (user.email !== undefined) {
+      values.email = user.email ?? null;
+      updateSet.email = user.email ?? null;
+    }
+    if (user.loginMethod !== undefined) {
+      values.loginMethod = user.loginMethod ?? null;
+      updateSet.loginMethod = user.loginMethod ?? null;
+    }
 
     if (user.lastSignedIn !== undefined) {
       values.lastSignedIn = user.lastSignedIn;
@@ -3161,7 +3161,7 @@ async function awardPointsTransactional(
   description: string,
   orderId?: number,
 ) {
-  let updateResult = await client.query<any>(
+  let updateResult = await client.query(
     `UPDATE loyalty_points
      SET points_balance = points_balance + $1,
          lifetime_points = lifetime_points + $1,
@@ -3173,7 +3173,7 @@ async function awardPointsTransactional(
 
   if (updateResult.rows.length === 0) {
     await ensureLoyaltyAccountForClient(client, userId);
-    updateResult = await client.query<any>(
+    updateResult = await client.query(
       `UPDATE loyalty_points
        SET points_balance = points_balance + $1,
            lifetime_points = lifetime_points + $1,
@@ -3187,7 +3187,7 @@ async function awardPointsTransactional(
   const account = updateResult.rows[0];
   await checkAndUpgradeTierForClient(client, userId, account.lifetime_points);
 
-  await client.query<any>(
+  await client.query(
     `INSERT INTO loyalty_transactions (user_id, transaction_type, points, order_id, description)
      VALUES ($1, $2, $3, $4, $5)`,
     [userId, transactionType, points, orderId, description],
@@ -6172,27 +6172,23 @@ export async function getDispatchControlCenter(limit: number = 12) {
       .filter((driver: any) => Number(driver.primary_vertical_id || 0) === Number(row.vertical_id || 0) || Number(driver.primary_vertical_id || 0) === 0)
       .slice(0, 8)
       .map((driver: any, index: number) => ({
-        driver_id: Number(driver.driver_id),
+        id: Number(driver.driver_id),
         name: driver.name,
         tier: driver.tier,
-        acceptance_rate: Number(driver.acceptance_rate || 0),
-        completion_rate: Number(driver.completion_rate || 0),
-        utilization_rate: Math.max(20, Math.min(95, Number(driver.score || 0))),
-        distance_km: Number((1.4 + index * 0.9 + Number(row.pressure_ratio || 0) * 0.7).toFixed(2)),
-        idle_minutes: Math.max(6, 35 - index * 3),
-        recent_rejections: index > 3 ? 1 : 0,
-        on_trip: driver.status === 'busy',
+        acceptanceRate: Number(driver.acceptance_rate || 0),
+        completionRate: Number(driver.completion_rate || 0),
+        utilizationRate: Math.max(20, Math.min(95, Number(driver.score || 0))),
+        distanceKm: Number((1.4 + index * 0.9 + Number(row.pressure_ratio || 0) * 0.7).toFixed(2)),
+        idleMinutes: Math.max(6, 35 - index * 3),
+        recentRejections: index > 3 ? 1 : 0,
+        onTrip: driver.status === 'busy',
       }));
 
-    const optimization = await optimizeDispatch({
-      order_id: Number(row.id),
-      trip_mode: Number(row.long_trip_minutes || 0) >= 60 ? 'long_haul' : 'standard',
-      demand_level: Math.max(Number(row.open_orders || 1), 1),
-      supply_level: Math.max(Number(row.available_count || 1), 1),
-      multi_stop: Boolean(row.multi_stop),
-      long_trip_minutes: Number(row.long_trip_minutes || 35),
-      drivers: relevantDrivers,
-    });
+    const optimization = optimizeDispatch(relevantDrivers);
+    const strategy = Number(row.long_trip_minutes || 0) >= 60 || optimization.batchingEligible
+      ? 'broadcast_trip_radar'
+      : 'direct_assignment';
+    const leadDriver = relevantDrivers.find((driver) => driver.id === optimization.recommendedDriverId);
 
     const riskScore = Math.min(
       100,
@@ -6200,7 +6196,7 @@ export async function getDispatchControlCenter(limit: number = 12) {
         Number(row.queue_minutes || 0) * 2 +
         Number(row.pressure_ratio || 0) * 18 +
         (row.vip_or_high_value ? 12 : 0) +
-        (optimization.strategy === 'broadcast_trip_radar' ? 14 : 0),
+        (strategy === 'broadcast_trip_radar' ? 14 : 0),
       ),
     );
 
@@ -6218,13 +6214,19 @@ export async function getDispatchControlCenter(limit: number = 12) {
       multi_stop: Boolean(row.multi_stop),
       vip_or_high_value: Boolean(row.vip_or_high_value),
       long_trip_minutes: Number(row.long_trip_minutes || 0),
-      optimization,
-      recommended_driver_id: optimization.recommended_driver_id,
-      recommended_driver_name: optimization.recommended_driver_name,
-      operator_reason: optimization.ranked_candidates[0]?.reason || 'No recommendation available',
+      optimization: {
+        strategy,
+        recommended_driver_id: optimization.recommendedDriverId,
+        ranked_candidates: optimization.rankedCandidates,
+        batching_eligible: optimization.batchingEligible,
+        reasoning: optimization.reasoning,
+      },
+      recommended_driver_id: optimization.recommendedDriverId,
+      recommended_driver_name: leadDriver?.name || null,
+      operator_reason: optimization.reasoning[0] || 'No recommendation available',
       operator_next_action: riskScore >= 75
         ? 'Prioritize assignment and consider an incentive or operator override.'
-        : optimization.strategy === 'broadcast_trip_radar'
+        : strategy === 'broadcast_trip_radar'
           ? 'Broadcast to nearby supply and watch conversion closely.'
           : 'Proceed with direct assignment using the lead candidate.',
     });
@@ -8132,7 +8134,7 @@ export async function getFundsReconciliationSnapshot() {
   await getDb();
   if (!_pool) return null;
 
-  const [transactionResult, settlementResult, incentiveResult, orderResult, walletResult, disputeResult, reserveResult] = await Promise.all([
+  const [transactionResult, settlementResult, incentiveResult, orderResult, walletResult, disputeResult, reserveResult, mojaloopResult] = await Promise.all([
     _pool.query<any>(`
       SELECT
         COUNT(*) AS transaction_count,
@@ -8203,6 +8205,24 @@ export async function getFundsReconciliationSnapshot() {
         WHERE status IN ('held', 'active')
       ) reserves
     `).catch(() => ({ rows: [{ merchant_reserves_held: 0, treasury_reserves_held: 0, merchant_reserve_entries: 0, treasury_reserve_entries: 0, last_reserve_event: null }] })),
+    _pool.query<any>(`
+      SELECT
+        (SELECT COUNT(*) FROM mojaloop_transfers) AS transfer_count,
+        COALESCE((SELECT SUM(amount) FROM mojaloop_transfers), 0) AS gross_transfer_amount,
+        (SELECT COUNT(*) FROM mojaloop_transfers WHERE state = 'SETTLED') AS settled_transfer_count,
+        (SELECT COUNT(*) FROM mojaloop_refunds) AS refund_count,
+        COALESCE((SELECT SUM(amount) FROM mojaloop_refunds), 0) AS refunded_amount,
+        (SELECT COUNT(*) FROM mojaloop_reconciliation_audits WHERE ledger_consistent = FALSE) AS inconsistent_audits,
+        COALESCE((SELECT SUM(balance_cents) FROM ledger_accounts), 0) AS ledger_balance_cents,
+        (SELECT COUNT(*) FROM ledger_entries WHERE entry_type = 'transfer') AS ledger_transfer_entries,
+        (SELECT COUNT(*) FROM ledger_entries WHERE entry_type = 'refund') AS ledger_refund_entries,
+        (SELECT COUNT(*) FROM mojaloop_workflows WHERE status NOT IN ('completed', 'settled', 'succeeded')) AS open_workflows,
+        GREATEST(
+          COALESCE((SELECT MAX(updated_at) FROM mojaloop_transfers), 'epoch'::timestamptz),
+          COALESCE((SELECT MAX(updated_at) FROM mojaloop_refunds), 'epoch'::timestamptz),
+          COALESCE((SELECT MAX(created_at) FROM mojaloop_reconciliation_audits), 'epoch'::timestamptz)
+        ) AS last_mojaloop_event
+    `).catch(() => ({ rows: [{ transfer_count: 0, gross_transfer_amount: 0, settled_transfer_count: 0, refund_count: 0, refunded_amount: 0, inconsistent_audits: 0, ledger_balance_cents: 0, ledger_transfer_entries: 0, ledger_refund_entries: 0, open_workflows: 0, last_mojaloop_event: null }] })),
   ]);
 
   const transactions = transactionResult.rows[0] || {};
@@ -8212,6 +8232,7 @@ export async function getFundsReconciliationSnapshot() {
   const wallets = walletResult.rows[0] || {};
   const disputes = disputeResult.rows[0] || {};
   const reserves = reserveResult.rows[0] || {};
+  const mojaloop = mojaloopResult.rows[0] || {};
 
   const grossPayments = Number(Number(transactions.completed_payments || 0).toFixed(2));
   const refunds = Number(Number(transactions.completed_refunds || 0).toFixed(2));
@@ -8226,14 +8247,25 @@ export async function getFundsReconciliationSnapshot() {
   const merchantReservesHeld = Number(Number(reserves.merchant_reserves_held || 0).toFixed(2));
   const treasuryReservesHeld = Number(Number(reserves.treasury_reserves_held || 0).toFixed(2));
   const totalReservesHeld = Number((merchantReservesHeld + treasuryReservesHeld).toFixed(2));
+  const mojaloopGrossTransferred = Number(Number(mojaloop.gross_transfer_amount || 0).toFixed(2));
+  const mojaloopRefunded = Number(Number(mojaloop.refunded_amount || 0).toFixed(2));
+  const mojaloopLedgerBalance = Number((Number(mojaloop.ledger_balance_cents || 0) / 100).toFixed(2));
+  const mojaloopNetSettled = Number((mojaloopGrossTransferred - mojaloopRefunded).toFixed(2));
   const netCollected = Number((grossPayments - refunds - chargebackExposure).toFixed(2));
   const outstandingDriverObligations = Number((pendingSettlements + approvedSettlements + unsettledIncentives).toFixed(2));
   const payoutCoverageGap = Number((deliveredDriverFees - completedSettlements).toFixed(2));
   const treasuryDrift = Number((totalWalletBalance - netCollected).toFixed(2));
   const reserveCoverageGap = Number(Math.max(chargebackExposure - totalReservesHeld, 0).toFixed(2));
+  const ledgerCoverageGap = Number((netCollected - mojaloopNetSettled).toFixed(2));
 
   let recommendation = "Funds posture is balanced across transaction, settlement, incentive, wallet, and dispute signals.";
-  if (Number(transactions.failed_transactions || 0) > 0) {
+  if (Number(mojaloop.inconsistent_audits || 0) > 0) {
+    recommendation = "TigerBeetle or Mojaloop reconciliation audits are inconsistent; resolve ledger drift before approving additional settlement movement.";
+  } else if (Math.abs(ledgerCoverageGap) > 0.01 && Number(mojaloop.transfer_count || 0) > 0) {
+    recommendation = "Platform finance totals diverge from TigerBeetle-backed Mojaloop settlement totals; review ledger postings, refunds, and callback completion before closing the period.";
+  } else if (Number(mojaloop.open_workflows || 0) > 0) {
+    recommendation = "Mojaloop workflows remain open; confirm cross-network settlement completion before releasing operational reserves.";
+  } else if (Number(transactions.failed_transactions || 0) > 0) {
     recommendation = "Failed finance transactions exist; resolve them before relying on downstream reconciliation totals.";
   } else if (Number(wallets.negative_wallets || 0) > 0) {
     recommendation = "Negative wallet balances exist; investigate treasury and compensation adjustments before closing the period.";
@@ -8294,6 +8326,20 @@ export async function getFundsReconciliationSnapshot() {
       critical_dispute_tickets: Number(disputes.critical_dispute_tickets || 0),
       last_dispute_event: disputes.last_dispute_event ?? null,
     },
+    mojaloop: {
+      transfer_count: Number(mojaloop.transfer_count || 0),
+      settled_transfer_count: Number(mojaloop.settled_transfer_count || 0),
+      refund_count: Number(mojaloop.refund_count || 0),
+      gross_transfer_amount: mojaloopGrossTransferred,
+      refunded_amount: mojaloopRefunded,
+      net_settled_amount: mojaloopNetSettled,
+      inconsistent_audits: Number(mojaloop.inconsistent_audits || 0),
+      ledger_balance: mojaloopLedgerBalance,
+      ledger_transfer_entries: Number(mojaloop.ledger_transfer_entries || 0),
+      ledger_refund_entries: Number(mojaloop.ledger_refund_entries || 0),
+      open_workflows: Number(mojaloop.open_workflows || 0),
+      last_mojaloop_event: mojaloop.last_mojaloop_event ?? null,
+    },
     reserves: {
       merchant_reserves_held: merchantReservesHeld,
       treasury_reserves_held: treasuryReservesHeld,
@@ -8308,6 +8354,7 @@ export async function getFundsReconciliationSnapshot() {
       payout_coverage_gap: payoutCoverageGap,
       treasury_drift: treasuryDrift,
       reserve_coverage_gap: reserveCoverageGap,
+      ledger_coverage_gap: ledgerCoverageGap,
     },
     recommendation,
   };

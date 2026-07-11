@@ -47,9 +47,18 @@ export const appRouter = router({
   }),
 
   analytics: router({
-    summary: analyticsReadProcedure.query(() => withLakehouseFallback(() => getLakehouseAnalyticsSummary(), () => getWorkspaceAnalyticsSummary())),
-    orderStats: analyticsReadProcedure.query(() => withLakehouseFallback(() => getLakehouseOrderStats(), () => getWorkspaceOrderStats())),
-    driverStats: analyticsReadProcedure.query(() => withLakehouseFallback(() => getLakehouseDriverStats(), () => getWorkspaceDriverStats())),
+    summary: analyticsReadProcedure.query(() => withLakehouseFallback(
+      () => getLakehouseAnalyticsSummary(),
+      async () => (await getWorkspaceAnalyticsSummary()) as unknown as Awaited<ReturnType<typeof getLakehouseAnalyticsSummary>>,
+    )),
+    orderStats: analyticsReadProcedure.query(() => withLakehouseFallback(
+      () => getLakehouseOrderStats(),
+      async () => (await getWorkspaceOrderStats()) as unknown as Awaited<ReturnType<typeof getLakehouseOrderStats>>,
+    )),
+    driverStats: analyticsReadProcedure.query(() => withLakehouseFallback(
+      () => getLakehouseDriverStats(),
+      async () => (await getWorkspaceDriverStats()) as unknown as Awaited<ReturnType<typeof getLakehouseDriverStats>>,
+    )),
     marketplaceOverview: analyticsReadProcedure.query(() => withLakehouseFallback(() => getLakehouseMarketplaceOverview(), () => getWorkspaceMarketplaceOverview())),
     fundsReconciliation: analyticsReadProcedure.query(async () => getFundsReconciliationSnapshot()),
   }),
@@ -136,7 +145,7 @@ export const appRouter = router({
         emailTemplate: z.string().trim().min(3).max(5000).optional(),
         smsTemplate: z.string().trim().min(3).max(1000).optional(),
         targetAudience: z.string().trim().min(2).max(128).optional(),
-        triggerCondition: z.record(z.any()).optional(),
+        triggerCondition: z.record(z.string(), z.any()).optional(),
         activate: z.boolean().optional(),
         audienceMode: z.enum(["single_user", "full_audience"]).optional(),
         userId: z.number().int().positive().optional(),

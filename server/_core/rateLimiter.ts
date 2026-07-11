@@ -1,4 +1,4 @@
-import { createClient, type RedisClientType } from "redis";
+import { createClient } from "redis";
 import { ENV } from "./env";
 
 type Bucket = {
@@ -8,9 +8,11 @@ type Bucket = {
 
 const rateWindowMs = 60_000;
 const localBuckets = new Map<string, Bucket>();
-let redisClientPromise: Promise<RedisClientType | null> | null = null;
+type RedisClient = ReturnType<typeof createClient>;
 
-async function getRedisClient(): Promise<RedisClientType | null> {
+let redisClientPromise: Promise<RedisClient | null> | null = null;
+
+async function getRedisClient(): Promise<RedisClient | null> {
   if (!ENV.redisUrl) return null;
   if (!redisClientPromise) {
     redisClientPromise = (async () => {

@@ -5,9 +5,19 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { trpc } from "@/lib/trpc";
 
+type LogisticsTowerSummary = {
+  summary?: string;
+  network?: {
+    resilience_band?: string;
+    critical_nodes?: number;
+    constrained_nodes?: number;
+  };
+};
+
 export default function MerchantChannels() {
   const query = trpc.merchantChannels.workspace.useQuery();
   const logisticsQuery = trpc.localCommerceSuperGateway.logisticsControlTower.useQuery({ city: "Lagos" });
+  const logisticsTower = logisticsQuery.data as LogisticsTowerSummary | undefined;
   const data = query.data;
 
   return (
@@ -51,11 +61,11 @@ export default function MerchantChannels() {
               <CardDescription>Instant-retail resilience, warehouse pressure, and middleware readiness linked to merchant growth.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4 text-sm text-slate-300">
-              <p>{logisticsQuery.data?.summary ?? "Loading logistics control-tower summary…"}</p>
+              <p>{logisticsTower?.summary ?? "Loading logistics control-tower summary…"}</p>
               <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-4">
                 <p className="text-xs uppercase tracking-[0.2em] text-cyan-200">Current risk band</p>
                 <p className="mt-2 leading-7">
-                  {logisticsQuery.data?.network?.resilience_band ?? "unknown"} · {logisticsQuery.data?.network?.critical_nodes ?? 0} critical nodes · {logisticsQuery.data?.network?.constrained_nodes ?? 0} constrained nodes
+                  {logisticsTower?.network?.resilience_band ?? "unknown"} · {logisticsTower?.network?.critical_nodes ?? 0} critical nodes · {logisticsTower?.network?.constrained_nodes ?? 0} constrained nodes
                 </p>
               </div>
               <Link href="/logistics-control-tower" className="inline-flex rounded-full border border-cyan-400/30 bg-cyan-500/10 px-4 py-2 text-sm font-medium text-cyan-100 transition hover:bg-cyan-500/20">
