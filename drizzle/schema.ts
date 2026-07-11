@@ -30,6 +30,7 @@ export const serviceVerticals = createLooseTable("service_verticals");
 export const systemConfig = createLooseTable("system_config");
 export const notifications = createLooseTable("notifications");
 export const auditLogs = createLooseTable("audit_logs");
+export const operationalEvents = createLooseTable("operational_events");
 export const pushNotificationTokens = createLooseTable("push_notification_tokens");
 export const driverPerformanceScores = createLooseTable("driver_performance_scores");
 export const membershipPlans = createLooseTable("membership_plans");

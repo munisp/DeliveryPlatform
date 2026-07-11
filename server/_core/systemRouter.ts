@@ -8,6 +8,14 @@ function configured(value: string | null | undefined) {
   return typeof value === "string" && value.trim().length > 0;
 }
 
+function splitAndTrim(value: string | null | undefined) {
+  if (!value) return [];
+  return value
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
 export const systemRouter = router({
   health: publicProcedure.query(() => ({
     ok: true,
@@ -19,8 +27,11 @@ export const systemRouter = router({
     timestamp: new Date().toISOString(),
     edge: {
       apisixAdminUrl: ENV.apisixAdminUrl,
-      apisixConfigured: configured(ENV.apisixAdminUrl),
-      openAppSecConfigured: configured(process.env.OPENAPPSEC_POLICY_PATH),
+      apisixControlUrl: ENV.apisixControlUrl || null,
+      apisixConfigured: configured(ENV.apisixAdminUrl) || configured(ENV.apisixControlUrl),
+      openAppSecConfigured: configured(ENV.openAppSecUrl) || configured(ENV.openAppSecPolicyPath),
+      openAppSecUrl: ENV.openAppSecUrl || null,
+      openAppSecPolicyPath: ENV.openAppSecPolicyPath || null,
       cacheControlIndexHtml: ENV.cacheControlIndexHtml,
     },
     identity: {
@@ -32,18 +43,19 @@ export const systemRouter = router({
       policy: getPolicyIntegrationStatus(),
     },
     messaging: {
-      kafkaBootstrapServers: process.env.KAFKA_BOOTSTRAP_SERVERS || null,
-      kafkaConfigured: configured(process.env.KAFKA_BOOTSTRAP_SERVERS),
+      kafkaBrokers: splitAndTrim(ENV.kafkaBrokers),
+      kafkaConfigured: configured(ENV.kafkaBrokers),
+      kafkaOperationalEventsTopic: ENV.kafkaOperationalEventsTopic || null,
       fluvioServiceUrl: ENV.fluvioServiceUrl || null,
       fluvioConfigured: configured(ENV.fluvioServiceUrl),
-      daprHttpPort: process.env.DAPR_HTTP_PORT || null,
-      daprConfigured: configured(process.env.DAPR_HTTP_PORT),
+      daprHttpPort: ENV.daprHttpPort || null,
+      daprConfigured: configured(ENV.daprHttpPort),
       temporalAddress: process.env.TEMPORAL_ADDRESS || null,
       temporalConfigured: configured(process.env.TEMPORAL_ADDRESS),
       redisUrl: ENV.redisUrl || null,
       redisConfigured: configured(ENV.redisUrl),
-      openSearchUrl: process.env.OPENSEARCH_URL || null,
-      openSearchConfigured: configured(process.env.OPENSEARCH_URL),
+      openSearchUrl: ENV.opensearchUrl || null,
+      openSearchConfigured: configured(ENV.opensearchUrl),
     },
     services: {
       mojaloopServiceUrl: ENV.mojaloopServiceUrl,

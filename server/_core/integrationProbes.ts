@@ -1,3 +1,4 @@
+import { access } from "node:fs/promises";
 import { Socket } from "node:net";
 
 import { ENV } from "./env";
@@ -13,6 +14,10 @@ type ProbeResult = {
 
 function ok(target: string | null, details: Record<string, unknown> = {}): ProbeResult {
   return { status: "healthy", target, details, error: null };
+}
+
+function configured(target: string | null, details: Record<string, unknown> = {}): ProbeResult {
+  return { status: "configured", target, details, error: null };
 }
 
 function degraded(target: string | null, error: unknown, details: Record<string, unknown> = {}): ProbeResult {
@@ -73,13 +78,20 @@ function normalizeBoolean(value: unknown, fallback = false) {
   return fallback;
 }
 
+function parseBrokerTargets(raw: string) {
+  return raw
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+}
+
 async function probeTcpSocket(address: string, defaultPort: number): Promise<ProbeResult> {
   const normalized = address.includes("://") ? new URL(address) : new URL(`http://${address}`);
   const host = normalized.hostname;
   const port = Number.parseInt(normalized.port || `${defaultPort}`, 10);
 
   if (!host || Number.isNaN(port)) {
-    return degraded(address, new Error("invalid Temporal address"));
+    return degraded(address, new Error("invalid socket address"));
   }
 
   await new Promise<void>((resolve, reject) => {
@@ -157,9 +169,58 @@ export async function probeApisix(): Promise<ProbeResult> {
   }
 }
 
+export async function probeOpenAppSec(): Promise<ProbeResult> {
+  if (!ENV.openAppSecUrl && !ENV.openAppSecPolicyPath) {
+    return unconfigured(null);
+  }
+
+  if (ENV.openAppSecUrl) {
+    const healthResult = await probeUrl(ENV.openAppSecUrl, "/health");
+    if (healthResult.status !== "degraded") {
+      return healthResult;
+    }
+    return degraded(ENV.openAppSecUrl, healthResult.error ?? "unknown Open AppSec probe failure", {
+      ...healthResult.details,
+      mode: "http",
+      policy_path: ENV.openAppSecPolicyPath || null,
+    });
+  }
+
+  try {
+    await access(ENV.openAppSecPolicyPath);
+    return configured(ENV.openAppSecPolicyPath, {
+      mode: "policy_path",
+      policy_path: ENV.openAppSecPolicyPath,
+    });
+  } catch (error) {
+    return degraded(ENV.openAppSecPolicyPath, error, { mode: "policy_path" });
+  }
+}
+
 export async function probePermify(): Promise<ProbeResult> {
   if (!ENV.permifyEndpoint?.trim()) return unconfigured(ENV.permifyEndpoint || null);
   return probeUrl(ENV.permifyEndpoint, "/healthz");
+}
+
+export async function probeKafka(): Promise<ProbeResult> {
+  const brokers = parseBrokerTargets(ENV.kafkaBrokers);
+  if (brokers.length === 0) return unconfigured(null);
+
+  const target = brokers[0];
+  try {
+    const result = await probeTcpSocket(target, 9092);
+    return {
+      ...result,
+      details: {
+        ...(result.details || {}),
+        checked_broker: target,
+        brokers,
+        topic: ENV.kafkaOperationalEventsTopic || null,
+      },
+    };
+  } catch (error) {
+    return degraded(target, error, { brokers, topic: ENV.kafkaOperationalEventsTopic || null });
+  }
 }
 
 export async function probeDapr(): Promise<ProbeResult> {
@@ -305,10 +366,12 @@ export async function probeServices() {
 }
 
 export async function getLiveIntegrationStatus() {
-  const [apisix, oidc, permify, redis, dapr, openSearch, temporal, fluvio, services] = await Promise.all([
+  const [apisix, openAppSec, oidc, permify, kafka, redis, dapr, openSearch, temporal, fluvio, services] = await Promise.all([
     probeApisix(),
+    probeOpenAppSec(),
     probeExternalOidc(),
     probePermify(),
+    probeKafka(),
     probeRedis(),
     probeDapr(),
     probeOpenSearch(),
@@ -319,9 +382,9 @@ export async function getLiveIntegrationStatus() {
 
   return {
     timestamp: new Date().toISOString(),
-    edge: { apisix },
+    edge: { apisix, openAppSec },
     identity: { oidc, permify },
-    messaging: { redis, dapr, openSearch, temporal, fluvio },
+    messaging: { kafka, redis, dapr, openSearch, temporal, fluvio },
     services,
   };
 }

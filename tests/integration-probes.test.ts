@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const fetchMock = vi.fn();
-const temporalSocketConnectMock = vi.fn();
+const socketConnectMock = vi.fn();
 
 class MockSocket {
   private handlers: Record<string, ((...args: any[]) => void) | undefined> = {};
@@ -23,7 +23,7 @@ class MockSocket {
   }
 
   connect(port: number, host: string) {
-    temporalSocketConnectMock({ port, host, handlers: this.handlers });
+    socketConnectMock({ port, host, handlers: this.handlers });
     return this;
   }
 }
@@ -41,10 +41,15 @@ describe("SwitchOS live integration probes", () => {
     APISIX_ADMIN_URL: process.env.APISIX_ADMIN_URL,
     APISIX_CONTROL_URL: process.env.APISIX_CONTROL_URL,
     APISIX_ADMIN_KEY: process.env.APISIX_ADMIN_KEY,
+    OPENAPPSEC_URL: process.env.OPENAPPSEC_URL,
+    OPENAPPSEC_POLICY_PATH: process.env.OPENAPPSEC_POLICY_PATH,
     ENABLE_EXTERNAL_OIDC: process.env.ENABLE_EXTERNAL_OIDC,
     OIDC_ISSUER_URL: process.env.OIDC_ISSUER_URL,
     OIDC_DISCOVERY_URL: process.env.OIDC_DISCOVERY_URL,
     PERMIFY_ENDPOINT: process.env.PERMIFY_ENDPOINT,
+    KAFKA_BROKERS: process.env.KAFKA_BROKERS,
+    KAFKA_BOOTSTRAP_SERVERS: process.env.KAFKA_BOOTSTRAP_SERVERS,
+    KAFKA_OPERATIONAL_EVENTS_TOPIC: process.env.KAFKA_OPERATIONAL_EVENTS_TOPIC,
     REDIS_URL: process.env.REDIS_URL,
     DAPR_HTTP_PORT: process.env.DAPR_HTTP_PORT,
     OPENSEARCH_URL: process.env.OPENSEARCH_URL,
@@ -63,14 +68,19 @@ describe("SwitchOS live integration probes", () => {
 
   beforeEach(() => {
     fetchMock.mockReset();
-    temporalSocketConnectMock.mockReset();
+    socketConnectMock.mockReset();
     process.env.APISIX_ADMIN_URL = "";
     process.env.APISIX_CONTROL_URL = "";
     process.env.APISIX_ADMIN_KEY = "";
+    process.env.OPENAPPSEC_URL = "";
+    process.env.OPENAPPSEC_POLICY_PATH = "";
     process.env.ENABLE_EXTERNAL_OIDC = "false";
     process.env.OIDC_ISSUER_URL = "";
     process.env.OIDC_DISCOVERY_URL = "";
     process.env.PERMIFY_ENDPOINT = "";
+    process.env.KAFKA_BROKERS = "";
+    process.env.KAFKA_BOOTSTRAP_SERVERS = "";
+    process.env.KAFKA_OPERATIONAL_EVENTS_TOPIC = "operational-events";
     process.env.REDIS_URL = "";
     process.env.DAPR_HTTP_PORT = "";
     process.env.OPENSEARCH_URL = "";
@@ -101,8 +111,10 @@ describe("SwitchOS live integration probes", () => {
     const { getLiveIntegrationStatus } = await loadModule();
     const status = await getLiveIntegrationStatus();
 
+    expect(status.edge.openAppSec.status).toBe("unconfigured");
     expect(status.identity.oidc.status).toBe("unconfigured");
     expect(status.identity.permify.status).toBe("unconfigured");
+    expect(status.messaging.kafka.status).toBe("unconfigured");
     expect(status.messaging.redis.status).toBe("unconfigured");
     expect(status.messaging.dapr.status).toBe("unconfigured");
     expect(status.messaging.openSearch.status).toBe("unconfigured");
@@ -112,9 +124,12 @@ describe("SwitchOS live integration probes", () => {
 
   it("reports healthy middleware checks when configured endpoints respond successfully", async () => {
     process.env.APISIX_CONTROL_URL = "http://127.0.0.1:9000";
+    process.env.OPENAPPSEC_URL = "http://127.0.0.1:9443";
     process.env.ENABLE_EXTERNAL_OIDC = "true";
     process.env.OIDC_ISSUER_URL = "https://identity.switchos.example/realms/switchos";
     process.env.PERMIFY_ENDPOINT = "http://127.0.0.1:3476";
+    process.env.KAFKA_BROKERS = "127.0.0.1:9092,127.0.0.1:9093";
+    process.env.KAFKA_OPERATIONAL_EVENTS_TOPIC = "switchos.operational-events";
     process.env.DAPR_HTTP_PORT = "3500";
     process.env.OPENSEARCH_URL = "http://127.0.0.1:9200";
     process.env.OPENSEARCH_USERNAME = "admin";
@@ -129,38 +144,40 @@ describe("SwitchOS live integration probes", () => {
       const body =
         url === "http://127.0.0.1:9000/v1/schema"
           ? { routes: [] }
-          : url === process.env.OIDC_ISSUER_URL + "/.well-known/openid-configuration"
-            ? { issuer: process.env.OIDC_ISSUER_URL, authorization_endpoint: "https://identity/auth", token_endpoint: "https://identity/token", jwks_uri: "https://identity/jwks" }
-            : url === "http://127.0.0.1:3476/healthz"
-              ? { status: "ok" }
-              : url === "http://127.0.0.1:3500/v1.0/metadata"
-                ? { id: "dapr" }
-                : url === "http://127.0.0.1:9200/_cluster/health"
-                  ? { status: "green" }
-                  : url === "http://127.0.0.1:50055/health"
-                    ? { status: "ok" }
-                    : url === "http://127.0.0.1:8086/health"
+          : url === "http://127.0.0.1:9443/health"
+            ? { status: "ok" }
+            : url === process.env.OIDC_ISSUER_URL + "/.well-known/openid-configuration"
+              ? { issuer: process.env.OIDC_ISSUER_URL, authorization_endpoint: "https://identity/auth", token_endpoint: "https://identity/token", jwks_uri: "https://identity/jwks" }
+              : url === "http://127.0.0.1:3476/healthz"
+                ? { status: "ok" }
+                : url === "http://127.0.0.1:3500/v1.0/metadata"
+                  ? { id: "dapr" }
+                  : url === "http://127.0.0.1:9200/_cluster/health"
+                    ? { status: "green" }
+                    : url === "http://127.0.0.1:50055/health"
                       ? { status: "ok" }
-                      : url === "http://127.0.0.1:8087/health"
+                      : url === "http://127.0.0.1:8086/health"
                         ? { status: "ok" }
-                        : url === "http://127.0.0.1:8007/health"
+                        : url === "http://127.0.0.1:8087/health"
                           ? { status: "ok" }
-                          : url === "http://127.0.0.1:8088/health"
+                          : url === "http://127.0.0.1:8007/health"
                             ? { status: "ok" }
-                            : url === "http://127.0.0.1:8091/health"
+                            : url === "http://127.0.0.1:8088/health"
                               ? { status: "ok" }
-                              : url === "http://127.0.0.1:8104/health"
-                                ? { status: "ok", service: "longcat-voice-gateway", telephony_mode: "asterisk-audiosocket", speech_service_url: "http://127.0.0.1:8105" }
-                                : url === "http://127.0.0.1:8105/health"
-                                  ? { status: "healthy", service: "longcat-speech-runtime", stt_engine: "faster-whisper", tts_engine: "piper", stt_ready: true, tts_ready: true }
-                                  : null;
+                              : url === "http://127.0.0.1:8091/health"
+                                ? { status: "ok" }
+                                : url === "http://127.0.0.1:8104/health"
+                                  ? { status: "ok", service: "longcat-voice-gateway", telephony_mode: "asterisk-audiosocket", speech_service_url: "http://127.0.0.1:8105" }
+                                  : url === "http://127.0.0.1:8105/health"
+                                    ? { status: "healthy", service: "longcat-speech-runtime", stt_engine: "faster-whisper", tts_engine: "piper", stt_ready: true, tts_ready: true }
+                                    : null;
       if (!body) {
         return { ok: false, status: 404, text: async () => `unmocked ${url}`, headers: new Headers({ "content-type": "text/plain" }) };
       }
       return { ok: true, headers: new Headers({ "content-type": "application/json" }), json: async () => body };
     });
 
-    temporalSocketConnectMock.mockImplementation(({ handlers }) => {
+    socketConnectMock.mockImplementation(({ handlers }) => {
       handlers.connect?.();
     });
 
@@ -177,8 +194,15 @@ describe("SwitchOS live integration probes", () => {
     const status = await getLiveIntegrationStatus();
 
     expect(status.edge.apisix.status).toBe("healthy");
+    expect(status.edge.openAppSec.status).toBe("healthy");
     expect(status.identity.oidc.status).toBe("healthy");
     expect(status.identity.permify.status).toBe("healthy");
+    expect(status.messaging.kafka.status).toBe("healthy");
+    expect(status.messaging.kafka.details).toMatchObject({
+      checked_broker: "127.0.0.1:9092",
+      brokers: ["127.0.0.1:9092", "127.0.0.1:9093"],
+      topic: "switchos.operational-events",
+    });
     expect(status.messaging.redis.status).toBe("healthy");
     expect(status.messaging.dapr.status).toBe("healthy");
     expect(status.messaging.openSearch.status).toBe("healthy");
