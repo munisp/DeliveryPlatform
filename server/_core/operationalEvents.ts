@@ -1,3 +1,4 @@
+import { Kafka, logLevel, type Producer } from "kafkajs";
 import { Pool } from "pg";
 import { ENV } from "./env";
 
@@ -13,6 +14,8 @@ type OperationalEvent = {
 
 let pool: Pool | null = null;
 let tablesEnsured = false;
+let kafkaProducer: Producer | null = null;
+let kafkaProducerConnectPromise: Promise<Producer | null> | null = null;
 
 function getPool() {
   if (!ENV.databaseUrl) {
@@ -31,6 +34,51 @@ function getPool() {
   }
 
   return pool;
+}
+
+function buildEventEnvelope(event: OperationalEvent) {
+  return {
+    source: "switchos-operator-dashboard",
+    timestamp: new Date().toISOString(),
+    ...event,
+  };
+}
+
+function parseKafkaBrokers() {
+  return ENV.kafkaBrokers
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+}
+
+async function getKafkaProducer() {
+  const brokers = parseKafkaBrokers();
+  if (brokers.length === 0 || !ENV.kafkaOperationalEventsTopic.trim()) {
+    return null;
+  }
+
+  if (kafkaProducer) {
+    return kafkaProducer;
+  }
+
+  if (!kafkaProducerConnectPromise) {
+    kafkaProducerConnectPromise = (async () => {
+      const kafka = new Kafka({
+        clientId: ENV.kafkaClientId,
+        brokers,
+        logLevel: logLevel.NOTHING,
+      });
+      const producer = kafka.producer();
+      await producer.connect();
+      kafkaProducer = producer;
+      return producer;
+    })().catch((error) => {
+      kafkaProducerConnectPromise = null;
+      throw error;
+    });
+  }
+
+  return kafkaProducerConnectPromise;
 }
 
 async function ensureTables() {
@@ -92,6 +140,33 @@ async function persistEvent(event: OperationalEvent) {
   return { persisted: true };
 }
 
+async function publishToKafka(event: OperationalEvent) {
+  const producer = await getKafkaProducer();
+  if (!producer) {
+    return { attempted: false };
+  }
+
+  const envelope = buildEventEnvelope(event);
+  const messageKey = event.tenantId ?? event.actorId ?? event.eventType;
+
+  await producer.send({
+    topic: ENV.kafkaOperationalEventsTopic,
+    messages: [
+      {
+        key: messageKey,
+        value: JSON.stringify(envelope),
+        headers: {
+          "event-type": event.eventType,
+          outcome: event.outcome,
+          source: "switchos-operator-dashboard",
+        },
+      },
+    ],
+  });
+
+  return { attempted: true, published: true };
+}
+
 async function publishToDapr(event: OperationalEvent) {
   if (!ENV.daprHttpPort || !ENV.daprPubsubName || !ENV.daprOperationalEventsTopic) {
     return { attempted: false };
@@ -104,11 +179,7 @@ async function publishToDapr(event: OperationalEvent) {
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        source: "switchos-operator-dashboard",
-        timestamp: new Date().toISOString(),
-        ...event,
-      }),
+      body: JSON.stringify(buildEventEnvelope(event)),
     },
   );
 
@@ -136,11 +207,7 @@ async function indexInOpenSearch(event: OperationalEvent) {
           }
         : {}),
     },
-    body: JSON.stringify({
-      source: "switchos-operator-dashboard",
-      timestamp: new Date().toISOString(),
-      ...event,
-    }),
+    body: JSON.stringify(buildEventEnvelope(event)),
   });
 
   if (!response.ok) {
@@ -154,6 +221,7 @@ async function indexInOpenSearch(event: OperationalEvent) {
 export async function recordOperationalEvent(event: OperationalEvent) {
   const result = {
     persisted: false,
+    kafkaPublished: false,
     daprPublished: false,
     openSearchIndexed: false,
   };
@@ -163,6 +231,13 @@ export async function recordOperationalEvent(event: OperationalEvent) {
     result.persisted = persisted.persisted;
   } catch (error) {
     console.warn("[SwitchOS] Failed to persist operational event", error);
+  }
+
+  try {
+    const kafka = await publishToKafka(event);
+    result.kafkaPublished = Boolean(kafka.attempted);
+  } catch (error) {
+    console.warn("[SwitchOS] Failed to publish operational event to Kafka", error);
   }
 
   try {
@@ -183,10 +258,16 @@ export async function recordOperationalEvent(event: OperationalEvent) {
 }
 
 export function getOperationalEventStatus() {
+  const kafkaConfigured = parseKafkaBrokers().length > 0 && Boolean(ENV.kafkaOperationalEventsTopic.trim());
+
   return {
     postgresConfigured: Boolean(ENV.databaseUrl),
+    kafkaConfigured,
     daprConfigured: Boolean(ENV.daprHttpPort && ENV.daprPubsubName && ENV.daprOperationalEventsTopic),
     openSearchConfigured: Boolean(ENV.opensearchUrl && ENV.opensearchOperationalEventsIndex),
+    kafkaClientId: kafkaConfigured ? ENV.kafkaClientId : null,
+    kafkaBrokers: kafkaConfigured ? parseKafkaBrokers() : [],
+    kafkaOperationalEventsTopic: kafkaConfigured ? ENV.kafkaOperationalEventsTopic : null,
     daprHttpPort: ENV.daprHttpPort || null,
     daprPubsubName: ENV.daprPubsubName || null,
     daprOperationalEventsTopic: ENV.daprOperationalEventsTopic || null,
