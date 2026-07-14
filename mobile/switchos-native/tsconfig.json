@@ -1,5 +1,5 @@
 {
-  "extends": "expo/tsconfig.base.json",
+  "extends": "/home/ubuntu/switchos_mobile_native/node_modules/expo/tsconfig.base.json",
   "compilerOptions": {
     "strict": true,
     "types": [

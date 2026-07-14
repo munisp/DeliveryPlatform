@@ -23,8 +23,42 @@ const workspaceMocks = vi.hoisted(() => ({
   getOrderStats: vi.fn(),
 }));
 
+const dbMocks = vi.hoisted(() => ({
+  getFundsReconciliationSnapshot: vi.fn(),
+}));
+
+const longcatVoiceMocks = vi.hoisted(() => ({
+  appendLongCatMessagingTurn: vi.fn(),
+  appendLongCatVoiceTurn: vi.fn(),
+  getLongCatCustomerMemory: vi.fn(),
+  startLongCatMessagingSession: vi.fn(),
+  startLongCatVoiceSession: vi.fn(),
+}));
+
+const longcatActionMocks = vi.hoisted(() => ({
+  executeLongCatAction: vi.fn(),
+}));
+
+const localCommerceMocks = vi.hoisted(() => ({
+  buildLocalCommerceLogisticsControlTower: vi.fn(),
+  buildLocalCommerceSuperGatewayWorkspace: vi.fn(),
+  planLocalCommerceConciergeIntent: vi.fn(),
+}));
+
+const supplyChainMocks = vi.hoisted(() => ({
+  applyLoyaltyIntervention: vi.fn(),
+  executeMerchantGrowthCampaign: vi.fn(),
+  getSupplyChainGrowthControl: vi.fn(),
+  queueReplenishmentWorkflow: vi.fn(),
+}));
+
 vi.mock("../server/lib/lakehouse", () => lakehouseMocks);
 vi.mock("../server/lib/platformWorkspaces", () => workspaceMocks);
+vi.mock("../server/db", () => dbMocks);
+vi.mock("../server/_core/longcatVoice", () => longcatVoiceMocks);
+vi.mock("../server/_core/longcatActions", () => longcatActionMocks);
+vi.mock("../server/_core/localCommerceSuperGateway", () => localCommerceMocks);
+vi.mock("../server/_core/supplyChainCommandCenter", () => supplyChainMocks);
 vi.mock("../server/_core/systemRouter", async () => {
   const { router, publicProcedure } = await import("../server/_core/trpc");
   return {
@@ -90,6 +124,24 @@ describe("SwitchOS platform scenario workflows", () => {
     workspaceMocks.getServiceRecoveryWorkspace.mockResolvedValue({ incidents: [{ id: 88 }] });
     workspaceMocks.getTablesideWorkspace.mockResolvedValue({ venues: [{ id: 22 }] });
     workspaceMocks.getWhiteLabelAppsWorkspace.mockResolvedValue({ apps: [{ id: 33 }] });
+
+    dbMocks.getFundsReconciliationSnapshot.mockResolvedValue({ matched: 14, pending: 2, exceptions: [] });
+
+    localCommerceMocks.buildLocalCommerceSuperGatewayWorkspace.mockResolvedValue({ city: "Lagos", queues: [{ id: "north" }] });
+    localCommerceMocks.buildLocalCommerceLogisticsControlTower.mockResolvedValue({ city: "Lagos", demandAlerts: [{ zone: "Ikeja" }] });
+    localCommerceMocks.planLocalCommerceConciergeIntent.mockResolvedValue({ planId: "plan-1", fulfillmentMode: "hybrid" });
+
+    supplyChainMocks.getSupplyChainGrowthControl.mockResolvedValue({ city: "Lagos", skus: [{ sku: "rice-5kg" }] });
+    supplyChainMocks.queueReplenishmentWorkflow.mockResolvedValue({ workflowId: "repl-1", status: "queued" });
+    supplyChainMocks.applyLoyaltyIntervention.mockResolvedValue({ status: "applied", points: 400 });
+    supplyChainMocks.executeMerchantGrowthCampaign.mockResolvedValue({ status: "sent", audienceSize: 1 });
+
+    longcatVoiceMocks.getLongCatCustomerMemory.mockResolvedValue({ customerPhone: "+2348000000000", preferences: ["low_sodium"] });
+    longcatVoiceMocks.startLongCatVoiceSession.mockResolvedValue({ sessionId: "voice-1", status: "started" });
+    longcatVoiceMocks.startLongCatMessagingSession.mockResolvedValue({ sessionId: "msg-1", status: "started" });
+    longcatVoiceMocks.appendLongCatVoiceTurn.mockResolvedValue({ sessionId: "voice-1", turns: 2 });
+    longcatVoiceMocks.appendLongCatMessagingTurn.mockResolvedValue({ sessionId: "msg-1", turns: 3, dispatched: true });
+    longcatActionMocks.executeLongCatAction.mockResolvedValue({ actionId: "act-1", status: "completed" });
   });
 
   it("returns the authenticated operator identity", async () => {
@@ -136,41 +188,130 @@ describe("SwitchOS platform scenario workflows", () => {
   it("serves analytics from the lakehouse-backed path when synchronization succeeds", async () => {
     const caller = appRouter.createCaller(createContext({ id: 3, name: "Ops", email: "ops@switchos.local", role: "operator" }));
     await expect(caller.analytics.summary()).resolves.toEqual({ source: "lakehouse", orders: 12 });
-    expect(lakehouseMocks.syncLakehouseFromPostgres).toHaveBeenCalledTimes(1);
-    expect(lakehouseMocks.getLakehouseAnalyticsSummary).toHaveBeenCalledTimes(1);
+    await expect(caller.analytics.orderStats()).resolves.toEqual({ total: 12, completed: 10 });
+    await expect(caller.analytics.driverStats()).resolves.toEqual({ total: 6, online: 4 });
+    await expect(caller.analytics.marketplaceOverview()).resolves.toEqual({ open_orders: 3, hotspots: [] });
+    await expect(caller.analytics.fundsReconciliation()).resolves.toEqual({ matched: 14, pending: 2, exceptions: [] });
+    expect(lakehouseMocks.syncLakehouseFromPostgres).toHaveBeenCalledTimes(4);
   });
 
   it("falls back to persisted workspace analytics when the lakehouse sync path fails", async () => {
-    lakehouseMocks.syncLakehouseFromPostgres.mockRejectedValueOnce(new Error("lakehouse unavailable"));
+    lakehouseMocks.syncLakehouseFromPostgres.mockRejectedValue(new Error("lakehouse unavailable"));
     const caller = appRouter.createCaller(createContext({ id: 4, name: "Ops", email: "ops@switchos.local", role: "admin" }));
     await expect(caller.analytics.summary()).resolves.toEqual({ source: "workspace-fallback", orders: 7 });
-    expect(workspaceMocks.getAnalyticsSummary).toHaveBeenCalledTimes(1);
+    await expect(caller.analytics.orderStats()).resolves.toEqual({ total: 7, completed: 5 });
+    await expect(caller.analytics.driverStats()).resolves.toEqual({ total: 4, online: 2 });
+    await expect(caller.analytics.marketplaceOverview()).resolves.toEqual({ open_orders: 2, hotspots: [] });
   });
 
-  it("returns the merchant channel workspace for authenticated operators", async () => {
+  it("returns the core stakeholder workspaces for authenticated operators", async () => {
     const caller = appRouter.createCaller(createContext({ id: 5, name: "Merchant Ops", email: "merchant@switchos.local", role: "operator" }));
     await expect(caller.merchantChannels.workspace()).resolves.toEqual({ merchants: [{ id: 101 }] });
-  });
-
-  it("returns the phone ordering workspace for authenticated operators", async () => {
-    const caller = appRouter.createCaller(createContext({ id: 6, name: "Call Center", email: "call@switchos.local", role: "ops" }));
     await expect(caller.phoneOrdering.workspace()).resolves.toEqual({ calls: [{ id: 11 }] });
-  });
-
-  it("returns the service recovery workspace for authenticated operators", async () => {
-    const caller = appRouter.createCaller(createContext({ id: 7, name: "Recovery", email: "recovery@switchos.local", role: "admin" }));
     await expect(caller.serviceRecovery.workspace()).resolves.toEqual({ incidents: [{ id: 88 }] });
-  });
-
-  it("returns the tableside and white-label workspaces for authenticated operators", async () => {
-    const caller = appRouter.createCaller(createContext({ id: 8, name: "Growth Ops", email: "growth@switchos.local", role: "operator" }));
     await expect(caller.tablesideOrdering.summary()).resolves.toEqual({ venues: [{ id: 22 }] });
     await expect(caller.whiteLabelApps.summary()).resolves.toEqual({ apps: [{ id: 33 }] });
-  });
-
-  it("returns the driver mobility workspace with a caller-provided limit", async () => {
-    const caller = appRouter.createCaller(createContext({ id: 9, name: "Dispatch", email: "dispatch@switchos.local", role: "operator" }));
     await expect(caller.driverMobility.summary({ limit: 10 })).resolves.toEqual({ kpis: { openOrders: 5 } });
     expect(workspaceMocks.getDriverMobilityWorkspace).toHaveBeenCalledWith(10);
+  });
+
+  it("returns the local commerce control and planning surfaces for authenticated operators", async () => {
+    const caller = appRouter.createCaller(createContext({ id: 6, name: "City Ops", email: "city@switchos.local", role: "operator" }));
+    await expect(caller.localCommerceSuperGateway.workspace()).resolves.toEqual({ city: "Lagos", queues: [{ id: "north" }] });
+    await expect(caller.localCommerceSuperGateway.logisticsControlTower({ city: "Lagos", forceRefresh: true })).resolves.toEqual({ city: "Lagos", demandAlerts: [{ zone: "Ikeja" }] });
+    await expect(caller.localCommerceSuperGateway.supplyChainGrowthControl({ city: "Lagos" })).resolves.toEqual({ city: "Lagos", skus: [{ sku: "rice-5kg" }] });
+    await expect(caller.localCommerceSuperGateway.plan({
+      city: "Lagos",
+      request: "Plan tonight's grocery fulfillment",
+      basket: [{ sku: "rice-5kg", quantity: 2 }],
+    })).resolves.toEqual({ planId: "plan-1", fulfillmentMode: "hybrid" });
+  });
+
+  it("executes replenishment, loyalty, and merchant growth actions for operators", async () => {
+    const caller = appRouter.createCaller(createContext({ id: 7, name: "Growth Ops", email: "growth@switchos.local", role: "operator" }));
+    await expect(caller.localCommerceSuperGateway.queueReplenishment({
+      city: "Lagos",
+      skus: [{
+        sku: "rice-5kg",
+        warehouseId: 7,
+        warehouseLabel: "Ikeja DC",
+        currentAvailableUnits: 10,
+        forecastUnits: 50,
+        recommendedRestockUnits: 40,
+        safetyStockUnits: 15,
+        stockoutRisk: "high",
+        supplier: {
+          supplierId: "sup-1",
+          supplierName: "Staples Supply",
+          leadTimeHours: 24,
+          fillRate: 0.97,
+          spoilageRisk: 0.05,
+          reliabilityBand: "trusted",
+        },
+      }],
+    })).resolves.toEqual({ workflowId: "repl-1", status: "queued" });
+
+    await expect(caller.localCommerceSuperGateway.loyaltyIntervention({
+      userId: 91,
+      points: 400,
+      description: "Service recovery loyalty credit",
+    })).resolves.toEqual({ status: "applied", points: 400 });
+
+    await expect(caller.localCommerceSuperGateway.merchantGrowthCampaign({
+      campaignName: "Winback",
+      campaignType: "sms",
+      targetAudience: "inactive_merchants",
+      audienceMode: "single_user",
+      userId: 91,
+      channel: "sms",
+      smsTemplate: "We miss you",
+    })).resolves.toEqual({ status: "sent", audienceSize: 1 });
+  });
+
+  it("supports call-center and messaging workflows for customer support stakeholders", async () => {
+    const caller = appRouter.createCaller(createContext({ id: 8, name: "Support Ops", email: "support@switchos.local", role: "ops" }));
+
+    await expect(caller.phoneOrdering.customerMemory({ customerPhone: "+2348000000000" })).resolves.toEqual({
+      customerPhone: "+2348000000000",
+      preferences: ["low_sodium"],
+    });
+
+    await expect(caller.phoneOrdering.startVoiceSession({
+      customerPhone: "+2348000000000",
+      customerName: "Ada",
+      triggerReason: "inbound-order",
+    })).resolves.toEqual({ sessionId: "voice-1", status: "started" });
+
+    await expect(caller.phoneOrdering.startMessagingSession({
+      customerPhone: "+2348000000000",
+      customerName: "Ada",
+      triggerReason: "follow-up",
+    })).resolves.toEqual({ sessionId: "msg-1", status: "started" });
+
+    await expect(caller.phoneOrdering.appendVoiceTurn({
+      sessionId: "2b5b4b77-8026-4d75-a2ee-071ec2fbd63a",
+      speaker: "customer",
+      utterance: "I want to reorder dinner",
+    })).resolves.toEqual({ sessionId: "voice-1", turns: 2 });
+
+    await expect(caller.phoneOrdering.appendMessagingTurn({
+      sessionId: "2b5b4b77-8026-4d75-a2ee-071ec2fbd63a",
+      speaker: "agent",
+      utterance: "Your order is on the way",
+      dispatchReply: true,
+    })).resolves.toEqual({ sessionId: "msg-1", turns: 3, dispatched: true });
+
+    await expect(caller.phoneOrdering.executeAction({
+      customerPhone: "+2348000000000",
+      customerName: "Ada",
+      merchantName: "SwitchOS Kitchen",
+      kind: "service_recovery_credit",
+      reason: "Late order apology",
+      compensation: {
+        amount: 15,
+        currency: "USD",
+        incidentType: "delay",
+      },
+    })).resolves.toEqual({ actionId: "act-1", status: "completed" });
   });
 });

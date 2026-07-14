@@ -116,12 +116,20 @@ func TestFundsMiddlewareStatusReflectsConfiguration(t *testing.T) {
 	originalDaprTopic := os.Getenv("DAPR_FUNDS_TOPIC")
 	originalBrokers := os.Getenv("KAFKA_BROKERS")
 	originalKafkaTopic := os.Getenv("KAFKA_FUNDS_TOPIC")
+	originalFluvioBrokers := os.Getenv("FLUVIO_KAFKA_BROKERS")
+	originalFluvioTopic := os.Getenv("FLUVIO_FUNDS_TOPIC")
+	originalTemporalTaskQueue := os.Getenv("TEMPORAL_TASK_QUEUE")
+	originalTemporalBridgeURL := os.Getenv("TEMPORAL_BRIDGE_URL")
 	defer func() {
 		_ = os.Setenv("DAPR_HTTP_PORT", originalPort)
 		_ = os.Setenv("DAPR_PUBSUB_NAME", originalPubsub)
 		_ = os.Setenv("DAPR_FUNDS_TOPIC", originalDaprTopic)
 		_ = os.Setenv("KAFKA_BROKERS", originalBrokers)
 		_ = os.Setenv("KAFKA_FUNDS_TOPIC", originalKafkaTopic)
+		_ = os.Setenv("FLUVIO_KAFKA_BROKERS", originalFluvioBrokers)
+		_ = os.Setenv("FLUVIO_FUNDS_TOPIC", originalFluvioTopic)
+		_ = os.Setenv("TEMPORAL_TASK_QUEUE", originalTemporalTaskQueue)
+		_ = os.Setenv("TEMPORAL_BRIDGE_URL", originalTemporalBridgeURL)
 	}()
 
 	_ = os.Setenv("DAPR_HTTP_PORT", "3500")
@@ -129,6 +137,10 @@ func TestFundsMiddlewareStatusReflectsConfiguration(t *testing.T) {
 	_ = os.Setenv("DAPR_FUNDS_TOPIC", "funds-events")
 	_ = os.Setenv("KAFKA_BROKERS", "broker-1:9092,broker-2:9092")
 	_ = os.Setenv("KAFKA_FUNDS_TOPIC", "switchos.funds")
+	_ = os.Setenv("FLUVIO_KAFKA_BROKERS", "fluvio-gateway:9093")
+	_ = os.Setenv("FLUVIO_FUNDS_TOPIC", "switchos.funds.fluvio")
+	_ = os.Setenv("TEMPORAL_TASK_QUEUE", "switchos-funds-workflows")
+	_ = os.Setenv("TEMPORAL_BRIDGE_URL", "http://temporal-bridge:8080")
 
 	service := &MojaloopService{httpClient: http.DefaultClient}
 	status := service.fundsMiddlewareStatus()
@@ -147,6 +159,51 @@ func TestFundsMiddlewareStatusReflectsConfiguration(t *testing.T) {
 	}
 	if kafkaStatus["topic"] != "switchos.funds" {
 		t.Fatalf("expected kafka topic switchos.funds, got %#v", kafkaStatus["topic"])
+	}
+	fluvioStatus, ok := status["fluvio"].(map[string]any)
+	if !ok || fluvioStatus["configured"] != true {
+		t.Fatalf("expected fluvio configured status, got %#v", status["fluvio"])
+	}
+	fluvioBrokers, ok := fluvioStatus["brokers"].([]string)
+	if !ok || len(fluvioBrokers) != 1 || fluvioBrokers[0] != "fluvio-gateway:9093" {
+		t.Fatalf("expected fluvio broker fluvio-gateway:9093, got %#v", fluvioStatus["brokers"])
+	}
+	if fluvioStatus["topic"] != "switchos.funds.fluvio" {
+		t.Fatalf("expected fluvio topic switchos.funds.fluvio, got %#v", fluvioStatus["topic"])
+	}
+	temporalStatus, ok := status["temporal"].(map[string]any)
+	if !ok || temporalStatus["configured"] != true {
+		t.Fatalf("expected temporal configured status, got %#v", status["temporal"])
+	}
+	if temporalStatus["taskQueue"] != "switchos-funds-workflows" {
+		t.Fatalf("expected temporal task queue switchos-funds-workflows, got %#v", temporalStatus["taskQueue"])
+	}
+	if temporalStatus["bridgeUrl"] != "http://temporal-bridge:8080" {
+		t.Fatalf("expected temporal bridge URL http://temporal-bridge:8080, got %#v", temporalStatus["bridgeUrl"])
+	}
+}
+
+func TestPublishWorkflowEventToFluvioSkipsWhenUnconfigured(t *testing.T) {
+	originalBrokers := os.Getenv("FLUVIO_KAFKA_BROKERS")
+	originalTopic := os.Getenv("FLUVIO_FUNDS_TOPIC")
+	defer func() {
+		_ = os.Setenv("FLUVIO_KAFKA_BROKERS", originalBrokers)
+		_ = os.Setenv("FLUVIO_FUNDS_TOPIC", originalTopic)
+	}()
+
+	_ = os.Unsetenv("FLUVIO_KAFKA_BROKERS")
+	_ = os.Unsetenv("FLUVIO_FUNDS_TOPIC")
+
+	service := &MojaloopService{httpClient: http.DefaultClient}
+	if err := service.publishWorkflowEventToFluvio(FundsWorkflowEvent{WorkflowType: "refund", WorkflowID: "refund-1"}); err != nil {
+		t.Fatalf("expected nil error when Fluvio is unconfigured, got %v", err)
+	}
+}
+
+func TestTemporalTargetPrefersQueueAndBridgeDescription(t *testing.T) {
+	actual := temporalTarget("switchos-funds-workflows", "http://temporal-bridge:8080")
+	if actual != "switchos-funds-workflows via http://temporal-bridge:8080" {
+		t.Fatalf("unexpected temporal target %q", actual)
 	}
 }
 
