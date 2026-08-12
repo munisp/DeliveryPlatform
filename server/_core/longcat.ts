@@ -1,5 +1,211 @@
 import { ENV } from "./env";
 import { optimizeDispatch } from "./dispatchOptimizer";
+import { ENV } from "./env";
+
+// ============================================================
+// Tiered Model Fallback Router
+// ============================================================
+
+type ModelTier = "primary" | "fallback" | "cached" | "heuristic";
+
+type RoutingDecision = {
+  tier: ModelTier;
+  model: string;
+  timeoutMs: number;
+  reason: string;
+};
+
+type CacheEntry = {
+  result: any;
+  timestamp: number;
+  promptHash: string;
+  tier: ModelTier;
+};
+
+// In-memory response cache for timeout fallback
+const responseCache = new Map<string, CacheEntry>();
+const MAX_CACHE_SIZE = 100;
+
+// Circuit breaker state
+let primaryFailureCount = 0;
+let primaryLastFailure = 0;
+const CIRCUIT_BREAKER_THRESHOLD = 3;
+const CIRCUIT_BREAKER_RESET_MS = 60_000; // 1 minute
+
+function hashPrompt(prompt: string): string {
+  // Simple hash for cache key — uses first 200 chars + length
+  const prefix = prompt.slice(0, 200);
+  return `${prefix.length}:${prefix.replace(/\d+/g, "N")}`;
+}
+
+function getCachedResponse(promptHash: string): CacheEntry | null {
+  const entry = responseCache.get(promptHash);
+  if (!entry) return null;
+  if (Date.now() - entry.timestamp > ENV.ollamaCacheTtlMs) {
+    responseCache.delete(promptHash);
+    return null;
+  }
+  return entry;
+}
+
+function setCachedResponse(promptHash: string, result: any, tier: ModelTier): void {
+  // Evict oldest entries if cache is full
+  if (responseCache.size >= MAX_CACHE_SIZE) {
+    const oldest = [...responseCache.entries()].sort((a, b) => a[1].timestamp - b[1].timestamp)[0];
+    if (oldest) responseCache.delete(oldest[0]);
+  }
+  responseCache.set(promptHash, { result, timestamp: Date.now(), promptHash, tier });
+}
+
+function isPrimaryCircuitOpen(): boolean {
+  if (primaryFailureCount < CIRCUIT_BREAKER_THRESHOLD) return false;
+  if (Date.now() - primaryLastFailure > CIRCUIT_BREAKER_RESET_MS) {
+    // Reset circuit breaker after cooldown
+    primaryFailureCount = 0;
+    return false;
+  }
+  return true;
+}
+
+function recordPrimaryFailure(): void {
+  primaryFailureCount++;
+  primaryLastFailure = Date.now();
+}
+
+function recordPrimarySuccess(): void {
+  primaryFailureCount = 0;
+}
+
+function determineRoutingTier(promptHash: string): RoutingDecision {
+  // Tier 1: Check cache first (instant response)
+  const cached = getCachedResponse(promptHash);
+  if (cached) {
+    return { tier: "cached", model: ENV.ollamaModel, timeoutMs: 0, reason: "Valid cached response available." };
+  }
+
+  // Tier 2: If primary circuit is open, skip to fallback model
+  if (isPrimaryCircuitOpen()) {
+    return {
+      tier: "fallback",
+      model: ENV.ollamaFallbackModel,
+      timeoutMs: ENV.ollamaFallbackTimeoutMs,
+      reason: `Primary model circuit open (${primaryFailureCount} consecutive failures). Using lighter fallback model.`,
+    };
+  }
+
+  // Tier 3: Try primary model with tight timeout
+  return {
+    tier: "primary",
+    model: ENV.ollamaModel,
+    timeoutMs: ENV.ollamaPrimaryTimeoutMs,
+    reason: "Primary model available.",
+  };
+}
+
+async function generateWithFallbackRouting<T>(prompt: string): Promise<{ data: T | null; routing: RoutingDecision; reason?: string }> {
+  const promptHash = hashPrompt(prompt);
+  const routing = determineRoutingTier(promptHash);
+
+  // Cached tier: return immediately
+  if (routing.tier === "cached") {
+    const cached = getCachedResponse(promptHash)!;
+    return { data: cached.result as T, routing: { ...routing, reason: `Cache hit (age: ${Math.round((Date.now() - cached.timestamp) / 1000)}s).` } };
+  }
+
+  // Try the determined tier
+  const result = await attemptGeneration<T>(prompt, routing.model, routing.timeoutMs);
+
+  if (result.data) {
+    // Success: cache the response and record health
+    setCachedResponse(promptHash, result.data, routing.tier);
+    if (routing.tier === "primary") recordPrimarySuccess();
+    return { data: result.data, routing };
+  }
+
+  // Primary failed: try fallback model if we haven't already
+  if (routing.tier === "primary") {
+    recordPrimaryFailure();
+
+    // Attempt fallback model with longer timeout
+    const fallbackRouting: RoutingDecision = {
+      tier: "fallback",
+      model: ENV.ollamaFallbackModel,
+      timeoutMs: ENV.ollamaFallbackTimeoutMs,
+      reason: `Primary model timed out (${routing.timeoutMs}ms). Escalating to lighter fallback model.`,
+    };
+
+    const fallbackResult = await attemptGeneration<T>(prompt, fallbackRouting.model, fallbackRouting.timeoutMs);
+
+    if (fallbackResult.data) {
+      setCachedResponse(promptHash, fallbackResult.data, "fallback");
+      return { data: fallbackResult.data, routing: fallbackRouting };
+    }
+
+    // Both models failed: check stale cache
+    const staleEntry = responseCache.get(promptHash);
+    if (staleEntry) {
+      return {
+        data: staleEntry.result as T,
+        routing: { tier: "cached", model: ENV.ollamaModel, timeoutMs: 0, reason: "Both models failed. Serving stale cached response." },
+      };
+    }
+
+    // Complete failure: fall through to heuristic
+    return {
+      data: null,
+      routing: { tier: "heuristic", model: "none", timeoutMs: 0, reason: `All model tiers exhausted. Primary: ${result.reason}. Fallback: ${fallbackResult.reason}` },
+      reason: fallbackResult.reason,
+    };
+  }
+
+  // Fallback tier also failed
+  return {
+    data: null,
+    routing: { tier: "heuristic", model: "none", timeoutMs: 0, reason: `Fallback model failed: ${result.reason}` },
+    reason: result.reason,
+  };
+}
+
+async function attemptGeneration<T>(prompt: string, model: string, timeoutMs: number): Promise<{ data: T | null; reason?: string }> {
+  if (!ENV.ollamaUrl || !model) {
+    return { data: null, reason: "Ollama runtime is not configured." };
+  }
+
+  try {
+    const response = await fetch(`${ENV.ollamaUrl.replace(/\/$/, "")}/api/generate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model, prompt, stream: false, format: "json" }),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+
+    if (!response.ok) {
+      return { data: null, reason: `Model ${model} returned HTTP ${response.status}.` };
+    }
+
+    const payload = (await response.json()) as OllamaGenerateResponse;
+    const parsed = parseJsonObject<T>(payload.response ?? "");
+    if (!parsed) {
+      return { data: null, reason: `Model ${model} returned unparseable JSON.` };
+    }
+
+    return { data: parsed };
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : "Unknown failure.";
+    return { data: null, reason: `Model ${model}: ${msg}` };
+  }
+}
+
+// Export for testing
+export function _resetFallbackState(): void {
+  primaryFailureCount = 0;
+  primaryLastFailure = 0;
+  responseCache.clear();
+}
+
+export function _getFallbackMetrics(): { cacheSize: number; circuitOpen: boolean; failureCount: number } {
+  return { cacheSize: responseCache.size, circuitOpen: isPrimaryCircuitOpen(), failureCount: primaryFailureCount };
+}
 
 type ProviderStatus = {
   provider: "ollama" | "heuristic";
@@ -7,6 +213,7 @@ type ProviderStatus = {
   model: string;
   available: boolean;
   reason?: string;
+  routing_tier?: ModelTier;
 };
 
 type ConsumerWorkspaceInput = {
@@ -89,13 +296,14 @@ type OllamaGenerateResponse = {
   response?: string;
 };
 
-function providerStatus(provider: ProviderStatus["provider"], available: boolean, reason?: string): ProviderStatus {
+function providerStatus(provider: ProviderStatus["provider"], available: boolean, reason?: string, routingTier?: ModelTier): ProviderStatus {
   return {
     provider,
     execution_mode: provider === "ollama" ? "llm" : "heuristic_fallback",
     model: ENV.ollamaModel,
     available,
     reason,
+    routing_tier: routingTier,
   };
 }
 
@@ -208,41 +416,8 @@ function parseJsonObject<T>(raw: string): T | null {
   }
 }
 
-async function generateStructured<T>(prompt: string): Promise<{ data: T | null; reason?: string }> {
-  if (!ENV.ollamaUrl || !ENV.ollamaModel) {
-    return { data: null, reason: "Local Ollama runtime is not configured." };
-  }
-
-  try {
-    const response = await fetch(`${ENV.ollamaUrl.replace(/\/$/, "")}/api/generate`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: ENV.ollamaModel,
-        prompt,
-        stream: false,
-        format: "json",
-      }),
-      signal: AbortSignal.timeout(Number(process.env.OLLAMA_TIMEOUT_MS ?? 60_000)),
-    });
-
-    if (!response.ok) {
-      return { data: null, reason: `Ollama returned HTTP ${response.status}.` };
-    }
-
-    const payload = (await response.json()) as OllamaGenerateResponse;
-    const parsed = parseJsonObject<T>(payload.response ?? "");
-    if (!parsed) {
-      return { data: null, reason: "Ollama returned an unparseable JSON payload." };
-    }
-
-    return { data: parsed };
-  } catch (error) {
-    return {
-      data: null,
-      reason: error instanceof Error ? error.message : "Unknown Ollama runtime failure.",
-    };
-  }
+async function generateStructured<T>(prompt: string): Promise<{ data: T | null; reason?: string; routing?: RoutingDecision }> {
+  return generateWithFallbackRouting<T>(prompt);
 }
 
 function fallbackConsumerAssistant(input: ConsumerWorkspaceInput, reason?: string): LongCatConsumerAssistant {
@@ -393,7 +568,7 @@ function fallbackDispatchIntelligence(input: DispatchWorkspaceInput, reason?: st
 
 export async function buildConsumerAssistant(input: ConsumerWorkspaceInput): Promise<LongCatConsumerAssistant> {
   const fallback = fallbackConsumerAssistant(input);
-  const { data, reason } = await generateStructured<{
+  const { data, reason, routing } = await generateStructured<{
     conversation_goal: string;
     personalized_recommendations: string[];
     operator_script: string;
@@ -417,7 +592,7 @@ export async function buildConsumerAssistant(input: ConsumerWorkspaceInput): Pro
   if (!data) return fallbackConsumerAssistant(input, reason);
 
   return {
-    source: providerStatus("ollama", true),
+    source: providerStatus("ollama", true, undefined, routing?.tier),
     assistant_name: "LongCat Concierge",
     conversation_goal: toText(data.conversation_goal, fallback.conversation_goal),
     personalized_recommendations: toTextList(data.personalized_recommendations, fallback.personalized_recommendations),
@@ -431,7 +606,7 @@ export async function buildConsumerAssistant(input: ConsumerWorkspaceInput): Pro
 
 export async function buildMerchantConsultant(input: MerchantWorkspaceInput): Promise<LongCatMerchantConsultant> {
   const fallback = fallbackMerchantConsultant(input);
-  const { data, reason } = await generateStructured<{
+  const { data, reason, routing } = await generateStructured<{
     market_brief: string;
     demand_forecast: string;
     menu_actions: string[];
@@ -454,7 +629,7 @@ export async function buildMerchantConsultant(input: MerchantWorkspaceInput): Pr
   if (!data) return fallbackMerchantConsultant(input, reason);
 
   return {
-    source: providerStatus("ollama", true),
+    source: providerStatus("ollama", true, undefined, routing?.tier),
     consultant_name: "LongCat Merchant Copilot",
     market_brief: toText(data.market_brief, fallback.market_brief),
     demand_forecast: toText(data.demand_forecast, fallback.demand_forecast),
@@ -468,7 +643,7 @@ export async function buildMerchantConsultant(input: MerchantWorkspaceInput): Pr
 
 export async function buildDispatchIntelligence(input: DispatchWorkspaceInput): Promise<LongCatDispatchIntelligence> {
   const fallback = fallbackDispatchIntelligence(input);
-  const { data, reason } = await generateStructured<{
+  const { data, reason, routing } = await generateStructured<{
     dispatch_brief: string;
     batching_strategy: string;
     rider_guidance: string[];
@@ -491,7 +666,7 @@ export async function buildDispatchIntelligence(input: DispatchWorkspaceInput): 
 
   return {
     ...fallback,
-    source: providerStatus("ollama", true),
+    source: providerStatus("ollama", true, undefined, routing?.tier),
     dispatch_brief: toText(data.dispatch_brief, fallback.dispatch_brief),
     batching_strategy: toText(data.batching_strategy, fallback.batching_strategy),
     rider_guidance: toTextList(data.rider_guidance, fallback.rider_guidance),

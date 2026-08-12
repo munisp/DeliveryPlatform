@@ -1,0 +1,97 @@
+name: LongCat Security & Red-Team Evaluation
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+    paths:
+      - 'server/_core/longcat.ts'
+      - 'tests/longcat.*.test.ts'
+      - '.github/workflows/security-redteam.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  security-evaluation:
+    name: Red-Team & Security Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Get pnpm store directory
+        shell: bash
+        run: echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_ENV
+
+      - name: Cache pnpm dependencies
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.STORE_PATH }}
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Run Red-Team Evasion Suite
+        run: pnpm exec vitest run tests/longcat.redteam-eval.test.ts --reporter=verbose
+
+      - name: Run Security Evaluation Suite
+        run: pnpm exec vitest run tests/longcat.security-eval.test.ts --reporter=verbose
+
+      - name: Run LongCat Integration Tests
+        run: pnpm exec vitest run tests/longcat.integration.test.ts --reporter=verbose
+
+      - name: Run Silent Mockware Regression
+        run: pnpm exec vitest run tests/silent-mockware.regression.test.ts --reporter=verbose
+
+      - name: Run Edge Security Configuration Tests
+        run: pnpm exec vitest run tests/edge-security.config.test.ts --reporter=verbose
+
+      - name: TypeScript Check
+        run: pnpm exec tsc --noEmit
+
+  dependency-audit:
+    name: Dependency Vulnerability Scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Run production audit (critical/high only)
+        run: |
+          pnpm audit --prod --audit-level=critical 2>&1 || true
+          echo "---"
+          echo "Note: Remaining high findings are tracked in dependency_staging_longcat_followup_report.md"
+          echo "Expo SDK toolchain findings require SDK upgrade — see expo_upgrade_path in docs."

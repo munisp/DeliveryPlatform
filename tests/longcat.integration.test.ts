@@ -99,6 +99,10 @@ describe("LongCat local AI integration", () => {
   });
 
   it("falls back honestly when the local model returns malformed structured output", async () => {
+    // Reset routing state so cache from prior successful test doesn't interfere
+    const { _resetFallbackState } = await import("../server/_core/longcat");
+    _resetFallbackState();
+
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue({

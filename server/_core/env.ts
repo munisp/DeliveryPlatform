@@ -105,6 +105,11 @@ export const ENV = {
   forgeApiKey: process.env.BUILT_IN_FORGE_API_KEY ?? "",
   ollamaUrl: normalizeOptionalUrl("OLLAMA_URL") || "http://127.0.0.1:11434",
   ollamaModel: (process.env.OLLAMA_MODEL ?? "qwen2.5:3b").trim(),
+  // Tiered fallback model routing configuration
+  ollamaFallbackModel: (process.env.OLLAMA_FALLBACK_MODEL ?? "qwen2.5:0.5b").trim(),
+  ollamaPrimaryTimeoutMs: Number.parseInt(process.env.OLLAMA_PRIMARY_TIMEOUT_MS ?? "15000", 10),
+  ollamaFallbackTimeoutMs: Number.parseInt(process.env.OLLAMA_FALLBACK_TIMEOUT_MS ?? "30000", 10),
+  ollamaCacheTtlMs: Number.parseInt(process.env.OLLAMA_CACHE_TTL_MS ?? "300000", 10), // 5 min
   allowedOrigins: process.env.ALLOWED_ORIGINS ?? DEFAULT_ALLOWED_ORIGINS,
   cspConnectSrc: process.env.CSP_CONNECT_SRC ?? DEFAULT_CSP_CONNECT_SRC,
   apiBodyLimit: process.env.API_BODY_LIMIT ?? "10mb",
