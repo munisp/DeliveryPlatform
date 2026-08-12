@@ -22,6 +22,13 @@ let _pool: Pool | null = null;
 let _db: ReturnType<typeof drizzle> | null = null;
 let _platformTablesEnsured = false;
 
+export class DatabaseUnavailableError extends Error {
+  constructor(operation: string) {
+    super(`DATABASE_UNAVAILABLE:${operation}`);
+    this.name = "DatabaseUnavailableError";
+  }
+}
+
 // Lazily create the drizzle instance so local tooling can run without a DB.
 export async function getDb() {
   if (!_db && ENV.databaseUrl) {
@@ -1196,7 +1203,7 @@ export async function getOrderStats(filters?: {
   verticalId?: number;
 }) {
   const db = await getDb();
-  if (!db) return { total: 0, completed: 0, cancelled: 0, revenue: "0" };
+  if (!db) throw new DatabaseUnavailableError("order_stats");
   
   // This is a simplified version - in production, you'd use proper aggregation
   const allOrders = await db.select().from(orders);
@@ -1214,7 +1221,7 @@ export async function getOrderStats(filters?: {
 
 export async function getDriverStats() {
   const db = await getDb();
-  if (!db) return { total: 0, online: 0, busy: 0, offline: 0 };
+  if (!db) throw new DatabaseUnavailableError("driver_stats");
   
   const allDrivers = await db.select().from(drivers);
   
@@ -4577,7 +4584,7 @@ export async function sendCampaign(
 
 export async function sendCampaignToAudience(campaignId: number, idempotencyKey?: string) {
   await getDb();
-  if (!_pool) return { sent: 0, failed: 0, total: 0 };
+  if (!_pool) throw new DatabaseUnavailableError("campaign_audience_send");
 
   const campaign = await getCampaignById(campaignId);
   if (!campaign || !campaign.is_active) {
@@ -4894,7 +4901,7 @@ export async function getUserLeaderboardPosition(userId: number, periodId?: numb
 
 export async function distributeLeaderboardRewards(periodId: number) {
   await getDb();
-  if (!_pool) return { distributed: 0, total_points: 0 };
+  if (!_pool) throw new DatabaseUnavailableError("leaderboard_reward_distribution");
 
   // Get all entries with rewards
   const entriesResult = await _pool.query<any>(
@@ -5726,17 +5733,29 @@ export async function triggerJobManually(jobName: string) {
   if (!job) {
     throw new Error(`Job ${jobName} not found`);
   }
-  
-  // Log the manual trigger
+
+  const startedAt = Date.now();
+  const execution = await job();
+  const success = execution?.success === true;
+  const message = typeof execution?.message === 'string'
+    ? execution.message
+    : success
+      ? `Job ${jobName} completed.`
+      : `Job ${jobName} failed.`;
+
   await logJobExecution({
     jobName,
-    status: 'running',
-    message: 'Manually triggered',
+    status: success ? 'success' : 'error',
+    message,
+    executionTimeMs: Date.now() - startedAt,
+    errorDetails: success ? null : JSON.stringify(execution ?? {}),
   });
-  
-  // Note: The actual job execution happens via the cron schedule
-  // This just logs that a manual trigger was requested
-  return { success: true, message: `Job ${jobName} trigger requested` };
+
+  if (!success) {
+    throw new Error(message);
+  }
+
+  return { success: true, message, execution };
 }
 
 
@@ -6596,7 +6615,7 @@ export async function getCourierHubSummary(limit = 10) {
 
 export async function getConsumerMarketplaceSummary(limit = 8) {
   await getDb();
-  if (!_pool) return null;
+  if (!_pool) throw new DatabaseUnavailableError("consumer_marketplace_summary");
 
   const [verticalsResult, recentOrdersResult, loyaltyResult, campaignsResult, membershipStatsResult, reviewStatsResult, membershipsResult, reviewsResult, trackingResult] = await Promise.all([
     _pool.query<any>(`
@@ -6604,26 +6623,26 @@ export async function getConsumerMarketplaceSummary(limit = 8) {
       FROM service_verticals
       ORDER BY id ASC
       LIMIT $1
-    `, [limit]).catch(() => ({ rows: [] })),
+    `, [limit]),
     _pool.query<any>(`
       SELECT id, status, total_amount, created_at, updated_at
       FROM orders
       ORDER BY created_at DESC
       LIMIT $1
-    `, [limit]).catch(() => ({ rows: [] })),
+    `, [limit]),
     _pool.query<any>(`
       SELECT
         COUNT(*) AS active_rewards,
         COALESCE(AVG(points_required), 0) AS avg_points_required
       FROM loyalty_rewards
       WHERE is_active = TRUE
-    `).catch(() => ({ rows: [{ active_rewards: 0, avg_points_required: 0 }] })),
+    `),
     _pool.query<any>(`
       SELECT
         COUNT(*) FILTER (WHERE status = 'active') AS active_campaigns,
         COUNT(*) FILTER (WHERE status = 'draft') AS draft_campaigns
       FROM marketing_campaigns
-    `).catch(() => ({ rows: [{ active_campaigns: 0, draft_campaigns: 0 }] })),
+    `),
     _pool.query<any>(`
       SELECT
         COUNT(*) FILTER (WHERE cm.status = 'active') AS active_memberships,
@@ -6631,13 +6650,13 @@ export async function getConsumerMarketplaceSummary(limit = 8) {
         COALESCE(SUM(cm.savings_ytd), 0) AS savings_ytd
       FROM consumer_memberships cm
       LEFT JOIN membership_plans mp ON mp.id = cm.plan_id
-    `).catch(() => ({ rows: [{ active_memberships: 0, avg_membership_price: 0, savings_ytd: 0 }] })),
+    `),
     _pool.query<any>(`
       SELECT
         COUNT(*) AS review_count,
         COALESCE(AVG(rating), 0) AS avg_rating
       FROM consumer_reviews
-    `).catch(() => ({ rows: [{ review_count: 0, avg_rating: 0 }] })),
+    `),
     _pool.query<any>(`
       SELECT
         cm.id,
@@ -6655,7 +6674,7 @@ export async function getConsumerMarketplaceSummary(limit = 8) {
       LEFT JOIN membership_plans mp ON mp.id = cm.plan_id
       ORDER BY cm.updated_at DESC
       LIMIT 3
-    `).catch(() => ({ rows: [] })),
+    `),
     _pool.query<any>(`
       SELECT
         cr.id,
@@ -6669,7 +6688,7 @@ export async function getConsumerMarketplaceSummary(limit = 8) {
       LEFT JOIN service_providers sp ON sp.id = cr.provider_id
       ORDER BY cr.created_at DESC
       LIMIT $1
-    `, [limit]).catch(() => ({ rows: [] })),
+    `, [limit]),
     _pool.query<any>(`
       SELECT DISTINCT ON (ote.order_id)
         ote.order_id,
@@ -6680,7 +6699,7 @@ export async function getConsumerMarketplaceSummary(limit = 8) {
         ote.metadata
       FROM order_tracking_events ote
       ORDER BY ote.order_id, ote.event_time DESC
-    `).catch(() => ({ rows: [] })),
+    `),
   ]);
 
   const loyalty = loyaltyResult.rows[0] || {};
@@ -6869,39 +6888,39 @@ export async function getExperimentConsoleSummary() {
 
 export async function getCheckoutSummary(limit = 6) {
   await getDb();
-  if (!_pool) return null;
+  if (!_pool) throw new DatabaseUnavailableError("checkout_summary");
   const [membershipResult, rewardsResult, orderResult, merchantResult, transactionResult] = await Promise.all([
     _pool.query<any>(`
       SELECT plan_name, status, monthly_price, cashback_rate, delivery_fee_discount, savings_ytd, renewal_at
       FROM consumer_memberships
       ORDER BY renewal_at ASC NULLS LAST
       LIMIT $1
-    `, [limit]).catch(() => ({ rows: [] })),
+    `, [limit]),
     _pool.query<any>(`
       SELECT reward_name, points_required, reward_value, status, expires_at
       FROM loyalty_rewards
       ORDER BY points_required ASC, expires_at ASC NULLS LAST
       LIMIT $1
-    `, [limit]).catch(() => ({ rows: [] })),
+    `, [limit]),
     _pool.query<any>(`
       SELECT id, status, total_amount, updated_at, delivery_address, estimated_delivery_time, actual_delivery_time, service_provider_id
       FROM orders
       ORDER BY updated_at DESC NULLS LAST, created_at DESC NULLS LAST
       LIMIT $1
-    `, [Math.max(limit, 8)]).catch(() => ({ rows: [] })),
+    `, [Math.max(limit, 8)]),
     _pool.query<any>(`
       SELECT id, name, category, rating, status
       FROM service_providers
       ORDER BY rating DESC NULLS LAST, name ASC
       LIMIT $1
-    `, [Math.max(limit, 8)]).catch(() => ({ rows: [] })),
+    `, [Math.max(limit, 8)]),
     _pool.query<any>(`
       SELECT type, status, amount, created_at
       FROM transactions
       WHERE type IN ('payment', 'refund', 'chargeback')
       ORDER BY created_at DESC NULLS LAST
       LIMIT $1
-    `, [Math.max(limit, 10)]).catch(() => ({ rows: [] })),
+    `, [Math.max(limit, 10)]),
   ]);
 
   const memberships = membershipResult.rows.map((row: any, index: number) => ({
@@ -7354,7 +7373,7 @@ export async function createVerticalServiceTemplate(input: {
   isActive?: boolean;
 }) {
   await ensureMultiVerticalCommerceTables();
-  if (!_pool) return null;
+  if (!_pool) throw new DatabaseUnavailableError("vertical_service_template_create");
   const result = await _pool.query<any>(`
     INSERT INTO vertical_service_templates (
       vertical_id, template_key, template_name, fulfillment_mode, pricing_model, intake_fields, default_sla_hours, compliance_notes, is_active
@@ -7370,13 +7389,16 @@ export async function createVerticalServiceTemplate(input: {
     input.defaultSlaHours || 24,
     input.complianceNotes || null,
     input.isActive ?? true,
-  ]).catch(() => ({ rows: [] }));
-  return result.rows[0] || null;
+  ]);
+  if (!result.rows[0]) {
+    throw new Error("VERTICAL_SERVICE_TEMPLATE_CREATE_FAILED");
+  }
+  return result.rows[0];
 }
 
 export async function getProviderCatalogItems(filters?: { providerId?: number; verticalId?: number; search?: string; }) {
   await ensureMultiVerticalCommerceTables();
-  if (!_pool) return [];
+  if (!_pool) throw new DatabaseUnavailableError("provider_catalog_items");
   const values: any[] = [];
   const conditions: string[] = [];
   if (filters?.providerId) {
@@ -7400,7 +7422,7 @@ export async function getProviderCatalogItems(filters?: { providerId?: number; v
     ${whereClause}
     ORDER BY pci.updated_at DESC, pci.id DESC
     LIMIT 300
-  `, values).catch(() => ({ rows: [] }));
+  `, values);
   return result.rows.map((row: any) => ({
     id: Number(row.id),
     provider_id: row.provider_id ? Number(row.provider_id) : null,
@@ -7433,7 +7455,7 @@ export async function createProviderCatalogItem(input: {
   metadata?: Record<string, any>;
 }) {
   await ensureMultiVerticalCommerceTables();
-  if (!_pool) return null;
+  if (!_pool) throw new DatabaseUnavailableError("provider_catalog_item_create");
   const result = await _pool.query<any>(`
     INSERT INTO provider_catalog_items (
       provider_id, vertical_id, item_type, item_name, sku, description, base_price, currency, turnaround_hours, is_active, metadata
@@ -7451,13 +7473,16 @@ export async function createProviderCatalogItem(input: {
     input.turnaroundHours || 24,
     input.isActive ?? true,
     JSON.stringify(input.metadata || {}),
-  ]).catch(() => ({ rows: [] }));
-  return result.rows[0] || null;
+  ]);
+  if (!result.rows[0]) {
+    throw new Error("PROVIDER_CATALOG_ITEM_CREATE_FAILED");
+  }
+  return result.rows[0];
 }
 
 export async function getProviderOnboardingPipeline() {
   await ensureMultiVerticalCommerceTables();
-  if (!_pool) return { summary: { submitted: 0, review: 0, approved: 0, switchos_fulfilled: 0 }, requests: [] };
+  if (!_pool) throw new DatabaseUnavailableError("provider_onboarding_pipeline");
   const result = await _pool.query<any>(`
     SELECT por.*, v.name AS vertical_name, sp.business_name AS provider_name
     FROM provider_onboarding_requests por
@@ -7465,7 +7490,7 @@ export async function getProviderOnboardingPipeline() {
     LEFT JOIN service_providers sp ON sp.id = por.provider_id
     ORDER BY por.updated_at DESC, por.id DESC
     LIMIT 200
-  `).catch(() => ({ rows: [] }));
+  `);
   const requests = result.rows.map((row: any) => ({
     id: Number(row.id),
     vertical_id: row.vertical_id ? Number(row.vertical_id) : null,
@@ -7509,7 +7534,7 @@ export async function createProviderOnboardingRequest(input: {
   requirements?: string[];
 }) {
   await ensureMultiVerticalCommerceTables();
-  if (!_pool) return null;
+  if (!_pool) throw new DatabaseUnavailableError("provider_onboarding_request_create");
   const result = await _pool.query<any>(`
     INSERT INTO provider_onboarding_requests (
       vertical_id, provider_id, company_name, contact_name, email, phone, operating_model, footprint, status, requested_go_live_at, notes, requirements
@@ -7528,26 +7553,16 @@ export async function createProviderOnboardingRequest(input: {
     input.requestedGoLiveAt || null,
     input.notes || null,
     JSON.stringify(input.requirements || []),
-  ]).catch(() => ({ rows: [] }));
-  return result.rows[0] || null;
+  ]);
+  if (!result.rows[0]) {
+    throw new Error("PROVIDER_ONBOARDING_REQUEST_CREATE_FAILED");
+  }
+  return result.rows[0];
 }
 
 export async function getMultiVerticalCommerceSummary() {
   await ensureMultiVerticalCommerceTables();
-  if (!_pool) {
-    return {
-      summary: {
-        active_verticals: 0,
-        active_templates: 0,
-        active_catalog_items: 0,
-        onboarding_pipeline: 0,
-      },
-      vertical_templates: [],
-      intake_templates: [],
-      featured_catalog: [],
-      onboarding_pipeline: [],
-    };
-  }
+  if (!_pool) throw new DatabaseUnavailableError("multi_vertical_commerce_summary");
 
   const [verticalsResult, templateResult, intakeResult, catalogResult, onboardingResult] = await Promise.all([
     _pool.query<any>(`SELECT id, name, description FROM service_verticals ORDER BY id ASC`).catch(() => ({ rows: [] })),
@@ -7600,6 +7615,7 @@ export async function getMultiVerticalCommerceSummary() {
 
 export async function getMobilityOverviewSummary(limit = 8) {
   await getDb();
+  throw new Error("VERIFIED_DATA_UNAVAILABLE:mobility_overview");
   if (!_pool) return null;
 
   const [orderResult, driverResult, providerResult] = await Promise.all([
@@ -7668,6 +7684,7 @@ export async function getMobilityOverviewSummary(limit = 8) {
 
 export async function getRiderAppSummary(limit = 6) {
   await getDb();
+  throw new Error("VERIFIED_DATA_UNAVAILABLE:rider_app");
   if (!_pool) return null;
 
   const [orderResult, providerResult] = await Promise.all([
@@ -7720,6 +7737,7 @@ export async function getRiderAppSummary(limit = 6) {
 
 export async function getDriverMobilitySummary(limit = 8) {
   await getDb();
+  throw new Error("VERIFIED_DATA_UNAVAILABLE:driver_mobility_summary");
   if (!_pool) return null;
 
   const [driverResult, orderResult] = await Promise.all([
@@ -7770,6 +7788,7 @@ export async function getDriverMobilitySummary(limit = 8) {
 
 export async function getBusinessTravelSummary(limit = 8) {
   await getDb();
+  throw new Error("VERIFIED_DATA_UNAVAILABLE:business_travel");
   if (!_pool) return null;
 
   const [userResult, orderResult] = await Promise.all([
@@ -7821,6 +7840,7 @@ export async function getBusinessTravelSummary(limit = 8) {
 
 export async function getFreightSummary(limit = 8) {
   await getDb();
+  throw new Error("VERIFIED_DATA_UNAVAILABLE:freight");
   if (!_pool) return null;
 
   const [providerResult, orderResult] = await Promise.all([
@@ -7867,6 +7887,7 @@ export async function getFreightSummary(limit = 8) {
 
 export async function getHealthcareTransportSummary(limit = 8) {
   await getDb();
+  throw new Error("VERIFIED_DATA_UNAVAILABLE:healthcare_transport");
   if (!_pool) return null;
 
   const [providerResult, orderResult] = await Promise.all([
@@ -7912,6 +7933,7 @@ export async function getHealthcareTransportSummary(limit = 8) {
 
 export async function getMerchantChannelsSummary(limit = 8) {
   await getDb();
+  throw new Error("VERIFIED_DATA_UNAVAILABLE:merchant_channels_summary");
   if (!_pool) return null;
 
   const [providerResult, campaignResult] = await Promise.all([
@@ -7966,6 +7988,7 @@ export async function getMerchantChannelsSummary(limit = 8) {
 
 export async function getPhoneOrderingSummary(limit = 8) {
   await getDb();
+  throw new Error("VERIFIED_DATA_UNAVAILABLE:phone_ordering_summary");
   if (!_pool) return null;
 
   const [providerResult, ticketResult] = await Promise.all([
@@ -8009,6 +8032,7 @@ export async function getPhoneOrderingSummary(limit = 8) {
 
 export async function getTablesideOrderingSummary(limit = 8) {
   await getDb();
+  throw new Error("VERIFIED_DATA_UNAVAILABLE:tableside_ordering_summary");
   if (!_pool) return null;
 
   const providerResult = await _pool.query<any>(`
@@ -8040,6 +8064,7 @@ export async function getTablesideOrderingSummary(limit = 8) {
 
 export async function getWhiteLabelAppsSummary(limit = 8) {
   await getDb();
+  throw new Error("VERIFIED_DATA_UNAVAILABLE:white_label_apps_summary");
   if (!_pool) return null;
 
   const providerResult = await _pool.query<any>(`

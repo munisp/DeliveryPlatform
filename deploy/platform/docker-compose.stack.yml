@@ -8,9 +8,7 @@ services:
     environment:
       POSTGRES_DB: switchos
       POSTGRES_USER: switchos
-      POSTGRES_PASSWORD: switchos
-    ports:
-      - "5432:5432"
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ../../scripts/init-local-postgres.sql:/docker-entrypoint-initdb.d/001-init.sql:ro
@@ -20,8 +18,6 @@ services:
     container_name: switchos-redis
     restart: unless-stopped
     command: ["redis-server", "--appendonly", "yes"]
-    ports:
-      - "6379:6379"
     volumes:
       - redis_data:/data
 
@@ -39,9 +35,6 @@ services:
       memlock:
         soft: -1
         hard: -1
-    ports:
-      - "9200:9200"
-      - "9600:9600"
     volumes:
       - opensearch_data:/usr/share/opensearch/data
 
@@ -50,42 +43,37 @@ services:
     container_name: switchos-permify
     restart: unless-stopped
     command: ["serve"]
-    ports:
-      - "3476:3476"
-      - "3478:3478"
 
   keycloak:
     image: quay.io/keycloak/keycloak:26.0
     container_name: switchos-keycloak
     restart: unless-stopped
     command:
-      - start-dev
+      - start
       - --import-realm
     environment:
-      KEYCLOAK_ADMIN: admin
-      KEYCLOAK_ADMIN_PASSWORD: change-me-before-production
+      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:-switchos-admin}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?KEYCLOAK_ADMIN_PASSWORD must be set}
       KC_DB: postgres
       KC_DB_URL: jdbc:postgresql://postgres:5432/switchos
       KC_DB_USERNAME: switchos
-      KC_DB_PASSWORD: switchos
+      KC_DB_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
       KC_PROXY_HEADERS: xforwarded
+      KC_HTTP_ENABLED: "true"
+      KC_HOSTNAME: ${SWITCHOS_AUTH_HOST:-auth.localhost}
+      KC_HOSTNAME_STRICT: "true"
     depends_on:
       - postgres
-    ports:
-      - "8080:8080"
     volumes:
       - ../identity/keycloak-realm-switchos.json:/opt/keycloak/data/import/switchos-realm.json:ro
 
   etcd:
-    image: bitnami/etcd:3.5
+    image: gcr.io/etcd-development/etcd:v3.5.17
     container_name: switchos-etcd
     restart: unless-stopped
     environment:
-      ALLOW_NONE_AUTHENTICATION: "yes"
       ETCD_ADVERTISE_CLIENT_URLS: http://etcd:2379
       ETCD_LISTEN_CLIENT_URLS: http://0.0.0.0:2379
-    ports:
-      - "2379:2379"
 
   apisix:
     image: apache/apisix:3.10.0-debian
@@ -95,14 +83,32 @@ services:
       - etcd
     environment:
       APISIX_STAND_ALONE: "true"
-    ports:
-      - "9080:9080"
-      - "9180:9180"
     volumes:
       - ../gateway/apisix/config.yaml:/usr/local/apisix/conf/config.yaml:ro
       - ../gateway/apisix/apisix.yaml:/usr/local/apisix/conf/apisix.yaml:ro
+
+  caddy:
+    image: caddy:2.8
+    container_name: switchos-caddy
+    restart: unless-stopped
+    depends_on:
+      - apisix
+      - keycloak
+    environment:
+      SWITCHOS_PUBLIC_HOST: ${SWITCHOS_PUBLIC_HOST:-localhost}
+      SWITCHOS_AUTH_HOST: ${SWITCHOS_AUTH_HOST:-auth.localhost}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ../gateway/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
 
 volumes:
   postgres_data:
   redis_data:
   opensearch_data:
+  caddy_data:
+  caddy_config:

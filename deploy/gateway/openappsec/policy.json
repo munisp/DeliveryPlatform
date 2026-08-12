@@ -26,13 +26,23 @@
       },
       "botProtection": {
         "enabled": true,
-        "suspiciousAutomation": "detect"
+        "suspiciousAutomation": "prevent"
       }
     },
     "targets": [
       {
         "host": "localhost",
-        "ports": [9080, 3005],
+        "ports": [443],
+        "paths": ["/", "/api/*", "/api/trpc/*"]
+      },
+      {
+        "host": "switchos.localhost",
+        "ports": [443],
+        "paths": ["/", "/api/*", "/api/trpc/*"]
+      },
+      {
+        "host": "auth.localhost",
+        "ports": [443],
         "paths": ["/", "/api/*", "/api/trpc/*"]
       }
     ]

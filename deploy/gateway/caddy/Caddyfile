@@ -1,0 +1,51 @@
+{
+	admin off
+
+	servers {
+		trusted_proxies static private_ranges
+		protocols h1 h2 h3
+	}
+}
+
+(security_headers) {
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "SAMEORIGIN"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		Cross-Origin-Opener-Policy "same-origin"
+		Cross-Origin-Resource-Policy "same-site"
+		-Server
+	}
+	encode zstd gzip
+}
+
+{$SWITCHOS_PUBLIC_HOST:localhost} {
+	import security_headers
+
+	handle_path /healthz {
+		respond 200
+	}
+
+	reverse_proxy apisix:9080 {
+		header_up X-Forwarded-Proto https
+		header_up X-Forwarded-Host {host}
+		header_up X-Forwarded-Port 443
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Real-IP {remote_host}
+		health_uri /healthz
+	}
+}
+
+{$SWITCHOS_AUTH_HOST:auth.localhost} {
+	import security_headers
+
+	reverse_proxy keycloak:8080 {
+		header_up X-Forwarded-Proto https
+		header_up X-Forwarded-Host {host}
+		header_up X-Forwarded-Port 443
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Real-IP {remote_host}
+	}
+}

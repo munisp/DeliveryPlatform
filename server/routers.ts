@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { TRPCError } from "@trpc/server";
 import { analyticsReadProcedure, protectedProcedure, publicProcedure, router, workspaceReadProcedure } from "./_core/trpc";
 import { systemRouter } from "./_core/systemRouter";
 import {
@@ -9,10 +10,6 @@ import {
   getServiceRecoveryWorkspace,
   getTablesideWorkspace,
   getWhiteLabelAppsWorkspace,
-  getAnalyticsSummary as getWorkspaceAnalyticsSummary,
-  getDriverStats as getWorkspaceDriverStats,
-  getMarketplaceOverview as getWorkspaceMarketplaceOverview,
-  getOrderStats as getWorkspaceOrderStats,
 } from "./lib/platformWorkspaces";
 import {
   getLakehouseAnalyticsSummary,
@@ -29,13 +26,30 @@ import { applyLoyaltyIntervention, executeMerchantGrowthCampaign, getSupplyChain
 
 const listInput = z.object({ limit: z.number().min(1).max(25).optional() }).optional();
 
-async function withLakehouseFallback<T>(loader: () => Promise<T>, fallback: () => T | Promise<T>) {
+async function requireLakehouseAnalytics<T>(loader: () => Promise<T>) {
   try {
     await syncLakehouseFromPostgres();
     return await loader();
   } catch (error) {
-    console.warn("[SwitchOS] Falling back from lakehouse-backed analytics:", error);
-    return fallback();
+    console.warn("[SwitchOS] Lakehouse analytics unavailable:", error);
+    throw new TRPCError({
+      code: "SERVICE_UNAVAILABLE",
+      message: "LAKEHOUSE_ANALYTICS_UNAVAILABLE",
+      cause: error,
+    });
+  }
+}
+
+async function requireWorkspaceData<T>(workspace: string, loader: () => Promise<T>) {
+  try {
+    return await loader();
+  } catch (error) {
+    console.warn(`[SwitchOS] ${workspace} workspace unavailable:`, error);
+    throw new TRPCError({
+      code: "SERVICE_UNAVAILABLE",
+      message: `${workspace.toUpperCase().replace(/[^A-Z0-9]+/g, "_")}_DATA_UNAVAILABLE`,
+      cause: error,
+    });
   }
 }
 
@@ -47,40 +61,31 @@ export const appRouter = router({
   }),
 
   analytics: router({
-    summary: analyticsReadProcedure.query(() => withLakehouseFallback(
-      () => getLakehouseAnalyticsSummary(),
-      async () => (await getWorkspaceAnalyticsSummary()) as unknown as Awaited<ReturnType<typeof getLakehouseAnalyticsSummary>>,
-    )),
-    orderStats: analyticsReadProcedure.query(() => withLakehouseFallback(
-      () => getLakehouseOrderStats(),
-      async () => (await getWorkspaceOrderStats()) as unknown as Awaited<ReturnType<typeof getLakehouseOrderStats>>,
-    )),
-    driverStats: analyticsReadProcedure.query(() => withLakehouseFallback(
-      () => getLakehouseDriverStats(),
-      async () => (await getWorkspaceDriverStats()) as unknown as Awaited<ReturnType<typeof getLakehouseDriverStats>>,
-    )),
-    marketplaceOverview: analyticsReadProcedure.query(() => withLakehouseFallback(() => getLakehouseMarketplaceOverview(), () => getWorkspaceMarketplaceOverview())),
+    summary: analyticsReadProcedure.query(() => requireLakehouseAnalytics(() => getLakehouseAnalyticsSummary())),
+    orderStats: analyticsReadProcedure.query(() => requireLakehouseAnalytics(() => getLakehouseOrderStats())),
+    driverStats: analyticsReadProcedure.query(() => requireLakehouseAnalytics(() => getLakehouseDriverStats())),
+    marketplaceOverview: analyticsReadProcedure.query(() => requireLakehouseAnalytics(() => getLakehouseMarketplaceOverview())),
     fundsReconciliation: analyticsReadProcedure.query(async () => getFundsReconciliationSnapshot()),
   }),
 
   driverMobility: router({
-    summary: workspaceReadProcedure.input(listInput).query(({ input }) => getDriverMobilityWorkspace(input?.limit)),
+    summary: workspaceReadProcedure.input(listInput).query(({ input }) => requireWorkspaceData("driver_mobility", () => getDriverMobilityWorkspace(input?.limit))),
   }),
 
   tablesideOrdering: router({
-    summary: workspaceReadProcedure.input(listInput).query(({ input }) => getTablesideWorkspace(input?.limit)),
+    summary: workspaceReadProcedure.input(listInput).query(() => requireWorkspaceData("tableside_ordering", () => getTablesideWorkspace())),
   }),
 
   whiteLabelApps: router({
-    summary: workspaceReadProcedure.input(listInput).query(({ input }) => getWhiteLabelAppsWorkspace(input?.limit)),
+    summary: workspaceReadProcedure.input(listInput).query(() => requireWorkspaceData("white_label_apps", () => getWhiteLabelAppsWorkspace())),
   }),
 
   merchantChannels: router({
-    workspace: workspaceReadProcedure.query(() => getMerchantChannelWorkspace()),
+    workspace: workspaceReadProcedure.query(() => requireWorkspaceData("merchant_channels", () => getMerchantChannelWorkspace())),
   }),
 
   serviceRecovery: router({
-    workspace: workspaceReadProcedure.query(() => getServiceRecoveryWorkspace()),
+    workspace: workspaceReadProcedure.query(() => requireWorkspaceData("service_recovery", () => getServiceRecoveryWorkspace())),
   }),
 
   localCommerceSuperGateway: router({
@@ -192,7 +197,7 @@ export const appRouter = router({
   }),
 
   phoneOrdering: router({
-    workspace: workspaceReadProcedure.query(() => getPhoneOrderingWorkspace()),
+    workspace: workspaceReadProcedure.query(() => requireWorkspaceData("phone_ordering", () => getPhoneOrderingWorkspace())),
     customerMemory: workspaceReadProcedure
       .input(z.object({
         userId: z.number().int().positive().optional(),

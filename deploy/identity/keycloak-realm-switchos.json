@@ -10,18 +10,19 @@
       "name": "SwitchOS Operator Dashboard",
       "enabled": true,
       "publicClient": false,
-      "secret": "change-me-before-production",
       "redirectUris": [
         "http://localhost:3005/api/auth/oidc/callback",
         "http://127.0.0.1:3005/api/auth/oidc/callback",
         "http://localhost:9080/api/auth/oidc/callback",
-        "http://127.0.0.1:9080/api/auth/oidc/callback"
+        "http://127.0.0.1:9080/api/auth/oidc/callback",
+        "https://switchos.localhost/api/auth/oidc/callback"
       ],
       "webOrigins": [
         "http://localhost:3005",
         "http://127.0.0.1:3005",
         "http://localhost:9080",
-        "http://127.0.0.1:9080"
+        "http://127.0.0.1:9080",
+        "https://switchos.localhost"
       ],
       "standardFlowEnabled": true,
       "directAccessGrantsEnabled": false,
@@ -58,38 +59,5 @@
       }
     ]
   },
-  "users": [
-    {
-      "username": "switchos.admin",
-      "enabled": true,
-      "emailVerified": true,
-      "firstName": "SwitchOS",
-      "lastName": "Admin",
-      "email": "admin@switchos.local",
-      "credentials": [
-        {
-          "type": "password",
-          "value": "ChangeMe123!",
-          "temporary": true
-        }
-      ],
-      "realmRoles": ["admin"]
-    },
-    {
-      "username": "switchos.operator",
-      "enabled": true,
-      "emailVerified": true,
-      "firstName": "SwitchOS",
-      "lastName": "Operator",
-      "email": "operator@switchos.local",
-      "credentials": [
-        {
-          "type": "password",
-          "value": "ChangeMe123!",
-          "temporary": true
-        }
-      ],
-      "realmRoles": ["operator"]
-    }
-  ]
+  "users": []
 }

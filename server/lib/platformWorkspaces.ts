@@ -1,48 +1,48 @@
-import pg from "pg";
-
 import fs from "node:fs/promises";
+import pg from "pg";
 
 import { buildConsumerAssistant, buildDispatchIntelligence, buildMerchantConsultant } from "../_core/longcat";
 import { ENV } from "../_core/env";
-import { getLongCatCustomerMemory } from "../_core/longcatVoice";
-
-type Driver = {
-  id: number;
-  name: string;
-  mode: "ride" | "delivery" | "airport" | "healthcare";
-  zone: string;
-  rating: number;
-  reliability: number;
-  online: boolean;
-  weeklyEarnings: number;
-  airportReady: boolean;
-  tripRadarEligible: boolean;
-  currentLoad: number;
-};
-
-type DiningVenue = {
-  id: number;
-  name: string;
-  city: string;
-  qrEnabled: boolean;
-  activeSessions: number;
-  payAtTableEnabled: boolean;
-  upsellModules: string[];
-  launchStage: "pilot" | "rolled_out" | "expanding";
-};
-
-type WhiteLabelBrand = {
-  id: number;
-  brand: string;
-  tenant: string;
-  audience: "merchant" | "courier" | "rider" | "enterprise";
-  releaseTrack: "pilot" | "beta" | "general";
-  pushReady: boolean;
-  launched: boolean;
-};
 
 const { Pool } = pg;
 let pool: pg.Pool | null = null;
+
+export class WorkspaceDataUnavailableError extends Error {
+  readonly workspace: string;
+
+  constructor(workspace: string, cause?: unknown) {
+    super(`${workspace.toUpperCase().replace(/[^A-Z0-9]+/g, "_")}_DATA_UNAVAILABLE`);
+    this.name = "WorkspaceDataUnavailableError";
+    this.workspace = workspace;
+    if (cause instanceof Error) {
+      this.cause = cause;
+    }
+  }
+}
+
+type TablesideWorkspace = {
+  summary: {
+    qr_venues: number;
+    active_sessions: number;
+    pay_at_table_enablement: number;
+    upsell_modules: number;
+    recommended_action: string;
+  };
+  order_modes: string[];
+  venue_rollout: Array<Record<string, unknown>>;
+};
+
+type WhiteLabelAppsWorkspace = {
+  summary: {
+    branded_apps_live: number;
+    templates_available: number;
+    push_channels_ready: number;
+    release_tracks: number;
+    recommended_action: string;
+  };
+  app_templates: Array<{ name: string; audience: string; release_track: string }>;
+  brands: Array<Record<string, unknown>>;
+};
 
 function getPool() {
   if (!pool) {
@@ -68,6 +68,11 @@ function toNumber(value: unknown) {
   return 0;
 }
 
+function unavailable(workspace: string, error: unknown): never {
+  console.warn(`[SwitchOS] ${workspace} data is unavailable`, error);
+  throw new WorkspaceDataUnavailableError(workspace, error);
+}
+
 async function readMerchantBenchmarkSnapshot() {
   try {
     const raw = await fs.readFile("/home/ubuntu/merged_switchos_project_v2/validation/longcat_merchant_benchmarks.json", "utf8");
@@ -82,267 +87,202 @@ async function readMerchantBenchmarkSnapshot() {
       }>;
     };
 
-    const benchmarks = (parsed.benchmarks ?? []).map((entry) => ({
-      label: entry.label ?? entry.domain ?? "unknown",
-      domain: entry.domain ?? "unknown",
-      visits_total_latest: toNumber(entry.visits_total_latest),
-      bounce_rate_latest: entry.bounce_rate_latest == null ? null : toNumber(entry.bounce_rate_latest),
-      global_rank_latest: entry.global_rank_latest == null ? null : toNumber(entry.global_rank_latest),
-    }));
-
     return {
+      available: true,
+      reason: null,
       generated_at: parsed.generated_at ?? null,
-      benchmarks,
-      summary: benchmarks.length > 0
-        ? `External benchmark set refreshed with ${benchmarks.length} market domains. Largest visible traffic signal: ${benchmarks[0]?.label ?? "n/a"} at ${Math.round(benchmarks[0]?.visits_total_latest ?? 0).toLocaleString()} visits.`
-        : "External benchmark file is present but empty.",
+      benchmarks: (parsed.benchmarks ?? []).map((entry) => ({
+        label: entry.label ?? entry.domain ?? "unknown",
+        domain: entry.domain ?? "unknown",
+        visits_total_latest: toNumber(entry.visits_total_latest),
+        bounce_rate_latest: entry.bounce_rate_latest == null ? null : toNumber(entry.bounce_rate_latest),
+        global_rank_latest: entry.global_rank_latest == null ? null : toNumber(entry.global_rank_latest),
+      })),
     };
-  } catch {
+  } catch (error) {
     return {
+      available: false,
+      reason: error instanceof Error ? error.message : "merchant_benchmark_snapshot_unavailable",
       generated_at: null,
       benchmarks: [] as Array<{ label: string; domain: string; visits_total_latest: number; bounce_rate_latest: number | null; global_rank_latest: number | null }>,
-      summary: "External merchant benchmark snapshot has not been generated yet.",
     };
   }
 }
 
-const drivers: Driver[] = [
-  { id: 101, name: "Amina Okafor", mode: "ride", zone: "Airport", rating: 4.9, reliability: 97, online: true, weeklyEarnings: 820, airportReady: true, tripRadarEligible: true, currentLoad: 1 },
-  { id: 102, name: "David Mensah", mode: "delivery", zone: "Victoria Island", rating: 4.7, reliability: 94, online: true, weeklyEarnings: 760, airportReady: false, tripRadarEligible: true, currentLoad: 2 },
-  { id: 103, name: "Chika Ibe", mode: "healthcare", zone: "Lekki", rating: 4.8, reliability: 96, online: true, weeklyEarnings: 790, airportReady: false, tripRadarEligible: false, currentLoad: 1 },
-  { id: 104, name: "Kofi Boateng", mode: "airport", zone: "Airport", rating: 4.6, reliability: 91, online: false, weeklyEarnings: 680, airportReady: true, tripRadarEligible: true, currentLoad: 0 },
-  { id: 105, name: "Fatima Bello", mode: "delivery", zone: "Yaba", rating: 4.8, reliability: 95, online: true, weeklyEarnings: 735, airportReady: false, tripRadarEligible: true, currentLoad: 1 },
-];
-
-const venues: DiningVenue[] = [
-  { id: 201, name: "Harbor Grill", city: "Lagos", qrEnabled: true, activeSessions: 34, payAtTableEnabled: true, upsellModules: ["dessert prompts", "wine pairings"], launchStage: "rolled_out" },
-  { id: 202, name: "Metro Bistro", city: "Abuja", qrEnabled: true, activeSessions: 21, payAtTableEnabled: false, upsellModules: ["combo upgrades"], launchStage: "expanding" },
-  { id: 203, name: "Palm Court", city: "Port Harcourt", qrEnabled: true, activeSessions: 16, payAtTableEnabled: true, upsellModules: ["table reorder", "loyalty capture"], launchStage: "pilot" },
-];
-
-const brands: WhiteLabelBrand[] = [
-  { id: 301, brand: "SwiftCart", tenant: "Urban Retail Group", audience: "merchant", releaseTrack: "general", pushReady: true, launched: true },
-  { id: 302, brand: "RideNXT", tenant: "Metro Mobility Co", audience: "rider", releaseTrack: "beta", pushReady: true, launched: true },
-  { id: 303, brand: "CourierFlow", tenant: "Parcel Ops Africa", audience: "courier", releaseTrack: "pilot", pushReady: false, launched: false },
-  { id: 304, brand: "ExecTrips", tenant: "Business Travel Desk", audience: "enterprise", releaseTrack: "beta", pushReady: true, launched: false },
-];
-
-export function getAnalyticsSummary() {
-  const onlineDrivers = drivers.filter((driver) => driver.online);
-  const activeDiningSessions = venues.reduce((sum, venue) => sum + venue.activeSessions, 0);
-  const liveBrands = brands.filter((brand) => brand.launched).length;
-
-  return {
-    source: "platform-workspace",
-    generated_at: new Date().toISOString(),
-    summary: {
-      online_drivers: onlineDrivers.length,
-      active_dining_sessions: activeDiningSessions,
-      branded_apps_live: liveBrands,
-      recommended_action: "Prioritize airport supply balancing and pay-at-table rollout for expansion venues.",
-    },
-  };
-}
-
-export function getOrderStats() {
-  return {
-    total: 1842,
-    active: 128,
-    delayed: 19,
-    completed_today: 276,
-  };
-}
-
-export function getDriverStats() {
-  const onlineDrivers = drivers.filter((driver) => driver.online);
-  return {
-    total: drivers.length,
-    online: onlineDrivers.length,
-    airport_ready: drivers.filter((driver) => driver.airportReady).length,
-    trip_radar_candidates: drivers.filter((driver) => driver.tripRadarEligible).length,
-  };
-}
-
-export function getMarketplaceOverview() {
-  const hotspots = [
-    {
-      zone_key: "Airport",
-      pressure_band: "critical",
-      pressure_ratio: 2.3,
-      waiting_orders: 18,
-      open_orders: 26,
-      available_drivers: 7,
-      avg_wait_minutes: 13.4,
-      recommended_action: "Shift two delivery-capable airport-ready drivers into transfer coverage for the next 45 minutes.",
-    },
-    {
-      zone_key: "Victoria Island",
-      pressure_band: "elevated",
-      pressure_ratio: 1.6,
-      waiting_orders: 11,
-      open_orders: 19,
-      available_drivers: 8,
-      avg_wait_minutes: 9.1,
-      recommended_action: "Open batch windows for nearby delivery routes and tighten promised ETAs.",
-    },
-    {
-      zone_key: "Lekki",
-      pressure_band: "balanced",
-      pressure_ratio: 1.1,
-      waiting_orders: 6,
-      open_orders: 10,
-      available_drivers: 9,
-      avg_wait_minutes: 6.2,
-      recommended_action: "Maintain current staffing and monitor healthcare-transport spillover.",
-    },
-  ];
-
-  return {
-    queue: {
-      pending_orders: 54,
-      avg_queue_minutes: 8.7,
-    },
-    drivers: {
-      available_drivers: drivers.filter((driver) => driver.online).length,
-    },
-    activity_signals: {
-      assignment_events_7d: 1384,
-    },
-    hotspots,
-  };
-}
-
 export async function getDriverMobilityWorkspace(limit = 8) {
-  const marketplaceOverview = getMarketplaceOverview();
-  const supplyQueue = drivers.slice(0, limit).map((driver) => ({
-    driver: driver.name,
-    mode: driver.mode,
-    zone: driver.zone,
-    rating: driver.rating,
-    reliability: `${driver.reliability}%`,
-    weekly_earnings: `$${driver.weeklyEarnings}`,
-    status: driver.online ? "online" : "offline",
-    next_action: driver.tripRadarEligible ? "Eligible for trip radar and batch offers" : "Specialized dispatch only",
-  }));
+  try {
+    const [summary, driverRows, hotspotRows] = await Promise.all([
+      queryOne<{
+        total_drivers: number | string;
+        online_drivers: number | string;
+        busy_drivers: number | string;
+        offline_drivers: number | string;
+        active_orders: number | string;
+        pending_orders: number | string;
+        avg_queue_minutes: number | string;
+      }>(`
+        SELECT
+          (SELECT COUNT(*) FROM drivers) AS total_drivers,
+          (SELECT COUNT(*) FROM drivers WHERE status IN ('online', 'available')) AS online_drivers,
+          (SELECT COUNT(*) FROM drivers WHERE status = 'busy') AS busy_drivers,
+          (SELECT COUNT(*) FROM drivers WHERE status = 'offline') AS offline_drivers,
+          (SELECT COUNT(*) FROM orders WHERE status IN ('confirmed', 'assigned', 'in_progress')) AS active_orders,
+          (SELECT COUNT(*) FROM orders WHERE status = 'pending') AS pending_orders,
+          (SELECT COALESCE(AVG(EXTRACT(EPOCH FROM (NOW() - created_at)) / 60.0) FILTER (WHERE status = 'pending'), 0) FROM orders WHERE created_at >= NOW() - INTERVAL '24 hours') AS avg_queue_minutes
+      `),
+      getPool().query<{
+        id: number;
+        name: string;
+        status: string;
+        rating: number | string | null;
+        primary_vertical_id: number | string | null;
+      }>(`
+        SELECT id, name, status, rating, primary_vertical_id
+        FROM drivers
+        ORDER BY updated_at DESC NULLS LAST, id DESC
+        LIMIT $1
+      `, [limit]),
+      getPool().query<{
+        zone_key: number | string;
+        open_orders: number | string;
+        waiting_orders: number | string;
+        available_drivers: number | string;
+        avg_wait_minutes: number | string;
+      }>(`
+        WITH order_pressure AS (
+          SELECT COALESCE(vertical_id, 0) AS zone_key,
+                 COUNT(*) FILTER (WHERE status IN ('pending', 'confirmed', 'assigned', 'in_progress')) AS open_orders,
+                 COUNT(*) FILTER (WHERE status = 'pending') AS waiting_orders,
+                 AVG(EXTRACT(EPOCH FROM (NOW() - created_at)) / 60.0) FILTER (WHERE status = 'pending') AS avg_wait_minutes
+          FROM orders
+          WHERE created_at >= NOW() - INTERVAL '24 hours'
+          GROUP BY COALESCE(vertical_id, 0)
+        ), driver_supply AS (
+          SELECT COALESCE(primary_vertical_id, 0) AS zone_key,
+                 COUNT(*) FILTER (WHERE status IN ('online', 'available')) AS available_drivers
+          FROM drivers
+          GROUP BY COALESCE(primary_vertical_id, 0)
+        )
+        SELECT COALESCE(op.zone_key, ds.zone_key) AS zone_key,
+               COALESCE(op.open_orders, 0) AS open_orders,
+               COALESCE(op.waiting_orders, 0) AS waiting_orders,
+               COALESCE(ds.available_drivers, 0) AS available_drivers,
+               COALESCE(op.avg_wait_minutes, 0) AS avg_wait_minutes
+        FROM order_pressure op
+        FULL OUTER JOIN driver_supply ds ON ds.zone_key = op.zone_key
+        ORDER BY (COALESCE(op.open_orders, 0)::numeric / GREATEST(COALESCE(ds.available_drivers, 0), 1)) DESC
+        LIMIT 3
+      `),
+    ]);
 
-  const summary = {
-    online_drivers: drivers.filter((driver) => driver.online).length,
-    trip_radar_candidates: drivers.filter((driver) => driver.tripRadarEligible).length,
-    airport_ready_drivers: drivers.filter((driver) => driver.airportReady).length,
-    avg_weekly_earnings: Math.round(drivers.reduce((sum, driver) => sum + driver.weeklyEarnings, 0) / drivers.length),
-    recommended_action: "Airport demand is outrunning reserve supply; rebalance one delivery-first cohort toward transfer readiness.",
-  };
+    if (!summary) {
+      return unavailable("driver_mobility", new Error("driver mobility summary query returned no result"));
+    }
+    const driverSummary = summary;
+    const activeOrders = toNumber(driverSummary.active_orders);
+    const onlineDrivers = toNumber(driverSummary.online_drivers);
+    const pendingOrders = toNumber(driverSummary.pending_orders);
+    const telemetrySignals = hotspotRows.rows.map((row) => {
+      const openOrders = toNumber(row.open_orders);
+      const availableDrivers = toNumber(row.available_drivers);
+      const pressure = openOrders / Math.max(availableDrivers, 1);
+      return `vertical ${toNumber(row.zone_key)}=${pressure.toFixed(2)} pressure, ${toNumber(row.waiting_orders)} waiting orders, ${availableDrivers} available drivers`;
+    });
 
-  const telemetrySignals = marketplaceOverview.hotspots.slice(0, 3).map((hotspot) => `${hotspot.zone_key}=${hotspot.pressure_band} pressure, wait ${hotspot.avg_wait_minutes}m, ${hotspot.available_drivers} drivers available`);
-  const telemetrySummary = `Open queue ${marketplaceOverview.queue.pending_orders} orders at ${marketplaceOverview.queue.avg_queue_minutes}m average wait with ${marketplaceOverview.drivers.available_drivers} drivers visible. Latest assignment events: ${marketplaceOverview.activity_signals.assignment_events_7d} over 7 days.`;
+    const summaryPayload = {
+      total_drivers: toNumber(driverSummary.total_drivers),
+      online_drivers: onlineDrivers,
+      busy_drivers: toNumber(driverSummary.busy_drivers),
+      offline_drivers: toNumber(driverSummary.offline_drivers),
+      active_orders: activeOrders,
+      pending_orders: pendingOrders,
+      avg_queue_minutes: Number(toNumber(driverSummary.avg_queue_minutes).toFixed(2)),
+      recommended_action: pendingOrders > onlineDrivers
+        ? "Pending demand exceeds visible supply; review dispatch capacity before accepting more work."
+        : "Supply and queue indicators are within the currently observed database state.",
+    };
 
-  return {
-    summary,
-    earning_streams: [
-      "Airport reserve queue incentives",
-      "Trip radar surge offers for mixed mobility and courier work",
-      "Healthcare transport premiums for trained drivers",
-      "High-reliability weekly guarantee programs",
-    ],
-    supply_queue: supplyQueue,
-    telemetry: {
-      summary: telemetrySummary,
-      signals: telemetrySignals,
-      hotspots: marketplaceOverview.hotspots,
-    },
-    longcat: await buildDispatchIntelligence({
-      ...summary,
-      telemetry_summary: telemetrySummary,
-      telemetry_signals: telemetrySignals,
-      supply_queue: supplyQueue,
-    }),
-  };
+    return {
+      source: "postgres",
+      generated_at: new Date().toISOString(),
+      summary: summaryPayload,
+      supply_queue: driverRows.rows.map((driver) => ({
+        driver_id: Number(driver.id),
+        driver: driver.name,
+        vertical_id: driver.primary_vertical_id == null ? null : toNumber(driver.primary_vertical_id),
+        status: driver.status,
+        rating: driver.rating == null ? null : toNumber(driver.rating),
+        reliability: null,
+        weekly_earnings: null,
+        next_action: driver.status === "busy"
+          ? "Currently assigned; do not treat as available supply."
+          : "No synthetic performance recommendation is provided without a real score record.",
+      })),
+      telemetry: {
+        summary: `Observed ${pendingOrders} pending orders, ${activeOrders} active orders, and ${onlineDrivers} available or online drivers from PostgreSQL.`,
+        signals: telemetrySignals,
+        hotspots: hotspotRows.rows.map((row) => ({
+          zone_key: toNumber(row.zone_key),
+          open_orders: toNumber(row.open_orders),
+          waiting_orders: toNumber(row.waiting_orders),
+          available_drivers: toNumber(row.available_drivers),
+          avg_wait_minutes: Number(toNumber(row.avg_wait_minutes).toFixed(2)),
+        })),
+      },
+      longcat: await buildDispatchIntelligence({
+        ...summaryPayload,
+        trip_radar_candidates: null,
+        airport_ready_drivers: null,
+        avg_weekly_earnings: null,
+        telemetry_summary: `Observed ${pendingOrders} pending orders and ${onlineDrivers} available or online drivers.`,
+        telemetry_signals: telemetrySignals,
+        supply_queue: [],
+      }),
+    };
+  } catch (error) {
+    return unavailable("driver_mobility", error);
+  }
 }
 
-export function getTablesideWorkspace(limit = 8) {
-  return {
-    summary: {
-      qr_venues: venues.filter((venue) => venue.qrEnabled).length,
-      active_sessions: venues.reduce((sum, venue) => sum + venue.activeSessions, 0),
-      pay_at_table_enablement: Math.round((venues.filter((venue) => venue.payAtTableEnabled).length / venues.length) * 100),
-      upsell_modules: venues.reduce((sum, venue) => sum + venue.upsellModules.length, 0),
-      recommended_action: "Move Metro Bistro from expansion to full pay-at-table enablement before the weekend dinner peak.",
-    },
-    order_modes: [
-      "QR scan to self-serve ordering",
-      "Staff-assisted order capture with shared table context",
-      "Pay-at-table and split-bill workflows",
-      "Hybrid dine-in to pickup conversion during queue spikes",
-    ],
-    venue_rollout: venues.slice(0, limit).map((venue) => ({
-      venue: venue.name,
-      city: venue.city,
-      active_sessions: venue.activeSessions,
-      pay_at_table: venue.payAtTableEnabled ? "enabled" : "pending",
-      launch_stage: venue.launchStage,
-      upsell_modules: venue.upsellModules.join(", "),
-    })),
-  };
+export async function getTablesideWorkspace(): Promise<TablesideWorkspace> {
+  return unavailable("tableside_ordering", new Error("tableside operational tables are not configured"));
 }
 
-export function getWhiteLabelAppsWorkspace(limit = 8) {
-  const selected = brands.slice(0, limit);
-
-  return {
-    summary: {
-      branded_apps_live: brands.filter((brand) => brand.launched).length,
-      templates_available: 6,
-      push_channels_ready: brands.filter((brand) => brand.pushReady).length,
-      release_tracks: new Set(brands.map((brand) => brand.releaseTrack)).size,
-      recommended_action: "Launch push-ready merchant templates first, then graduate courier brands once fallback messaging is fully wired.",
-    },
-    app_templates: [
-      { name: "Merchant Growth Starter", audience: "merchant", release_track: "general" },
-      { name: "Courier Ops Pilot", audience: "courier", release_track: "pilot" },
-      { name: "Rider Marketplace Beta", audience: "rider", release_track: "beta" },
-      { name: "Enterprise Travel Desk", audience: "enterprise", release_track: "beta" },
-    ],
-    brands: selected.map((brand) => ({
-      brand: brand.brand,
-      tenant: brand.tenant,
-      audience: brand.audience,
-      release_track: brand.releaseTrack,
-      launch_status: brand.launched ? "live" : "prelaunch",
-      push: brand.pushReady ? "ready" : "pending",
-    })),
-  };
+export async function getWhiteLabelAppsWorkspace(): Promise<WhiteLabelAppsWorkspace> {
+  return unavailable("white_label_apps", new Error("white-label application registry is not configured"));
 }
 
 export async function getMerchantChannelWorkspace() {
   const externalBenchmarks = await readMerchantBenchmarkSnapshot();
 
   try {
-    const summary = await queryOne<{
-      activated_channels: number | string;
-      branded_storefronts: number | string;
-      partner_channels: number | string;
-      campaigns_running: number | string;
-      recent_push_deliveries: number | string;
-    }>(`
-      SELECT
-        COUNT(DISTINCT mc.channel) AS activated_channels,
-        COUNT(DISTINCT sp.id) AS branded_storefronts,
-        COUNT(DISTINCT CASE WHEN mc.channel IN ('marketplace', 'affiliate', 'partner') THEN mc.channel END) AS partner_channels,
-        COUNT(DISTINCT mc.id) FILTER (WHERE COALESCE(mc.status, 'draft') IN ('active', 'running', 'scheduled')) AS campaigns_running,
-        COUNT(pnl.id) FILTER (WHERE pnl.created_at >= NOW() - INTERVAL '7 days') AS recent_push_deliveries
-      FROM service_providers sp
-      LEFT JOIN marketing_campaigns mc ON TRUE
-      LEFT JOIN push_notification_logs pnl ON TRUE
-      WHERE COALESCE(sp.status, 'inactive') = 'active'
-    `);
-
-    const channelRows = await getPool().query<{ channel: string }>(`
-      SELECT DISTINCT channel
-      FROM marketing_campaigns
-      WHERE channel IS NOT NULL AND channel <> ''
-      ORDER BY channel ASC
-      LIMIT 8
-    `);
+    const [summary, channelRows] = await Promise.all([
+      queryOne<{
+        activated_channels: number | string;
+        branded_storefronts: number | string;
+        partner_channels: number | string;
+        campaigns_running: number | string;
+        recent_push_deliveries: number | string;
+      }>(`
+        SELECT
+          COUNT(DISTINCT mc.channel) AS activated_channels,
+          COUNT(DISTINCT sp.id) AS branded_storefronts,
+          COUNT(DISTINCT CASE WHEN mc.channel IN ('marketplace', 'affiliate', 'partner') THEN mc.channel END) AS partner_channels,
+          COUNT(DISTINCT mc.id) FILTER (WHERE COALESCE(mc.status, 'draft') IN ('active', 'running', 'scheduled')) AS campaigns_running,
+          COUNT(pnl.id) FILTER (WHERE pnl.created_at >= NOW() - INTERVAL '7 days') AS recent_push_deliveries
+        FROM service_providers sp
+        LEFT JOIN marketing_campaigns mc ON TRUE
+        LEFT JOIN push_notification_logs pnl ON TRUE
+        WHERE COALESCE(sp.status, 'inactive') = 'active'
+      `),
+      getPool().query<{ channel: string }>(`
+        SELECT DISTINCT channel
+        FROM marketing_campaigns
+        WHERE channel IS NOT NULL AND channel <> ''
+        ORDER BY channel ASC
+        LIMIT 8
+      `),
+    ]);
 
     const activatedChannels = toNumber(summary?.activated_channels);
     const brandedStorefronts = toNumber(summary?.branded_storefronts);
@@ -351,34 +291,27 @@ export async function getMerchantChannelWorkspace() {
     const campaignsRunning = toNumber(summary?.campaigns_running);
     const ownedShare = activatedChannels > 0 ? ((Math.max(activatedChannels - partnerChannels, 0) / activatedChannels) * 100) : 0;
     const channelVelocity = activatedChannels > 0 ? recentPushDeliveries / activatedChannels : 0;
-
+    const channelMix = channelRows.rows.map((row) => `${row.channel} channel with ${recentPushDeliveries} push deliveries observed in the last 7 days`);
+    const benchmarkSummary = externalBenchmarks.available
+      ? `External benchmark snapshot loaded with ${externalBenchmarks.benchmarks.length} domains.`
+      : `External benchmark snapshot unavailable: ${externalBenchmarks.reason}`;
     const summaryPayload = {
       activated_channels: activatedChannels,
       branded_storefronts: brandedStorefronts,
       partner_channels: partnerChannels,
       recommended_action: campaignsRunning > 0
-        ? `Stabilize ${campaignsRunning} live campaign channels and align push follow-through before opening additional storefront surfaces.`
-        : "Activate owned storefront and messaging channels before expanding partner syndication.",
+        ? `Stabilize ${campaignsRunning} live campaign channels before opening additional storefront surfaces.`
+        : "No live campaign workload is present in the queried operational data.",
     };
 
-    const channelMix = channelRows.rows.length > 0
-      ? channelRows.rows.map((row) => `${row.channel} channel with ${recentPushDeliveries} push deliveries observed in the last 7 days`)
-      : [
-          "Owned web storefronts with active merchant records",
-          "Managed campaign channels awaiting wider activation",
-        ];
-    const benchmarkSummary = `${externalBenchmarks.summary} Owned channels represent ${ownedShare.toFixed(1)}% of activated surfaces, with ${channelVelocity.toFixed(1)} recent push deliveries per active channel and ${campaignsRunning} live campaigns currently in motion.`;
-    const forecastInputs = [
-      `${activatedChannels} active channel surfaces`,
-      `${brandedStorefronts} branded storefronts available for direct conversion`,
-      `${partnerChannels} partner-led channels affecting mix quality`,
-      `${recentPushDeliveries} push deliveries in the last 7 days`,
-    ];
-
     return {
+      source: "postgres",
+      generated_at: new Date().toISOString(),
       summary: summaryPayload,
       channel_mix: channelMix,
       benchmarks: {
+        availability: externalBenchmarks.available ? "available" : "unavailable",
+        reason: externalBenchmarks.reason,
         owned_share_percent: Number(ownedShare.toFixed(1)),
         push_deliveries_per_channel: Number(channelVelocity.toFixed(1)),
         live_campaigns: campaignsRunning,
@@ -390,217 +323,141 @@ export async function getMerchantChannelWorkspace() {
         ...summaryPayload,
         channel_mix: channelMix,
         benchmark_summary: benchmarkSummary,
-        forecast_inputs: forecastInputs,
+        forecast_inputs: [
+          `${activatedChannels} active channel surfaces`,
+          `${brandedStorefronts} branded storefronts`,
+          `${recentPushDeliveries} recent push deliveries`,
+        ],
       }),
     };
-  } catch {
-    const summaryPayload = {
-      activated_channels: 5,
-      branded_storefronts: 12,
-      partner_channels: 3,
-      recommended_action: "Focus the next release on merchant activation sequencing instead of adding more disconnected storefront CRUD.",
-    };
-    const channelMix = [
-      "Owned web storefronts",
-      "Branded mobile ordering",
-      "Tableside ordering",
-      "Phone-assisted capture",
-      "Partner marketplace syndication",
-    ];
-
-    return {
-      summary: summaryPayload,
-      channel_mix: channelMix,
-      benchmarks: {
-        owned_share_percent: 40,
-        push_deliveries_per_channel: 0,
-        live_campaigns: 0,
-        benchmark_summary: externalBenchmarks.summary,
-        generated_at: externalBenchmarks.generated_at,
-        external_domains: externalBenchmarks.benchmarks,
-      },
-      longcat: await buildMerchantConsultant({
-        ...summaryPayload,
-        channel_mix: channelMix,
-        benchmark_summary: externalBenchmarks.summary,
-        forecast_inputs: externalBenchmarks.benchmarks.map((entry) => `${entry.label} ${Math.round(entry.visits_total_latest).toLocaleString()} visits`),
-      }),
-    };
+  } catch (error) {
+    return unavailable("merchant_channels", error);
   }
 }
 
 export async function getServiceRecoveryWorkspace() {
   try {
-    const summary = await queryOne<{
-      open_incidents: number | string;
-      compensation_pending: number | string;
-      recovered_orders: number | string;
-      total_problem_orders: number | string;
-    }>(`
-      SELECT
-        COUNT(*) FILTER (WHERE status IN ('pending', 'cancelled')) AS open_incidents,
-        COUNT(*) FILTER (WHERE status = 'cancelled') AS compensation_pending,
-        COUNT(*) FILTER (WHERE status = 'completed') AS recovered_orders,
-        COUNT(*) FILTER (WHERE status IN ('pending', 'cancelled', 'completed')) AS total_problem_orders
-      FROM orders
-      WHERE updated_at >= NOW() - INTERVAL '7 days'
-    `);
-
-    const queueRows = await getPool().query<{ queue_name: string; queue_size: number | string }>(`
-      SELECT queue_name, queue_size
-      FROM (
-        SELECT 'Pending order follow-up' AS queue_name, COUNT(*) FILTER (WHERE status = 'pending') AS queue_size FROM orders WHERE updated_at >= NOW() - INTERVAL '7 days'
-        UNION ALL
-        SELECT 'Cancelled order compensation', COUNT(*) FILTER (WHERE status = 'cancelled') FROM orders WHERE updated_at >= NOW() - INTERVAL '7 days'
-        UNION ALL
-        SELECT 'Payment exception review', COUNT(*) FILTER (WHERE status NOT IN ('completed', 'settled')) FROM transactions WHERE updated_at >= NOW() - INTERVAL '7 days'
-      ) queues
-      ORDER BY queue_size DESC, queue_name ASC
-    `);
+    const [summary, queueRows] = await Promise.all([
+      queryOne<{
+        open_incidents: number | string;
+        compensation_pending: number | string;
+        recovered_orders: number | string;
+        total_problem_orders: number | string;
+      }>(`
+        SELECT
+          COUNT(*) FILTER (WHERE status IN ('pending', 'cancelled')) AS open_incidents,
+          COUNT(*) FILTER (WHERE status = 'cancelled') AS compensation_pending,
+          COUNT(*) FILTER (WHERE status = 'completed') AS recovered_orders,
+          COUNT(*) FILTER (WHERE status IN ('pending', 'cancelled', 'completed')) AS total_problem_orders
+        FROM orders
+        WHERE updated_at >= NOW() - INTERVAL '7 days'
+      `),
+      getPool().query<{ queue_name: string; queue_size: number | string }>(`
+        SELECT queue_name, queue_size
+        FROM (
+          SELECT 'Pending order follow-up' AS queue_name, COUNT(*) FILTER (WHERE status = 'pending') AS queue_size FROM orders WHERE updated_at >= NOW() - INTERVAL '7 days'
+          UNION ALL
+          SELECT 'Cancelled order compensation', COUNT(*) FILTER (WHERE status = 'cancelled') FROM orders WHERE updated_at >= NOW() - INTERVAL '7 days'
+          UNION ALL
+          SELECT 'Payment exception review', COUNT(*) FILTER (WHERE status NOT IN ('completed', 'settled')) FROM transactions WHERE updated_at >= NOW() - INTERVAL '7 days'
+        ) queues
+        ORDER BY queue_size DESC, queue_name ASC
+      `),
+    ]);
 
     const openIncidents = toNumber(summary?.open_incidents);
     const compensationPending = toNumber(summary?.compensation_pending);
     const recoveredOrders = toNumber(summary?.recovered_orders);
-    const totalProblemOrders = Math.max(1, toNumber(summary?.total_problem_orders));
-    const saveRate = Math.round((recoveredOrders / totalProblemOrders) * 100);
+    const totalProblemOrders = toNumber(summary?.total_problem_orders);
+    const saveRate = totalProblemOrders > 0 ? Math.round((recoveredOrders / totalProblemOrders) * 100) : null;
 
     return {
+      source: "postgres",
+      generated_at: new Date().toISOString(),
       summary: {
         open_incidents: openIncidents,
         compensation_pending: compensationPending,
         save_rate: saveRate,
         recommended_action: compensationPending > 0
-          ? `Work the ${compensationPending} cancelled-order compensation cases before they age into manual settlement backlog.`
-          : "Open recovery queues are controlled; focus on automating payment-exception follow-through.",
+          ? `Work the ${compensationPending} cancelled-order compensation cases before they age into settlement backlog.`
+          : "No compensation backlog is present in the queried recovery window.",
       },
-      queues: queueRows.rows.map((row) => `${row.queue_name}: ${toNumber(row.queue_size)} cases`) || ["No active recovery queues in the selected window"],
+      queues: queueRows.rows.map((row) => `${row.queue_name}: ${toNumber(row.queue_size)} cases`),
     };
-  } catch {
-    return {
-      summary: {
-        open_incidents: 14,
-        compensation_pending: 5,
-        save_rate: 82,
-        recommended_action: "Escalate airport-delay incidents immediately and automate merchant credits for venue-side prep misses.",
-      },
-      queues: [
-        "Airport delay recovery",
-        "Missing-item compensation",
-        "Merchant prep exceptions",
-        "Courier reassignment and proactive outreach",
-      ],
-    };
+  } catch (error) {
+    return unavailable("service_recovery", error);
   }
 }
 
 export async function getPhoneOrderingWorkspace() {
   try {
-    const summary = await queryOne<{
-      staffed_lines: number | string;
-      active_calls: number | string;
-      substitution_cases: number | string;
-    }>(`
-      SELECT
-        GREATEST(1, COUNT(DISTINCT sp.id)) AS staffed_lines,
-        COUNT(*) FILTER (WHERE status IN ('pending', 'accepted')) AS active_calls,
-        COUNT(*) FILTER (WHERE notes ILIKE '%substitut%' OR notes ILIKE '%unavailable%' OR notes ILIKE '%call%') AS substitution_cases
-      FROM service_providers sp
-      LEFT JOIN orders o ON o.provider_id = sp.id AND o.updated_at >= NOW() - INTERVAL '24 hours'
-      WHERE COALESCE(sp.status, 'inactive') = 'active'
-    `);
-
-    const flowRows = await getPool().query<{ flow_name: string; flow_volume: number | string }>(`
-      SELECT flow_name, flow_volume
-      FROM (
-        SELECT 'Assisted order capture' AS flow_name, COUNT(*) FILTER (WHERE status IN ('pending', 'accepted')) AS flow_volume FROM orders WHERE updated_at >= NOW() - INTERVAL '24 hours'
-        UNION ALL
-        SELECT 'Substitution handling', COUNT(*) FILTER (WHERE notes ILIKE '%substitut%' OR notes ILIKE '%unavailable%') FROM orders WHERE updated_at >= NOW() - INTERVAL '7 days'
-        UNION ALL
-        SELECT 'Kitchen handoff confirmation', COUNT(*) FILTER (WHERE status = 'preparing') FROM orders WHERE updated_at >= NOW() - INTERVAL '24 hours'
-      ) flows
-      ORDER BY flow_volume DESC, flow_name ASC
-    `);
+    const [summary, flowRows] = await Promise.all([
+      queryOne<{
+        staffed_lines: number | string;
+        active_calls: number | string;
+        substitution_cases: number | string;
+      }>(`
+        SELECT
+          COUNT(DISTINCT sp.id) AS staffed_lines,
+          COUNT(*) FILTER (WHERE status IN ('pending', 'accepted')) AS active_calls,
+          COUNT(*) FILTER (WHERE notes ILIKE '%substitut%' OR notes ILIKE '%unavailable%' OR notes ILIKE '%call%') AS substitution_cases
+        FROM service_providers sp
+        LEFT JOIN orders o ON o.provider_id = sp.id AND o.updated_at >= NOW() - INTERVAL '24 hours'
+        WHERE COALESCE(sp.status, 'inactive') = 'active'
+      `),
+      getPool().query<{ flow_name: string; flow_volume: number | string }>(`
+        SELECT flow_name, flow_volume
+        FROM (
+          SELECT 'Assisted order capture' AS flow_name, COUNT(*) FILTER (WHERE status IN ('pending', 'accepted')) AS flow_volume FROM orders WHERE updated_at >= NOW() - INTERVAL '24 hours'
+          UNION ALL
+          SELECT 'Substitution handling', COUNT(*) FILTER (WHERE notes ILIKE '%substitut%' OR notes ILIKE '%unavailable%') FROM orders WHERE updated_at >= NOW() - INTERVAL '7 days'
+          UNION ALL
+          SELECT 'Kitchen handoff confirmation', COUNT(*) FILTER (WHERE status = 'preparing') FROM orders WHERE updated_at >= NOW() - INTERVAL '24 hours'
+        ) flows
+        ORDER BY flow_volume DESC, flow_name ASC
+      `),
+    ]);
 
     const staffedLines = toNumber(summary?.staffed_lines);
     const activeCalls = toNumber(summary?.active_calls);
     const substitutionCases = toNumber(summary?.substitution_cases);
-
+    const callFlows = flowRows.rows.map((row) => `${row.flow_name}: ${toNumber(row.flow_volume)} active cases`);
+    const voiceGatewayConfigured = Boolean(ENV.longcatVoiceGatewayUrl?.trim());
     const summaryPayload = {
       staffed_lines: staffedLines,
       active_calls: activeCalls,
       substitution_cases: substitutionCases,
       recommended_action: substitutionCases > 0
-        ? `Escalate the ${substitutionCases} substitution-sensitive orders before they degrade into cancellations or manual callbacks.`
-        : "Phone-ordering load is stable; prioritize tighter kitchen handoff confirmation for new assisted orders.",
+        ? `Review the ${substitutionCases} substitution-sensitive orders before they degrade into cancellations or callbacks.`
+        : "No substitution-sensitive workload is present in the queried operational data.",
     };
 
-    const callFlows = flowRows.rows.map((row) => `${row.flow_name}: ${toNumber(row.flow_volume)} active cases`) || ["No live assisted-ordering flows detected in the current window"];
-    const memoryPreview = await getLongCatCustomerMemory({
-      customerPhone: "+15550001111",
-      customerName: "Repeat caller preview",
-      accessibilityFlags: substitutionCases > 0 ? ["voice-confirmation-preferred"] : [],
-    });
-
     return {
+      source: "postgres",
+      generated_at: new Date().toISOString(),
       summary: summaryPayload,
       call_flows: callFlows,
       voice_assistant: {
         channel: "phone_ordering",
-        live_voice_enabled: true,
-        callback_channel: ENV.notificationDispatcherUrl,
-        memory_preview: memoryPreview,
+        gateway_configured: voiceGatewayConfigured,
+        availability: "not_verified_by_workspace_query",
+        callback_channel: ENV.notificationDispatcherUrl || null,
+        memory_preview: null,
+        memory_status: "requires_actual_caller_context",
       },
       messaging_assistant: {
         channels: ["sms_ordering", "sms_follow_up"],
-        dispatcher_url: ENV.notificationDispatcherUrl,
+        dispatcher_url: ENV.notificationDispatcherUrl || null,
       },
       longcat: await buildConsumerAssistant({
         ...summaryPayload,
         call_flows: callFlows,
-        memory_summary: memoryPreview.memory_summary,
-        live_voice_enabled: true,
+        memory_summary: "No active caller context was supplied to this workspace query.",
+        live_voice_enabled: voiceGatewayConfigured,
         messaging_channels: ["sms_ordering", "sms_follow_up"],
       }),
     };
-  } catch {
-    const summaryPayload = {
-      staffed_lines: 7,
-      active_calls: 11,
-      substitution_cases: 4,
-      recommended_action: "Route overflow dinner-period calls to assisted menu capture and auto-escalate unavailable-item decisions to merchant leads.",
-    };
-    const callFlows = [
-      "Assisted order capture with menu confirmation",
-      "Stored-customer lookup and saved-payment recovery",
-      "Substitution and unavailable-item resolution",
-      "Kitchen handoff and fulfillment promise verification",
-    ];
-    const memoryPreview = await getLongCatCustomerMemory({
-      customerPhone: "+15550001111",
-      customerName: "Repeat caller preview",
-      accessibilityFlags: ["voice-confirmation-preferred"],
-    });
-
-    return {
-      summary: summaryPayload,
-      call_flows: callFlows,
-      voice_assistant: {
-        channel: "phone_ordering",
-        live_voice_enabled: true,
-        callback_channel: ENV.notificationDispatcherUrl,
-        memory_preview: memoryPreview,
-      },
-      messaging_assistant: {
-        channels: ["sms_ordering", "sms_follow_up"],
-        dispatcher_url: ENV.notificationDispatcherUrl,
-      },
-      longcat: await buildConsumerAssistant({
-        ...summaryPayload,
-        call_flows: callFlows,
-        memory_summary: memoryPreview.memory_summary,
-        live_voice_enabled: true,
-        messaging_channels: ["sms_ordering", "sms_follow_up"],
-      }),
-    };
+  } catch (error) {
+    return unavailable("phone_ordering", error);
   }
 }

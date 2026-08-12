@@ -1,0 +1,122 @@
+{
+  "project_info": {
+    "title": "Dependency Remediation & LongCat Architecture",
+    "created": 1786555251.603,
+    "last_updated": 1786555786.529,
+    "total_slides": 10
+  },
+  "slides": [
+    {
+      "id": "title",
+      "state": "edited",
+      "pageNum": 1
+    },
+    {
+      "id": "executive",
+      "state": "edited",
+      "pageNum": 2
+    },
+    {
+      "id": "remediation",
+      "state": "edited",
+      "pageNum": 3
+    },
+    {
+      "id": "expo_risk",
+      "state": "edited",
+      "pageNum": 4
+    },
+    {
+      "id": "expo_path",
+      "state": "edited",
+      "pageNum": 5
+    },
+    {
+      "id": "longcat_role",
+      "state": "edited",
+      "pageNum": 6
+    },
+    {
+      "id": "longcat_arch",
+      "state": "edited",
+      "pageNum": 7
+    },
+    {
+      "id": "longcat_tests",
+      "state": "edited",
+      "pageNum": 8
+    },
+    {
+      "id": "staging",
+      "state": "edited",
+      "pageNum": 9
+    },
+    {
+      "id": "gates",
+      "state": "edited",
+      "pageNum": 10
+    }
+  ],
+  "outline": [
+    {
+      "id": "title",
+      "title": "Dependency Remediation & LongCat Architecture",
+      "summary": "Opening briefing on production dependency remediation, the Expo SDK 54 security path, LongCat's LLM-centric role, and staging release gates.",
+      "image_plan": "Use a suitable image if needed"
+    },
+    {
+      "id": "executive",
+      "title": "Executive Decision",
+      "summary": "A concise view of security, regression, and staging evidence, with the remaining strict-release blocker clearly identified.",
+      "image_plan": "Use a suitable image if needed"
+    },
+    {
+      "id": "remediation",
+      "title": "What Was Remediated",
+      "summary": "Show the reduction from three critical and 55 high findings to zero critical and 16 high findings, plus the direct upgrades and obsolete package removals.",
+      "image_plan": "Use a suitable image if needed"
+    },
+    {
+      "id": "expo_risk",
+      "title": "Residual Expo SDK 54 Risk Map",
+      "summary": "Map the remaining high findings to the Expo SDK 54 CLI, Metro, config, and build-tool dependency chain rather than platform business services.",
+      "image_plan": "Use a suitable image if needed"
+    },
+    {
+      "id": "expo_path",
+      "title": "Exact Expo SDK Upgrade Sequence",
+      "summary": "Present the supported, incremental Expo upgrade and validation sequence needed to resolve SDK-managed high findings safely.",
+      "image_plan": "Use a suitable image if needed"
+    },
+    {
+      "id": "longcat_role",
+      "title": "LongCat's LLM-Centric Role",
+      "summary": "Clarify LongCat as the AI operational intelligence layer for consumer, merchant, and dispatch workflows grounded in verified evidence.",
+      "image_plan": "Use a suitable image if needed"
+    },
+    {
+      "id": "longcat_arch",
+      "title": "LongCat LLM Architecture",
+      "summary": "Show evidence-to-prompt-to-Ollama-to-structured-output flow and the explicit provenance branch for deterministic fallback guidance.",
+      "image_plan": "Use a suitable image if needed"
+    },
+    {
+      "id": "longcat_tests",
+      "title": "Controlled LongCat Failure Verification",
+      "summary": "Summarize six verified behavior tests covering provider network failure, malformed output, HTTP 503, and safety controls.",
+      "image_plan": "Use a suitable image if needed"
+    },
+    {
+      "id": "staging",
+      "title": "Live Edge and Staging Verification",
+      "summary": "Show how the Caddy, APISIX, Keycloak, and Open AppSec verifier proves TLS, redirects, OIDC discovery, and WAF enforcement in staging.",
+      "image_plan": "Use a suitable image if needed"
+    },
+    {
+      "id": "gates",
+      "title": "Release Gates & Next Actions",
+      "summary": "Close with security, native validation, staging, and LongCat-production gates that remain before a strict production release.",
+      "image_plan": "Use a suitable image if needed"
+    }
+  ]
+}

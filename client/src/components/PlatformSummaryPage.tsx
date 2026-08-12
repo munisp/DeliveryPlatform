@@ -24,6 +24,7 @@ type PlatformSummaryPageProps = {
   highlights: Array<string | Record<string, unknown>>;
   sections: Section[];
   loading?: boolean;
+  error?: string | null;
 };
 
 function renderItem(item: string | Record<string, unknown>) {
@@ -45,6 +46,7 @@ export default function PlatformSummaryPage({
   highlights,
   sections,
   loading = false,
+  error = null,
 }: PlatformSummaryPageProps) {
   return (
     <DashboardLayout>
@@ -59,6 +61,21 @@ export default function PlatformSummaryPage({
             <p className="mt-2 max-w-3xl text-slate-400">{description}</p>
           </div>
         </div>
+
+        {error && !loading ? (
+          <Card className="border-amber-500/40 bg-amber-950/20">
+            <CardHeader>
+              <CardTitle className="text-amber-100">Workspace data is unavailable</CardTitle>
+              <CardDescription>
+                This workspace has not returned verified operational data. No synthetic metrics or fallback records are being shown.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <p className="text-sm text-amber-100/80">{error}</p>
+            </CardContent>
+          </Card>
+        ) : (
+          <>
 
         <div className="grid gap-4 xl:grid-cols-4">
           {metrics.map((metric) => (
@@ -125,6 +142,8 @@ export default function PlatformSummaryPage({
             ))}
           </div>
         </div>
+          </>
+        )}
       </div>
     </DashboardLayout>
   );

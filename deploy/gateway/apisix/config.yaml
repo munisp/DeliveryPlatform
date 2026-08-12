@@ -1,7 +1,7 @@
 apisix:
   node_listen: 9080
-  enable_admin: true
-  enable_control: true
+  enable_admin: false
+  enable_control: false
   config_center: yaml
 
 deployment:

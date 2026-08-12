@@ -13,6 +13,7 @@ export default function TablesideCommerce() {
       badge="Hospitality channels"
       icon={UtensilsCrossed}
       loading={query.isLoading}
+      error={query.error?.message}
       metrics={[
         { label: "QR Venues", value: data?.summary?.qr_venues ?? 0, supporting: "Locations enabled for tableside or QR-based ordering." },
         { label: "Active Sessions", value: data?.summary?.active_sessions ?? 0, supporting: "Dining sessions currently moving through scan, order, or pay flows." },

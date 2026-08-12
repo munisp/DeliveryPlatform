@@ -35,6 +35,7 @@ describe("LongCat local AI integration", () => {
     expect(result.source.provider).toBe("heuristic");
     expect(result.source.available).toBe(false);
     expect(result.source.reason).toMatch(/ollama offline/i);
+    expect(result.source.execution_mode).toBe("heuristic_fallback");
     expect(result.assistant_name).toBe("LongCat Concierge");
     expect(result.personalized_recommendations.length).toBeGreaterThanOrEqual(3);
     expect(result.memory_grounding).toMatch(/family meals|customer memory|fresh assisted-ordering moment/i);
@@ -89,11 +90,36 @@ describe("LongCat local AI integration", () => {
 
     expect(result.source.provider).toBe("ollama");
     expect(result.source.available).toBe(true);
+    expect(result.source.execution_mode).toBe("llm");
     expect(result.market_brief).toMatch(/Lunch demand/i);
     expect(result.menu_actions).toContain("Feature fast-prep bowls during lunch.");
     expect(result.benchmark_summary).toMatch(/Owned channels outperform partner channels/i);
     expect(result.benchmark_actions).toHaveLength(3);
     expect(result.financial_watchouts).toHaveLength(3);
+  });
+
+  it("falls back honestly when the local model returns malformed structured output", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ response: "not valid JSON" }),
+      }),
+    );
+
+    const result = await buildMerchantConsultant({
+      activated_channels: 2,
+      branded_storefronts: 1,
+      partner_channels: 0,
+      channel_mix: ["Owned storefront"],
+      recommended_action: "Validate owned-channel conversion before expanding.",
+    });
+
+    expect(result.source.provider).toBe("heuristic");
+    expect(result.source.available).toBe(false);
+    expect(result.source.reason).toMatch(/unparseable JSON/i);
+    expect(result.source.execution_mode).toBe("heuristic_fallback");
+    expect(result.market_brief).toMatch(/channel-concentrated|owned/i);
   });
 
   it("produces dispatch fallback guidance with ranked candidates when the local model is unavailable", async () => {
@@ -136,6 +162,7 @@ describe("LongCat local AI integration", () => {
 
     expect(result.source.provider).toBe("heuristic");
     expect(result.dispatch_brief).toMatch(/Rebalance airport-ready supply/i);
+    expect(result.source.execution_mode).toBe("heuristic_fallback");
     expect(result.ranked_candidates.length).toBeGreaterThan(0);
     expect(result.telemetry_summary).toMatch(/Airport zone is critical|Dispatch guidance is using live supply/i);
     expect(result.recommended_reallocations).toHaveLength(3);

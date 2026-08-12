@@ -13,6 +13,7 @@ export default function WhiteLabelApps() {
       badge="Tenant distribution"
       icon={AppWindow}
       loading={query.isLoading}
+      error={query.error?.message}
       metrics={[
         { label: "Branded Apps Live", value: data?.summary?.branded_apps_live ?? 0, supporting: "Distinct customer-facing mobile brands currently configured or live." },
         { label: "Templates Available", value: data?.summary?.templates_available ?? 0, supporting: "Reusable app blueprints available to tailor each tenant experience." },

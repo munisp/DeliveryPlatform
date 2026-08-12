@@ -3,6 +3,7 @@ import { optimizeDispatch } from "./dispatchOptimizer";
 
 type ProviderStatus = {
   provider: "ollama" | "heuristic";
+  execution_mode: "llm" | "heuristic_fallback";
   model: string;
   available: boolean;
   reason?: string;
@@ -31,9 +32,9 @@ type MerchantWorkspaceInput = {
 
 type DispatchWorkspaceInput = {
   online_drivers: number;
-  trip_radar_candidates: number;
-  airport_ready_drivers: number;
-  avg_weekly_earnings: number;
+  trip_radar_candidates: number | null;
+  airport_ready_drivers: number | null;
+  avg_weekly_earnings: number | null;
   recommended_action: string;
   telemetry_summary?: string;
   telemetry_signals?: string[];
@@ -91,10 +92,35 @@ type OllamaGenerateResponse = {
 function providerStatus(provider: ProviderStatus["provider"], available: boolean, reason?: string): ProviderStatus {
   return {
     provider,
+    execution_mode: provider === "ollama" ? "llm" : "heuristic_fallback",
     model: ENV.ollamaModel,
     available,
     reason,
   };
+}
+
+/**
+ * Sanitize model output strings to remove injection template markers,
+ * credential patterns, and system-prompt leakage artifacts.
+ */
+function sanitizeOutput(value: string): string {
+  return value
+    .replace(/\{\{[^}]*\}\}/g, "[REDACTED_TEMPLATE]")
+    .replace(/process\.env\b/gi, "[REDACTED]")
+    .replace(/api[_-]?key/gi, "[REDACTED]")
+    .replace(/database\s*password/gi, "[REDACTED]")
+    .replace(/admin\s*credentials?/gi, "[REDACTED]")
+    .replace(/\b\d{3}-\d{2}-\d{4}\b/g, "[REDACTED_SSN]")
+    .replace(/\b\d{4}[- ]?\d{4}[- ]?\d{4}[- ]?\d{4}\b/g, "[REDACTED_CARD]")
+    .replace(/<\|im_start\|>.*?<\|im_end\|>/gs, "[REDACTED_INJECTION]");
+}
+
+function sanitizeText(value: string): string {
+  return sanitizeOutput(value);
+}
+
+function sanitizeList(values: string[]): string[] {
+  return values.map(sanitizeOutput);
 }
 
 function parseJsonObject<T>(raw: string): T | null {
@@ -220,28 +246,31 @@ function fallbackMerchantConsultant(input: MerchantWorkspaceInput, reason?: stri
   };
 }
 
-function toText(value: unknown, fallback: string): string {
+function toText(value: unknown, fallback: string, sanitize = true): string {
   if (typeof value === "string") {
     const trimmed = value.trim();
-    return trimmed.length > 0 ? trimmed : fallback;
+    const result = trimmed.length > 0 ? trimmed : fallback;
+    return sanitize ? sanitizeText(result) : result;
   }
 
   if (Array.isArray(value)) {
     const joined = value.filter((item): item is string => typeof item === "string" && item.trim().length > 0).join(" ");
-    return joined.length > 0 ? joined : fallback;
+    const result = joined.length > 0 ? joined : fallback;
+    return sanitize ? sanitizeText(result) : result;
   }
 
   return fallback;
 }
 
-function toTextList(value: unknown, fallback: string[]): string[] {
+function toTextList(value: unknown, fallback: string[], sanitize = true): string[] {
   if (!Array.isArray(value)) return fallback;
   const normalized = value
     .filter((item): item is string => typeof item === "string")
     .map((item) => item.trim())
     .filter((item) => item.length > 0)
     .slice(0, 3);
-  return normalized.length > 0 ? normalized : fallback;
+  const result = normalized.length > 0 ? normalized : fallback;
+  return sanitize ? sanitizeList(result) : result;
 }
 
 function fallbackDispatchIntelligence(input: DispatchWorkspaceInput, reason?: string): LongCatDispatchIntelligence {
@@ -271,8 +300,16 @@ function fallbackDispatchIntelligence(input: DispatchWorkspaceInput, reason?: st
       "Explain dispatch decisions in operational language so ops teams can override them safely when ground truth changes.",
     ],
     risk_flags: [
-      input.online_drivers < input.trip_radar_candidates ? "Trip-radar eligible capacity exceeds active online supply; watch acceptance latency." : "Online driver pool is currently supporting trip-radar exposure.",
-      input.airport_ready_drivers < 2 ? "Airport reserve is thin; avoid overcommitting transfer-ready drivers." : "Airport reserve remains serviceable but should be monitored during peaks.",
+      input.trip_radar_candidates == null
+        ? "Trip-radar eligibility data is unavailable; no capacity conclusion is being inferred."
+        : input.online_drivers < input.trip_radar_candidates
+          ? "Trip-radar eligible capacity exceeds active online supply; watch acceptance latency."
+          : "Online driver pool is currently supporting trip-radar exposure.",
+      input.airport_ready_drivers == null
+        ? "Airport-readiness data is unavailable; no reserve-supply conclusion is being inferred."
+        : input.airport_ready_drivers < 2
+          ? "Airport reserve is thin; avoid overcommitting transfer-ready drivers."
+          : "Airport reserve remains serviceable but should be monitored during peaks.",
     ],
     ranked_candidates: input.supply_queue.slice(0, 4).map((entry, index) => ({
       id: ranked.rankedCandidates[index]?.id ?? null,

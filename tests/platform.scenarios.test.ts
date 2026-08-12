@@ -114,10 +114,6 @@ describe("SwitchOS platform scenario workflows", () => {
     lakehouseMocks.getLakehouseDriverStats.mockResolvedValue({ total: 6, online: 4 });
     lakehouseMocks.getLakehouseMarketplaceOverview.mockResolvedValue({ open_orders: 3, hotspots: [] });
 
-    workspaceMocks.getAnalyticsSummary.mockResolvedValue({ source: "workspace-fallback", orders: 7 });
-    workspaceMocks.getOrderStats.mockResolvedValue({ total: 7, completed: 5 });
-    workspaceMocks.getDriverStats.mockResolvedValue({ total: 4, online: 2 });
-    workspaceMocks.getMarketplaceOverview.mockResolvedValue({ open_orders: 2, hotspots: [] });
     workspaceMocks.getDriverMobilityWorkspace.mockResolvedValue({ kpis: { openOrders: 5 } });
     workspaceMocks.getMerchantChannelWorkspace.mockResolvedValue({ merchants: [{ id: 101 }] });
     workspaceMocks.getPhoneOrderingWorkspace.mockResolvedValue({ calls: [{ id: 11 }] });
@@ -195,13 +191,27 @@ describe("SwitchOS platform scenario workflows", () => {
     expect(lakehouseMocks.syncLakehouseFromPostgres).toHaveBeenCalledTimes(4);
   });
 
-  it("falls back to persisted workspace analytics when the lakehouse sync path fails", async () => {
+  it("surfaces lakehouse failure instead of substituting plausible workspace analytics", async () => {
     lakehouseMocks.syncLakehouseFromPostgres.mockRejectedValue(new Error("lakehouse unavailable"));
     const caller = appRouter.createCaller(createContext({ id: 4, name: "Ops", email: "ops@switchos.local", role: "admin" }));
-    await expect(caller.analytics.summary()).resolves.toEqual({ source: "workspace-fallback", orders: 7 });
-    await expect(caller.analytics.orderStats()).resolves.toEqual({ total: 7, completed: 5 });
-    await expect(caller.analytics.driverStats()).resolves.toEqual({ total: 4, online: 2 });
-    await expect(caller.analytics.marketplaceOverview()).resolves.toEqual({ open_orders: 2, hotspots: [] });
+    await expect(caller.analytics.summary()).rejects.toMatchObject<Partial<TRPCError>>({
+      code: "SERVICE_UNAVAILABLE",
+      message: "LAKEHOUSE_ANALYTICS_UNAVAILABLE",
+    });
+    expect(workspaceMocks.getAnalyticsSummary).not.toHaveBeenCalled();
+    expect(workspaceMocks.getOrderStats).not.toHaveBeenCalled();
+    expect(workspaceMocks.getDriverStats).not.toHaveBeenCalled();
+    expect(workspaceMocks.getMarketplaceOverview).not.toHaveBeenCalled();
+  });
+
+  it("surfaces workspace source failure instead of returning a plausible fallback payload", async () => {
+    workspaceMocks.getTablesideWorkspace.mockRejectedValue(new Error("tableside data source unavailable"));
+    const caller = appRouter.createCaller(createContext({ id: 41, name: "Ops", email: "ops@switchos.local", role: "admin" }));
+
+    await expect(caller.tablesideOrdering.summary()).rejects.toMatchObject<Partial<TRPCError>>({
+      code: "SERVICE_UNAVAILABLE",
+      message: "TABLESIDE_ORDERING_DATA_UNAVAILABLE",
+    });
   });
 
   it("returns the core stakeholder workspaces for authenticated operators", async () => {

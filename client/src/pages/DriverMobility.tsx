@@ -24,14 +24,15 @@ export default function DriverMobility() {
       badge="Supply operations"
       icon={CarFront}
       loading={query.isLoading}
+      error={query.error?.message}
       metrics={[
         { label: "Online Drivers", value: data?.summary?.online_drivers ?? 0, supporting: "Drivers currently available for multimodal assignments." },
-        { label: "Trip Radar Candidates", value: data?.summary?.trip_radar_candidates ?? 0, supporting: "Supply pool eligible for longer or less certain work via marketplace-style assignment." },
-        { label: "Airport-Ready Drivers", value: data?.summary?.airport_ready_drivers ?? 0, supporting: "Supply already staged for terminal, reserve, and transfer operations." },
-        { label: "Avg Weekly Earnings", value: data?.summary?.avg_weekly_earnings ?? 0, supporting: data?.summary?.recommended_action },
+        { label: "Busy Drivers", value: data?.summary?.busy_drivers ?? 0, supporting: "Drivers with active assignments in the verified database state." },
+        { label: "Pending Orders", value: data?.summary?.pending_orders ?? 0, supporting: "Orders still awaiting the next verified operational step." },
+        { label: "Avg Queue Minutes", value: data?.summary?.avg_queue_minutes ?? 0, supporting: data?.summary?.recommended_action },
       ]}
       highlights={[
-        ...(data?.earning_streams ?? []),
+        ...(data?.telemetry?.signals ?? []),
         ...(data?.longcat?.rider_guidance ?? []),
         logisticsTower?.summary ?? "Loading logistics control-tower summary…",
       ]}
