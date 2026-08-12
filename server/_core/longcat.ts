@@ -1,6 +1,5 @@
 import { ENV } from "./env";
 import { optimizeDispatch } from "./dispatchOptimizer";
-import { ENV } from "./env";
 
 // ============================================================
 // Tiered Model Fallback Router
@@ -33,9 +32,15 @@ const CIRCUIT_BREAKER_THRESHOLD = 3;
 const CIRCUIT_BREAKER_RESET_MS = 60_000; // 1 minute
 
 function hashPrompt(prompt: string): string {
-  // Simple hash for cache key — uses first 200 chars + length
-  const prefix = prompt.slice(0, 200);
-  return `${prefix.length}:${prefix.replace(/\d+/g, "N")}`;
+  // Hash for cache key — uses full prompt length and content signature
+  // Preserves digits to differentiate prompts with varying numeric inputs
+  let hash = 0;
+  for (let i = 0; i < prompt.length; i++) {
+    const chr = prompt.charCodeAt(i);
+    hash = ((hash << 5) - hash) + chr;
+    hash |= 0; // Convert to 32-bit integer
+  }
+  return `${prompt.length}:${hash}`;
 }
 
 function getCachedResponse(promptHash: string): CacheEntry | null {
