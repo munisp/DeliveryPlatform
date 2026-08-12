@@ -1,0 +1,87 @@
+{
+  "simulation_basis": "CPU load test results scaled by published Ollama GPU acceleration benchmarks",
+  "source_test": {
+    "model": "qwen2.5:0.5b",
+    "cpu_p50_ms": 46129,
+    "cpu_p95_ms": 90002,
+    "cpu_throughput": 0.09
+  },
+  "hardware_projections": {
+    "cpu_only": {
+      "hardware": "CPU Only (Xeon, this test)",
+      "acceleration_factor": 1.0,
+      "projected_latencies": {
+        "min": 8012,
+        "p50": 41034,
+        "p75": 57821,
+        "p90": 76214,
+        "p95": 76492,
+        "p99": 80043,
+        "max": 80043,
+        "avg": 45985
+      },
+      "projected_throughput": 0.09,
+      "slo_p95_pass": false,
+      "slo_p99_pass": false,
+      "slo_availability_pass": true,
+      "estimated_concurrent_capacity": 5
+    },
+    "nvidia_t4": {
+      "hardware": "NVIDIA T4 16GB",
+      "acceleration_factor": 15.0,
+      "projected_latencies": {
+        "min": 620,
+        "p50": 2697,
+        "p75": 3802,
+        "p90": 5135,
+        "p95": 5179,
+        "p99": 5281,
+        "max": 5281,
+        "avg": 3053
+      },
+      "projected_throughput": 1.35,
+      "slo_p95_pass": true,
+      "slo_p99_pass": true,
+      "slo_availability_pass": true,
+      "estimated_concurrent_capacity": 75
+    },
+    "nvidia_a10g": {
+      "hardware": "NVIDIA A10G 24GB",
+      "acceleration_factor": 30.0,
+      "projected_latencies": {
+        "min": 286,
+        "p50": 1356,
+        "p75": 1814,
+        "p90": 2554,
+        "p95": 2618,
+        "p99": 2631,
+        "max": 2631,
+        "avg": 1521
+      },
+      "projected_throughput": 2.7,
+      "slo_p95_pass": true,
+      "slo_p99_pass": true,
+      "slo_availability_pass": true,
+      "estimated_concurrent_capacity": 150
+    },
+    "nvidia_a100": {
+      "hardware": "NVIDIA A100 80GB",
+      "acceleration_factor": 60.0,
+      "projected_latencies": {
+        "min": 200,
+        "p50": 682,
+        "p75": 936,
+        "p90": 1254,
+        "p95": 1274,
+        "p99": 1314,
+        "max": 1314,
+        "avg": 769
+      },
+      "projected_throughput": 5.4,
+      "slo_p95_pass": true,
+      "slo_p99_pass": true,
+      "slo_availability_pass": true,
+      "estimated_concurrent_capacity": 300
+    }
+  }
+}
