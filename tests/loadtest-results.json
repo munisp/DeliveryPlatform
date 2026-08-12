@@ -1,0 +1,271 @@
+{
+  "timestamp": "2026-08-12T17:52:36.087Z",
+  "config": {
+    "ollamaUrl": "http://localhost:11434",
+    "model": "qwen2.5:0.5b",
+    "concurrency": 5,
+    "totalRequests": 30
+  },
+  "summary": {
+    "totalDurationMs": 317032,
+    "successCount": 27,
+    "failCount": 3,
+    "availabilityPct": 90,
+    "throughputReqPerSec": 0.09
+  },
+  "latency": {
+    "min": 8003,
+    "p50": 46129,
+    "p75": 64847,
+    "p90": 90000,
+    "p95": 90002,
+    "p99": 90002,
+    "max": 90002,
+    "avg": 50373
+  },
+  "slo": {
+    "p95Target": 30000,
+    "p95Actual": 90002,
+    "p95Pass": false,
+    "p99Target": 60000,
+    "p99Actual": 90002,
+    "p99Pass": false,
+    "availabilityTarget": 95,
+    "availabilityActual": 90
+  },
+  "perWorkspace": {
+    "consumer": {
+      "latencies": [
+        8003,
+        35195,
+        38773,
+        38826,
+        41957,
+        46828,
+        57827,
+        76131,
+        90000,
+        90002
+      ],
+      "success": 8,
+      "fail": 2
+    },
+    "dispatch": {
+      "latencies": [
+        11513,
+        34570,
+        35615,
+        37220,
+        37538,
+        38390,
+        39384,
+        50910,
+        52141,
+        74757
+      ],
+      "success": 10,
+      "fail": 0
+    },
+    "merchant": {
+      "latencies": [
+        31815,
+        33244,
+        40983,
+        46129,
+        52761,
+        59390,
+        64847,
+        76415,
+        80029,
+        90002
+      ],
+      "success": 9,
+      "fail": 1
+    }
+  },
+  "rawResults": [
+    {
+      "workspace": "consumer",
+      "latencyMs": 8003,
+      "success": true,
+      "executionMode": "llm"
+    },
+    {
+      "workspace": "dispatch",
+      "latencyMs": 11513,
+      "success": true,
+      "executionMode": "llm"
+    },
+    {
+      "workspace": "merchant",
+      "latencyMs": 31815,
+      "success": true,
+      "executionMode": "llm"
+    },
+    {
+      "workspace": "consumer",
+      "latencyMs": 38773,
+      "success": true,
+      "executionMode": "llm"
+    },
+    {
+      "workspace": "merchant",
+      "latencyMs": 52761,
+      "success": true,
+      "executionMode": "llm"
+    },
+    {
+      "workspace": "dispatch",
+      "latencyMs": 50910,
+      "success": true,
+      "executionMode": "llm"
+    },
+    {
+      "workspace": "dispatch",
+      "latencyMs": 52141,
+      "success": true,
+      "executionMode": "llm"
+    },
+    {
+      "workspace": "merchant",
+      "latencyMs": 46129,
+      "success": true,
+      "executionMode": "llm"
+    },
+    {
+      "workspace": "consumer",
+      "latencyMs": 46828,
+      "success": true,
+      "executionMode": "llm"
+    },
+    {
+      "workspace": "dispatch",
+      "latencyMs": 39384,
+      "success": true,
+      "executionMode": "llm"
+    },
+    {
+      "workspace": "consumer",
+      "latencyMs": 41957,
+      "success": true,
+      "executionMode": "llm"
+    },
+    {
+      "workspace": "merchant",
+      "latencyMs": 64847,
+      "success": true,
+      "executionMode": "llm"
+    },
+    {
+      "workspace": "consumer",
+      "latencyMs": 57827,
+      "success": true,
+      "executionMode": "llm"
+    },
+    {
+      "workspace": "merchant",
+      "latencyMs": 59390,
+      "success": true,
+      "executionMode": "llm"
+    },
+    {
+      "workspace": "merchant",
+      "latencyMs": 76415,
+      "success": true,
+      "executionMode": "llm"
+    },
+    {
+      "workspace": "consumer",
+      "latencyMs": 76131,
+      "success": true,
+      "executionMode": "llm"
+    },
+    {
+      "workspace": "consumer",
+      "latencyMs": 90002,
+      "success": false,
+      "executionMode": "timeout_or_error",
+      "error": "The operation was aborted due to timeout"
+    },
+    {
+      "workspace": "merchant",
+      "latencyMs": 90002,
+      "success": false,
+      "executionMode": "timeout_or_error",
+      "error": "The operation was aborted due to timeout"
+    },
+    {
+      "workspace": "consumer",
+      "latencyMs": 90000,
+      "success": false,
+      "executionMode": "timeout_or_error",
+      "error": "The operation was aborted due to timeout"
+    },
+    {
+      "workspace": "merchant",
+      "latencyMs": 80029,
+      "success": true,
+      "executionMode": "llm"
+    },
+    {
+      "workspace": "dispatch",
+      "latencyMs": 74757,
+      "success": true,
+      "executionMode": "llm"
+    },
+    {
+      "workspace": "consumer",
+      "latencyMs": 38826,
+      "success": true,
+      "executionMode": "llm"
+    },
+    {
+      "workspace": "dispatch",
+      "latencyMs": 37538,
+      "success": true,
+      "executionMode": "llm"
+    },
+    {
+      "workspace": "dispatch",
+      "latencyMs": 35615,
+      "success": true,
+      "executionMode": "llm"
+    },
+    {
+      "workspace": "consumer",
+      "latencyMs": 35195,
+      "success": true,
+      "executionMode": "llm"
+    },
+    {
+      "workspace": "dispatch",
+      "latencyMs": 34570,
+      "success": true,
+      "executionMode": "llm"
+    },
+    {
+      "workspace": "merchant",
+      "latencyMs": 40983,
+      "success": true,
+      "executionMode": "llm"
+    },
+    {
+      "workspace": "dispatch",
+      "latencyMs": 38390,
+      "success": true,
+      "executionMode": "llm"
+    },
+    {
+      "workspace": "dispatch",
+      "latencyMs": 37220,
+      "success": true,
+      "executionMode": "llm"
+    },
+    {
+      "workspace": "merchant",
+      "latencyMs": 33244,
+      "success": true,
+      "executionMode": "llm"
+    }
+  ]
+}

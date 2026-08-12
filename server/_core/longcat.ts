@@ -103,8 +103,72 @@ function providerStatus(provider: ProviderStatus["provider"], available: boolean
  * Sanitize model output strings to remove injection template markers,
  * credential patterns, and system-prompt leakage artifacts.
  */
+/**
+ * Detect and redact base64-encoded sensitive data in model output.
+ * Looks for base64 strings that decode to known PII or credential patterns.
+ */
+function redactBase64Secrets(value: string): string {
+  // Match potential base64 strings (16+ chars, valid base64 alphabet)
+  return value.replace(/[A-Za-z0-9+/]{16,}={0,2}/g, (match) => {
+    try {
+      const decoded = Buffer.from(match, "base64").toString("utf-8");
+      // Check if decoded content contains sensitive patterns
+      if (/\d{3}-\d{2}-\d{4}/.test(decoded)) return "[REDACTED_ENCODED_SSN]";
+      if (/\d{4}[- ]?\d{4}[- ]?\d{4}[- ]?\d{4}/.test(decoded)) return "[REDACTED_ENCODED_CARD]";
+      if (/sk-[a-zA-Z0-9]{10,}/.test(decoded)) return "[REDACTED_ENCODED_KEY]";
+      if (/postgres(ql)?:\/\//.test(decoded)) return "[REDACTED_ENCODED_DSN]";
+      if (/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/.test(decoded)) return "[REDACTED_ENCODED_EMAIL]";
+    } catch {
+      // Not valid base64, leave as-is
+    }
+    return match;
+  });
+}
+
+/**
+ * Normalize Unicode homoglyphs to ASCII equivalents for pattern matching.
+ */
+function normalizeHomoglyphs(value: string): string {
+  // Cyrillic → Latin lookalike map
+  const homoglyphMap: Record<string, string> = {
+    "\u0430": "a", // Cyrillic а
+    "\u0435": "e", // Cyrillic е
+    "\u043E": "o", // Cyrillic о
+    "\u0440": "p", // Cyrillic р
+    "\u0441": "c", // Cyrillic с
+    "\u0443": "y", // Cyrillic у
+    "\u0445": "x", // Cyrillic х
+    "\u0456": "i", // Cyrillic і
+  };
+  let normalized = value;
+  for (const [homoglyph, ascii] of Object.entries(homoglyphMap)) {
+    normalized = normalized.replaceAll(homoglyph, ascii);
+  }
+  // Normalize Unicode hyphens/dashes to ASCII hyphen for PII detection
+  normalized = normalized.replace(/[\u2010\u2011\u2012\u2013\u2014\u2015\u2043\uFE58\uFE63\uFF0D]/g, "-");
+  return normalized;
+}
+
 function sanitizeOutput(value: string): string {
-  return value
+  // First pass: redact base64-encoded secrets
+  let result = redactBase64Secrets(value);
+  // Second pass: normalize homoglyphs then apply keyword/pattern sanitization
+  const normalized = normalizeHomoglyphs(result);
+  // If normalization reveals a sensitive pattern, redact in the original
+  if (/api[_-]?key/i.test(normalized) && !/api[_-]?key/i.test(result)) {
+    result = result.replace(/[^\s]{3,}api[^\s]*/gi, "[REDACTED_HOMOGLYPH]")
+      .replace(new RegExp(value.match(/\S*\u0430\S*pi[_-]?\S*\u0435\S*y\S*/gi)?.[0] || "(?!)", "g"), "[REDACTED_HOMOGLYPH]");
+    // Fallback: if Cyrillic chars are present near 'pi' or 'key', redact the phrase
+    result = result.replace(/[\u0400-\u04FF]\S*(?:pi|key|env|admin)\S*/gi, "[REDACTED_HOMOGLYPH]");
+  }
+  if (/process\.env/i.test(normalized) && !/process\.env/i.test(result)) {
+    result = result.replace(/[\u0400-\u04FF]\S*(?:cess|env)\S*/gi, "[REDACTED_HOMOGLYPH]");
+  }
+  if (/admin\s*credentials?/i.test(normalized) && !/admin\s*credentials?/i.test(result)) {
+    result = result.replace(/[\u0400-\u04FF]\S*(?:dmin|cred)\S*/gi, "[REDACTED_HOMOGLYPH]");
+  }
+  // Apply standard patterns on the (possibly already partially redacted) result
+  return result
     .replace(/\{\{[^}]*\}\}/g, "[REDACTED_TEMPLATE]")
     .replace(/process\.env\b/gi, "[REDACTED]")
     .replace(/api[_-]?key/gi, "[REDACTED]")
@@ -112,7 +176,8 @@ function sanitizeOutput(value: string): string {
     .replace(/admin\s*credentials?/gi, "[REDACTED]")
     .replace(/\b\d{3}-\d{2}-\d{4}\b/g, "[REDACTED_SSN]")
     .replace(/\b\d{4}[- ]?\d{4}[- ]?\d{4}[- ]?\d{4}\b/g, "[REDACTED_CARD]")
-    .replace(/<\|im_start\|>.*?<\|im_end\|>/gs, "[REDACTED_INJECTION]");
+    .replace(/<\|im_start\|>.*?<\|im_end\|>/gs, "[REDACTED_INJECTION]")
+    .replace(/sk-[a-zA-Z0-9_-]{10,}/g, "[REDACTED_KEY]");
 }
 
 function sanitizeText(value: string): string {
