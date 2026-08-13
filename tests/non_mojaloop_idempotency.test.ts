@@ -16,7 +16,7 @@ import {
 } from "../server/db";
 import { sendEmail } from "../server/_core/notificationGateway";
 
-const TEST_DATABASE_URL = "postgresql://switchos:switchos@127.0.0.1:5432/switchos?sslmode=disable";
+const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
 
 let pool: Pool | null = null;
 let dbAvailable = false;
@@ -51,6 +51,9 @@ async function createUser(name: string, email: string, extras: Record<string, un
 
 describe("Non-Mojaloop durable idempotency hardening", () => {
   beforeAll(async () => {
+    if (!TEST_DATABASE_URL) {
+      return;
+    }
     pool = new Pool({ connectionString: TEST_DATABASE_URL });
 
     try {

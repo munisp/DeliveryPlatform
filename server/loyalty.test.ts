@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Pool } from 'pg';
 import { awardPoints, getLoyaltyAccount, getLoyaltyStats, initializeLoyaltyAccount, redeemPoints } from './db';
 
-const TEST_DATABASE_URL = 'postgresql://ubuntu:ubuntu@localhost:5432/switchos';
+const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
 
 let testUserId: number | null = null;
 let pool: Pool | null = null;
@@ -16,6 +16,9 @@ async function requireDbOrSkip(context: { skip: () => never }) {
 
 describe('Loyalty Program', () => {
   beforeAll(async () => {
+    if (!TEST_DATABASE_URL) {
+      return;
+    }
     pool = new Pool({ connectionString: TEST_DATABASE_URL });
 
     try {

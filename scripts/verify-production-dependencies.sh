@@ -71,6 +71,6 @@ probe_broker_list "Fluvio" "${FLUVIO_KAFKA_BROKERS}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SWITCHOS_PUBLIC_HOST="${SWITCHOS_PUBLIC_HOST}" \
 SWITCHOS_AUTH_HOST="${SWITCHOS_AUTH_HOST}" \
-"${SCRIPT_DIR}/verify-staging-edge.sh"
+bash "${SCRIPT_DIR}/verify-staging-edge.sh"
 
 echo "PASS: production dependency gate completed"

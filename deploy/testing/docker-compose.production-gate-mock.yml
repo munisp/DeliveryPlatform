@@ -1,0 +1,13 @@
+services:
+  controlled-mock-dependencies:
+    image: node:22-slim
+    container_name: switchos-controlled-production-gate-mock
+    network_mode: host
+    working_dir: /app
+    command: ["node", "/app/scripts/mock-production-dependency-server.cjs"]
+    volumes:
+      - ../../:/app:ro
+      - ../../.mock-production-gate-certs:/certs:ro
+    environment:
+      MOCK_TLS_KEY: /certs/key.pem
+      MOCK_TLS_CERT: /certs/cert.pem
