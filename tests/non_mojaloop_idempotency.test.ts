@@ -119,10 +119,10 @@ describe("Non-Mojaloop durable idempotency hardening", () => {
 
     const userId = await createUser("Redeem User", `redeem-${Date.now()}@switchos.test`);
     const rewardResult = await pool!.query(
-      `INSERT INTO loyalty_rewards (reward_name, description, points_cost, reward_type, reward_value, is_active)
-       VALUES ($1, $2, $3, $4, $5, true)
+      `INSERT INTO loyalty_rewards (reward_name, description, points_cost, points_required, reward_type, reward_value, is_active)
+       VALUES ($1, $2, $3, $4, $5, $6, true)
        RETURNING id`,
-      ["Idempotent Reward", "test reward", 300, "voucher", "NGN 300"],
+      ["Idempotent Reward", "test reward", 300, 300, "voucher", "NGN 300"],
     );
     const rewardId = rewardResult.rows[0].id as number;
     createdRewardIds.push(rewardId);
@@ -197,8 +197,11 @@ describe("Non-Mojaloop durable idempotency hardening", () => {
     });
     createdCampaignIds.push(campaign.id);
 
+    vi.mocked(sendEmail).mockClear();
     const firstRun = await sendCampaignToAudience(campaign.id, "campaign-audience-wave7-key");
+    const callsAfterFirstRun = vi.mocked(sendEmail).mock.calls.length;
     const secondRun = await sendCampaignToAudience(campaign.id, "campaign-audience-wave7-key");
+    const callsAfterSecondRun = vi.mocked(sendEmail).mock.calls.length;
 
     expect(firstRun.total).toBeGreaterThanOrEqual(2);
     expect(secondRun.total).toBe(firstRun.total);
@@ -209,6 +212,7 @@ describe("Non-Mojaloop durable idempotency hardening", () => {
     );
     expect(sendCount.rows[0].count).toBe(2);
 
-    expect(vi.mocked(sendEmail).mock.calls.length).toBe(2);
+    expect(callsAfterFirstRun).toBe(firstRun.total);
+    expect(callsAfterSecondRun).toBe(callsAfterFirstRun);
   });
 });
