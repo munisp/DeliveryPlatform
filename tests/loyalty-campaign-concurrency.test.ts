@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Pool } from 'pg';
+import { writeFileSync } from 'node:fs';
 import {
   awardPoints,
   createCampaign,
@@ -82,6 +83,33 @@ describe('loyalty redemption and campaign allocation concurrency', () => {
     const balance = await pool!.query('SELECT points_balance FROM loyalty_points WHERE user_id = $1', [userId]);
     const redemptions = await pool!.query('SELECT COUNT(*)::int AS count FROM loyalty_redemptions WHERE user_id = $1', [userId]);
     const debits = await pool!.query("SELECT COUNT(*)::int AS count FROM loyalty_transactions WHERE user_id = $1 AND transaction_type = 'redeem'", [userId]);
+    const transactionRows = await pool!.query(
+      `SELECT id, transaction_type, points, description, created_at
+       FROM loyalty_transactions
+       WHERE user_id = $1
+       ORDER BY created_at ASC, id ASC`,
+      [userId],
+    );
+    const redemptionRows = await pool!.query(
+      `SELECT id, reward_id, points_spent, status, created_at
+       FROM loyalty_redemptions
+       WHERE user_id = $1
+       ORDER BY created_at ASC, id ASC`,
+      [userId],
+    );
+    if (process.env.LOYALTY_CONCURRENCY_LOG_FILE) {
+      writeFileSync(process.env.LOYALTY_CONCURRENCY_LOG_FILE, JSON.stringify({
+        scenario: '100-way unique loyalty redemption race',
+        attemptedRedemptions: 100,
+        fulfilledRedemptions: attempts.filter((result) => result.status === 'fulfilled').length,
+        rejectedRedemptions: attempts.filter((result) => result.status === 'rejected').length,
+        finalPointsBalance: Number(balance.rows[0].points_balance),
+        redemptionCount: redemptions.rows[0].count,
+        debitCount: debits.rows[0].count,
+        transactions: transactionRows.rows,
+        redemptions: redemptionRows.rows,
+      }, null, 2));
+    }
     expect(Number(balance.rows[0].points_balance)).toBe(0);
     expect(redemptions.rows[0].count).toBe(10);
     expect(debits.rows[0].count).toBe(10);
