@@ -5197,21 +5197,40 @@ export async function createCampaignVariant(variantData: {
   await getDb();
   if (!_pool) return null;
 
-  const result = await _pool.query<any>(
-    `INSERT INTO campaign_variants 
-     (campaign_id, variant_name, email_template, sms_template, traffic_allocation)
-     VALUES ($1, $2, $3, $4, $5)
-     RETURNING *`,
-    [
-      variantData.campaign_id,
-      variantData.variant_name,
-      variantData.email_template,
-      variantData.sms_template,
-      variantData.traffic_allocation || 50,
-    ]
-  );
+  const allocation = variantData.traffic_allocation ?? 50;
+  if (!Number.isFinite(allocation) || allocation < 0 || allocation > 100) {
+    throw new Error('Traffic allocation must be between 0 and 100');
+  }
 
-  return result.rows[0];
+  const client = await _pool.connect();
+  try {
+    await client.query('BEGIN');
+    const campaignLock = await client.query('SELECT id FROM marketing_campaigns WHERE id = $1 FOR UPDATE', [variantData.campaign_id]);
+    if (campaignLock.rows.length === 0) {
+      throw new Error('Campaign not found');
+    }
+    const current = await client.query<any>(
+      'SELECT COALESCE(SUM(traffic_allocation), 0) AS total FROM campaign_variants WHERE campaign_id = $1',
+      [variantData.campaign_id],
+    );
+    if (Number(current.rows[0].total) + allocation > 100) {
+      throw new Error('Traffic allocation would exceed 100 percent');
+    }
+    const result = await client.query<any>(
+      `INSERT INTO campaign_variants
+       (campaign_id, variant_name, email_template, sms_template, traffic_allocation)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING *`,
+      [variantData.campaign_id, variantData.variant_name, variantData.email_template, variantData.sms_template, allocation],
+    );
+    await client.query('COMMIT');
+    return result.rows[0];
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 export async function getCampaignVariants(campaignId: number) {
@@ -5462,15 +5481,44 @@ export async function updateVariantAllocation(variantId: number, allocation: num
   await getDb();
   if (!_pool) return null;
 
-  const result = await _pool.query<any>(
-    `UPDATE campaign_variants 
-     SET traffic_allocation = $1, updated_at = NOW()
-     WHERE id = $2
-     RETURNING *`,
-    [allocation, variantId]
-  );
+  if (!Number.isFinite(allocation) || allocation < 0 || allocation > 100) {
+    throw new Error('Traffic allocation must be between 0 and 100');
+  }
 
-  return result.rows[0];
+  const client = await _pool.connect();
+  try {
+    await client.query('BEGIN');
+    const variant = await client.query<any>('SELECT campaign_id FROM campaign_variants WHERE id = $1', [variantId]);
+    if (variant.rows.length === 0) {
+      throw new Error('Campaign variant not found');
+    }
+    const campaignId = variant.rows[0].campaign_id;
+    await client.query('SELECT id FROM marketing_campaigns WHERE id = $1 FOR UPDATE', [campaignId]);
+    const variants = await client.query<any>(
+      'SELECT id, traffic_allocation FROM campaign_variants WHERE campaign_id = $1 FOR UPDATE',
+      [campaignId],
+    );
+    const otherAllocation = variants.rows
+      .filter((item: { id: number }) => item.id !== variantId)
+      .reduce((total: number, item: { traffic_allocation: string | number }) => total + Number(item.traffic_allocation), 0);
+    if (otherAllocation + allocation > 100) {
+      throw new Error('Traffic allocation would exceed 100 percent');
+    }
+    const result = await client.query<any>(
+      `UPDATE campaign_variants
+       SET traffic_allocation = $1, updated_at = NOW()
+       WHERE id = $2
+       RETURNING *`,
+      [allocation, variantId],
+    );
+    await client.query('COMMIT');
+    return result.rows[0];
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 
