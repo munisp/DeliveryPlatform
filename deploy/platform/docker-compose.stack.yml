@@ -17,7 +17,7 @@ services:
     image: redis:7
     container_name: switchos-redis
     restart: unless-stopped
-    command: ["redis-server", "--appendonly", "yes"]
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:?REDIS_PASSWORD must be set}"]
     volumes:
       - redis_data:/data
 
@@ -27,8 +27,8 @@ services:
     restart: unless-stopped
     environment:
       discovery.type: single-node
-      plugins.security.disabled: "true"
-      OPENSEARCH_INITIAL_ADMIN_PASSWORD: change-me-before-production
+      plugins.security.disabled: "false"
+      OPENSEARCH_INITIAL_ADMIN_PASSWORD: ${OPENSEARCH_INITIAL_ADMIN_PASSWORD:?OPENSEARCH_INITIAL_ADMIN_PASSWORD must be set}
       bootstrap.memory_lock: "true"
       OPENSEARCH_JAVA_OPTS: "-Xms512m -Xmx512m"
     ulimits:
@@ -52,7 +52,7 @@ services:
       - start
       - --import-realm
     environment:
-      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:-switchos-admin}
+      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:?KEYCLOAK_ADMIN must be set}
       KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?KEYCLOAK_ADMIN_PASSWORD must be set}
       KC_DB: postgres
       KC_DB_URL: jdbc:postgresql://postgres:5432/switchos
@@ -95,8 +95,8 @@ services:
       - apisix
       - keycloak
     environment:
-      SWITCHOS_PUBLIC_HOST: ${SWITCHOS_PUBLIC_HOST:-localhost}
-      SWITCHOS_AUTH_HOST: ${SWITCHOS_AUTH_HOST:-auth.localhost}
+      SWITCHOS_PUBLIC_HOST: ${SWITCHOS_PUBLIC_HOST:?SWITCHOS_PUBLIC_HOST must be set}
+      SWITCHOS_AUTH_HOST: ${SWITCHOS_AUTH_HOST:?SWITCHOS_AUTH_HOST must be set}
     ports:
       - "80:80"
       - "443:443"
