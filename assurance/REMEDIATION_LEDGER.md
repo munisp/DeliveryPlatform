@@ -4,7 +4,7 @@ The assessed release state is **BLOCKED**. The entries below are evidence-backed
 
 | ID | Severity | State | Finding | Affected flow / paths | Evidence | Minimum verified exit condition |
 |---|---|---|---|---|---|---|
-| F-001 | Critical | DISCOVERED | PostgreSQL is implemented as a production `TigerBeetleClient`; new transfer payer accounts receive a fabricated `1_000_000` cent balance. | `services/go/mojaloop/tigerbeetle_client.go:38-252`; startup in `main.go:1294-1308`. | Client imports `database/sql` and `lib/pq`, creates local ledger tables, and calls `ensureAccount(payerID, 1_000_000)` for transfers. The Go module does not require the official TigerBeetle client. | Use an official TigerBeetle client against an explicitly configured cluster; remove fabricated account/balance creation; verify creation, duplicate, insufficient-funds, reversal, and reconciliation against real TigerBeetle. |
+| F-001 | Critical | RETESTING | PostgreSQL was implemented as a production `TigerBeetleClient`; new transfer payer accounts received a fabricated `1_000_000` cent balance. | `services/go/mojaloop/tigerbeetle_client.go`; `services/go/mojaloop/main.go`; `services/go/mojaloop/main_test.go`; `services/go/mojaloop/go.mod`. | The substitute is replaced with the official `github.com/tigerbeetle/tigerbeetle-go v0.17.9` client. Startup now requires explicit cluster, replica, ledger, and account-map configuration; it rejects nil ledger operation and removes automatic funding. `go mod verify`, `go vet`, and `go test -race ./...` pass. No real TigerBeetle cluster or funded account set was available to verify the live ledger protocol. | Provision an isolated real cluster and run account creation, insufficient-funds, duplicate-transfer, refund, and reconciliation scenarios with retained evidence. |
 | F-002 | Critical | DISCOVERED | Funds amounts are represented as `float64` across transfer, quote, refund, fee, and reconciliation paths. | `services/go/mojaloop/main.go:31-102,861-883`; `workflow_runtime.go:27-38`. | API and durable model structs expose `float64`; `amountToCents` converts a rounded floating value. | Approved minor-unit currency policy; exact integer representation and validation at all API, database, ledger, and event boundaries; boundary tests. |
 | F-003 | Critical | DISCOVERED | Transfer/refund/quote remote switch failures are silently downgraded to warnings after a local ledger effect. | `services/go/mojaloop/main.go:230-261,291-319,362-410`. | `sendToSwitch` errors are logged and operations continue as successful. | Durable state machine and outbox/reconciliation; external submission outcome is truthful and restart-safe. |
 | F-004 | High | VERIFIED_FIXED | Idempotency completion was outside the loyalty/referral domain transaction, allowing a post-commit crash to strand a completed operation at `in_progress`. | `server/db.ts:3028-3094,3594-3746,4075-4242`; `tests/non_mojaloop_idempotency.test.ts`. | Before remediation, the idempotency claim occurred before `BEGIN` and completion occurred after `COMMIT`. The claim and completion now occur within the same transaction. Real PostgreSQL evidence: 29 database-backed tests and 2 concurrency tests passed; the new failed-redemption/retry regression passed. | Verified at candidate revision after the transaction-boundary changes. Process-kill/restart coverage remains a separate system-level release gate. |
@@ -22,11 +22,11 @@ The assessed release state is **BLOCKED**. The entries below are evidence-backed
 
 | State | Count |
 |---|---:|
-| DISCOVERED | 9 |
+| DISCOVERED | 8 |
 | EXTERNAL_BLOCKED | 1 |
 | IMPLEMENTING | 0 |
 | REGRESSION_PROVEN | 0 |
-| RETESTING | 1 |
+| RETESTING | 2 |
 | VERIFIED_FIXED | 2 |
 
 The next remediation iteration must start with F-001 through F-005 because these govern financial integrity and distributed recovery. External blockers do not justify deferring independent in-scope fixes.

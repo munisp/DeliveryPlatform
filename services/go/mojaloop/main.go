@@ -105,6 +105,9 @@ type ReconciliationReport struct {
 const insecureInternalServiceToken = "switchos-internal-dev-token-change-before-production"
 
 func NewMojaloopService(tigerBeetle *TigerBeetleClient) (*MojaloopService, error) {
+	if tigerBeetle == nil {
+		return nil, fmt.Errorf("TigerBeetle ledger client is required for Mojaloop funds operations")
+	}
 	databaseURL := getEnv("DATABASE_URL", "postgresql://ubuntu:ubuntu@127.0.0.1:5432/switchos?sslmode=disable")
 	internalServiceToken := strings.TrimSpace(os.Getenv("INTERNAL_SERVICE_TOKEN"))
 	if internalServiceToken == "" || subtle.ConstantTimeCompare([]byte(internalServiceToken), []byte(insecureInternalServiceToken)) == 1 {
@@ -233,11 +236,9 @@ func (s *MojaloopService) initiateTransfer(payload TransferInitiationPayload, id
 			State:      "RESERVED",
 		}
 
-		if s.tigerBeetle != nil {
-			amountCents := amountToCents(payload.Amount)
-			if err := s.tigerBeetle.ProcessMojaloopTransfer(payload.TransferID, payload.PayerFSP, payload.PayeeFSP, amountCents); err != nil {
-				return nil, fmt.Errorf("ledger transfer failed: %w", err)
-			}
+		amountCents := amountToCents(payload.Amount)
+		if err := s.tigerBeetle.ProcessMojaloopTransfer(payload.TransferID, payload.PayerFSP, payload.PayeeFSP, amountCents); err != nil {
+			return nil, fmt.Errorf("ledger transfer failed: %w", err)
 		}
 
 		if err := s.storeTransfer(transfer); err != nil {
@@ -365,10 +366,8 @@ func (s *MojaloopService) initiateRefund(payload RefundInitiationPayload, idempo
 			CompletedTime:      time.Now().UTC(),
 		}
 
-		if s.tigerBeetle != nil {
-			if err := s.tigerBeetle.ReverseMojaloopTransfer(refund.RefundID, refund.OriginalTransferID, transfer.PayerFSP, transfer.PayeeFSP, amountToCents(refund.Amount)); err != nil {
-				return nil, fmt.Errorf("ledger refund failed: %w", err)
-			}
+		if err := s.tigerBeetle.ReverseMojaloopTransfer(refund.RefundID, refund.OriginalTransferID, transfer.PayerFSP, transfer.PayeeFSP, amountToCents(refund.Amount)); err != nil {
+			return nil, fmt.Errorf("ledger refund failed: %w", err)
 		}
 
 		if err := s.storeRefund(refund); err != nil {
@@ -811,16 +810,12 @@ func (s *MojaloopService) buildReconciliationReport(transferID string) (Reconcil
 		platformNetSettled = 0
 	}
 
-	var ledger *TransferReconciliation
-	ledgerConsistent := true
-	if s.tigerBeetle != nil {
-		reconciliation, err := s.tigerBeetle.GetTransferReconciliation(transferID)
-		if err != nil {
-			return ReconciliationReport{}, err
-		}
-		ledger = &reconciliation
-		ledgerConsistent = reconciliation.LedgerConsistent && amountToCents(platformRefunded) == reconciliation.RefundedAmount
+	reconciliation, err := s.tigerBeetle.GetTransferReconciliation(transferID)
+	if err != nil {
+		return ReconciliationReport{}, err
 	}
+	ledger := &reconciliation
+	ledgerConsistent := reconciliation.LedgerConsistent && amountToCents(platformRefunded) == reconciliation.RefundedAmount
 
 	recommendation := "No action required."
 	if !ledgerConsistent {
@@ -1300,18 +1295,13 @@ func (s *MojaloopService) handleReconcileTransferHTTP(w http.ResponseWriter, r *
 func main() {
 	httpPort := getEnv("HTTP_PORT", "8086")
 	bindHost := getEnv("BIND_HOST", "127.0.0.1")
-	databaseURL := getEnv("DATABASE_URL", "postgresql://ubuntu:ubuntu@127.0.0.1:5432/switchos?sslmode=disable")
 	serviceMode := strings.ToLower(strings.TrimSpace(getEnv("MOJALOOP_SERVICE_MODE", "http")))
 
-	var tigerBeetleClient *TigerBeetleClient
-	var err error
-	if getEnv("TIGERBEETLE_ENABLED", "true") == "true" {
-		tigerBeetleClient, err = NewTigerBeetleClient(databaseURL)
-		if err != nil {
-			log.Fatalf("Failed to initialize TigerBeetle client: %v", err)
-		}
-		defer tigerBeetleClient.Close()
+	tigerBeetleClient, err := NewTigerBeetleClient()
+	if err != nil {
+		log.Fatalf("Failed to initialize TigerBeetle client: %v", err)
 	}
+	defer tigerBeetleClient.Close()
 	service, err := NewMojaloopService(tigerBeetleClient)
 	if err != nil {
 		log.Fatalf("Failed to initialize Mojaloop service: %v", err)
