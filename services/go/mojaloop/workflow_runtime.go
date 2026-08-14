@@ -25,17 +25,17 @@ type FundsWorkflowEvent struct {
 }
 
 type ReconciliationOverview struct {
-	TransferCount          int        `json:"transferCount"`
-	RefundCount            int        `json:"refundCount"`
-	SettledTransfers       int        `json:"settledTransfers"`
-	PartiallyRefunded      int        `json:"partiallyRefundedTransfers"`
-	FullyRefunded          int        `json:"fullyRefundedTransfers"`
-	InconsistentAudits     int        `json:"inconsistentAudits"`
-	GrossTransferredAmount float64    `json:"grossTransferredAmount"`
-	RefundedAmount         float64    `json:"refundedAmount"`
-	NetSettledAmount       float64    `json:"netSettledAmount"`
-	LastReconciledAt       *time.Time `json:"lastReconciledAt,omitempty"`
-	Recommendation         string     `json:"recommendation"`
+	TransferCount         int        `json:"transferCount"`
+	RefundCount           int        `json:"refundCount"`
+	SettledTransfers      int        `json:"settledTransfers"`
+	PartiallyRefunded     int        `json:"partiallyRefundedTransfers"`
+	FullyRefunded         int        `json:"fullyRefundedTransfers"`
+	InconsistentAudits    int        `json:"inconsistentAudits"`
+	GrossTransferredMinor uint64     `json:"grossTransferredMinor"`
+	RefundedMinor         uint64     `json:"refundedMinor"`
+	NetSettledMinor       uint64     `json:"netSettledMinor"`
+	LastReconciledAt      *time.Time `json:"lastReconciledAt,omitempty"`
+	Recommendation        string     `json:"recommendation"`
 }
 
 func (s *MojaloopService) ensureWorkflowPersistence() error {
@@ -85,11 +85,6 @@ func (s *MojaloopService) ensureWorkflowPersistence() error {
 }
 
 func (s *MojaloopService) recordFundsWorkflowEvent(event FundsWorkflowEvent) error {
-	payloadBytes, err := json.Marshal(event.Payload)
-	if err != nil {
-		return fmt.Errorf("marshal workflow event payload: %w", err)
-	}
-
 	tx, err := s.db.Begin()
 	if err != nil {
 		return fmt.Errorf("begin workflow event transaction: %w", err)
@@ -100,55 +95,14 @@ func (s *MojaloopService) recordFundsWorkflowEvent(event FundsWorkflowEvent) err
 		}
 	}()
 
-	_, err = tx.Exec(
-		`INSERT INTO mojaloop_workflows (workflow_id, workflow_type, resource_id, current_step, status, created_at, updated_at)
-		 VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
-		 ON CONFLICT (workflow_id) DO UPDATE SET
-			workflow_type = EXCLUDED.workflow_type,
-			resource_id = EXCLUDED.resource_id,
-			current_step = EXCLUDED.current_step,
-			status = EXCLUDED.status,
-			updated_at = NOW()`,
-		event.WorkflowID,
-		event.WorkflowType,
-		event.ResourceID,
-		event.Step,
-		event.Status,
-	)
-	if err != nil {
-		return fmt.Errorf("upsert workflow state: %w", err)
-	}
-
-	_, err = tx.Exec(
-		`INSERT INTO mojaloop_workflow_events (workflow_id, workflow_type, resource_id, step, status, payload, created_at)
-		 VALUES ($1, $2, $3, $4, $5, $6::jsonb, NOW())`,
-		event.WorkflowID,
-		event.WorkflowType,
-		event.ResourceID,
-		event.Step,
-		event.Status,
-		string(payloadBytes),
-	)
-	if err != nil {
-		return fmt.Errorf("insert workflow event: %w", err)
+	if err = s.persistFundsWorkflowEvent(tx, event); err != nil {
+		return err
 	}
 
 	if err = tx.Commit(); err != nil {
 		return fmt.Errorf("commit workflow event: %w", err)
 	}
 
-	if publishErr := s.publishWorkflowEventToDapr(event); publishErr != nil {
-		return publishErr
-	}
-	if publishErr := s.publishWorkflowEventToKafka(event); publishErr != nil {
-		return publishErr
-	}
-	if publishErr := s.publishWorkflowEventToFluvio(event); publishErr != nil {
-		return publishErr
-	}
-	if publishErr := s.enqueueTemporalWorkflowTask(event); publishErr != nil {
-		return publishErr
-	}
 	return nil
 }
 
@@ -407,17 +361,22 @@ func (s *MojaloopService) buildReconciliationOverview() (ReconciliationOverview,
 	if err := s.db.QueryRow(`SELECT COUNT(*) FROM mojaloop_reconciliation_audits WHERE ledger_consistent = FALSE`).Scan(&overview.InconsistentAudits); err != nil {
 		return ReconciliationOverview{}, fmt.Errorf("count inconsistent audits: %w", err)
 	}
-	if err := s.db.QueryRow(`SELECT COALESCE(SUM(amount), 0) FROM mojaloop_transfers`).Scan(&overview.GrossTransferredAmount); err != nil {
+	var grossMinor sql.NullInt64
+	if err := s.db.QueryRow(`SELECT COALESCE(SUM(amount_minor), 0) FROM mojaloop_transfers`).Scan(&grossMinor); err != nil {
 		return ReconciliationOverview{}, fmt.Errorf("sum transferred amount: %w", err)
 	}
-	if err := s.db.QueryRow(`SELECT COALESCE(SUM(amount), 0) FROM mojaloop_refunds`).Scan(&overview.RefundedAmount); err != nil {
+	var refundedMinor sql.NullInt64
+	if err := s.db.QueryRow(`SELECT COALESCE(SUM(amount_minor), 0) FROM mojaloop_refunds`).Scan(&refundedMinor); err != nil {
 		return ReconciliationOverview{}, fmt.Errorf("sum refunded amount: %w", err)
 	}
-	overview.GrossTransferredAmount = round2(overview.GrossTransferredAmount)
-	overview.RefundedAmount = round2(overview.RefundedAmount)
-	overview.NetSettledAmount = round2(overview.GrossTransferredAmount - overview.RefundedAmount)
-	if overview.NetSettledAmount < 0 {
-		overview.NetSettledAmount = 0
+	if grossMinor.Valid && grossMinor.Int64 > 0 {
+		overview.GrossTransferredMinor = uint64(grossMinor.Int64)
+	}
+	if refundedMinor.Valid && refundedMinor.Int64 > 0 {
+		overview.RefundedMinor = uint64(refundedMinor.Int64)
+	}
+	if overview.RefundedMinor <= overview.GrossTransferredMinor {
+		overview.NetSettledMinor = overview.GrossTransferredMinor - overview.RefundedMinor
 	}
 
 	var lastRecorded sql.NullTime

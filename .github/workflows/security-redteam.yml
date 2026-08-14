@@ -136,7 +136,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y postgresql-client
       - name: Apply migrations and deterministic integration seed
         run: |
-          for migration in drizzle/0000_jittery_pride.sql drizzle/0001_shallow_fat_cobra.sql drizzle/0002_secret_kronos.sql drizzle/0003_tigerbeetle_schema_audit.sql drizzle/0004_platform_integration_audit.sql drizzle/0005_users_phone_for_growth_idempotency.sql; do
+          for migration in drizzle/0000_jittery_pride.sql drizzle/0001_shallow_fat_cobra.sql drizzle/0002_secret_kronos.sql drizzle/0003_tigerbeetle_schema_audit.sql drizzle/0004_platform_integration_audit.sql drizzle/0005_users_phone_for_growth_idempotency.sql drizzle/0006_mojaloop_exact_money_and_outbox.sql; do
             psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$migration"
           done
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f scripts/init-local-postgres.sql

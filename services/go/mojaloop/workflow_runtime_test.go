@@ -210,14 +210,14 @@ func TestTemporalTargetPrefersQueueAndBridgeDescription(t *testing.T) {
 func TestDeriveTransferStateFromRefunds(t *testing.T) {
 	tests := []struct {
 		name           string
-		originalAmount float64
-		refundedAmount float64
+		originalAmount uint64
+		refundedAmount uint64
 		expected       string
 	}{
-		{name: "no refunds", originalAmount: 50, refundedAmount: 0, expected: "SETTLED"},
-		{name: "partial refund", originalAmount: 50, refundedAmount: 12.5, expected: "PARTIALLY_REFUNDED"},
-		{name: "full refund", originalAmount: 50, refundedAmount: 50, expected: "REFUNDED"},
-		{name: "over refund clamps to refunded state", originalAmount: 50, refundedAmount: 60, expected: "REFUNDED"},
+		{name: "no refunds", originalAmount: 5000, refundedAmount: 0, expected: "SETTLED"},
+		{name: "partial refund", originalAmount: 5000, refundedAmount: 1250, expected: "PARTIALLY_REFUNDED"},
+		{name: "full refund", originalAmount: 5000, refundedAmount: 5000, expected: "REFUNDED"},
+		{name: "over refund clamps to refunded state", originalAmount: 5000, refundedAmount: 6000, expected: "REFUNDED"},
 	}
 
 	for _, testCase := range tests {

@@ -32,7 +32,7 @@ type Transfer struct {
 	TransferID      string    `json:"transferId"`
 	PayerFSP        string    `json:"payerFsp"`
 	PayeeFSP        string    `json:"payeeFsp"`
-	Amount          float64   `json:"amount"`
+	AmountMinor     uint64    `json:"amountMinor"`
 	Currency        string    `json:"currency"`
 	IlpPacket       string    `json:"ilpPacket"`
 	Condition       string    `json:"condition"`
@@ -47,9 +47,9 @@ type Quote struct {
 	TransactionID string    `json:"transactionId"`
 	PayerFSP      string    `json:"payerFsp"`
 	PayeeFSP      string    `json:"payeeFsp"`
-	Amount        float64   `json:"amount"`
+	AmountMinor   uint64    `json:"amountMinor"`
 	Currency      string    `json:"currency"`
-	Fees          float64   `json:"transferAmount"`
+	FeesMinor     uint64    `json:"feesMinor"`
 	Expiration    time.Time `json:"expiration"`
 	State         string    `json:"state"`
 }
@@ -59,7 +59,7 @@ type Refund struct {
 	OriginalTransferID string    `json:"originalTransferId"`
 	PayerFSP           string    `json:"payerFsp"`
 	PayeeFSP           string    `json:"payeeFsp"`
-	Amount             float64   `json:"amount"`
+	AmountMinor        uint64    `json:"amountMinor"`
 	Currency           string    `json:"currency"`
 	Reason             string    `json:"reason,omitempty"`
 	State              string    `json:"state"`
@@ -67,39 +67,39 @@ type Refund struct {
 }
 
 type TransferInitiationPayload struct {
-	TransferID string  `json:"transferId"`
-	PayerFSP   string  `json:"payerFsp"`
-	PayeeFSP   string  `json:"payeeFsp"`
-	Amount     float64 `json:"amount"`
-	Currency   string  `json:"currency"`
+	TransferID  string `json:"transferId"`
+	PayerFSP    string `json:"payerFsp"`
+	PayeeFSP    string `json:"payeeFsp"`
+	AmountMinor uint64 `json:"amountMinor"`
+	Currency    string `json:"currency"`
 }
 
 type QuoteInitiationPayload struct {
-	QuoteID       string  `json:"quoteId"`
-	TransactionID string  `json:"transactionId"`
-	PayerFSP      string  `json:"payerFsp"`
-	PayeeFSP      string  `json:"payeeFsp"`
-	Amount        float64 `json:"amount"`
-	Currency      string  `json:"currency"`
+	QuoteID       string `json:"quoteId"`
+	TransactionID string `json:"transactionId"`
+	PayerFSP      string `json:"payerFsp"`
+	PayeeFSP      string `json:"payeeFsp"`
+	AmountMinor   uint64 `json:"amountMinor"`
+	Currency      string `json:"currency"`
 }
 
 type RefundInitiationPayload struct {
-	RefundID           string  `json:"refundId"`
-	OriginalTransferID string  `json:"originalTransferId"`
-	Amount             float64 `json:"amount"`
-	Currency           string  `json:"currency"`
-	Reason             string  `json:"reason"`
+	RefundID           string `json:"refundId"`
+	OriginalTransferID string `json:"originalTransferId"`
+	AmountMinor        uint64 `json:"amountMinor"`
+	Currency           string `json:"currency"`
+	Reason             string `json:"reason"`
 }
 
 type ReconciliationReport struct {
-	Transfer           Transfer                `json:"transfer"`
-	Refunds            []Refund                `json:"refunds"`
-	Ledger             *TransferReconciliation `json:"ledger,omitempty"`
-	PlatformRefunded   float64                 `json:"platformRefundedAmount"`
-	PlatformNetSettled float64                 `json:"platformNetSettledAmount"`
-	LedgerConsistent   bool                    `json:"ledgerConsistent"`
-	Recommendation     string                  `json:"recommendation"`
-	RecordedAt         time.Time               `json:"recordedAt"`
+	Transfer                Transfer                `json:"transfer"`
+	Refunds                 []Refund                `json:"refunds"`
+	Ledger                  *TransferReconciliation `json:"ledger,omitempty"`
+	PlatformRefundedMinor   uint64                  `json:"platformRefundedMinor"`
+	PlatformNetSettledMinor uint64                  `json:"platformNetSettledMinor"`
+	LedgerConsistent        bool                    `json:"ledgerConsistent"`
+	Recommendation          string                  `json:"recommendation"`
+	RecordedAt              time.Time               `json:"recordedAt"`
 }
 
 const insecureInternalServiceToken = "switchos-internal-dev-token-change-before-production"
@@ -225,46 +225,38 @@ func (s *MojaloopService) initiateTransfer(payload TransferInitiationPayload, id
 		}
 
 		transfer := Transfer{
-			TransferID: payload.TransferID,
-			PayerFSP:   payload.PayerFSP,
-			PayeeFSP:   payload.PayeeFSP,
-			Amount:     payload.Amount,
-			Currency:   fallbackString(payload.Currency, "EUR"),
-			IlpPacket:  generateILPPacket(payload.TransferID, payload.PayeeFSP, payload.Amount),
-			Condition:  generateCondition(payload.TransferID),
-			Expiration: time.Now().Add(30 * time.Minute),
-			State:      "RESERVED",
+			TransferID:  payload.TransferID,
+			PayerFSP:    payload.PayerFSP,
+			PayeeFSP:    payload.PayeeFSP,
+			AmountMinor: payload.AmountMinor,
+			Currency:    fallbackString(payload.Currency, "EUR"),
+			IlpPacket:   generateILPPacket(payload.TransferID, payload.PayeeFSP, payload.AmountMinor),
+			Condition:   generateCondition(payload.TransferID),
+			Expiration:  time.Now().Add(30 * time.Minute),
+			State:       "RESERVED",
 		}
 
-		amountCents := amountToCents(payload.Amount)
-		if err := s.tigerBeetle.ProcessMojaloopTransfer(payload.TransferID, payload.PayerFSP, payload.PayeeFSP, amountCents); err != nil {
-			return nil, fmt.Errorf("ledger transfer failed: %w", err)
-		}
-
-		if err := s.storeTransfer(transfer); err != nil {
-			return nil, err
-		}
-		if err := s.sendToSwitch("POST", "/transfers", transfer); err != nil {
-			log.Printf("warning: failed to forward transfer to switch: %v", err)
-		}
-		_ = s.recordFundsWorkflowEvent(FundsWorkflowEvent{
+		transferEvent := FundsWorkflowEvent{
 			WorkflowType: "transfer",
 			WorkflowID:   payload.TransferID,
 			ResourceID:   payload.TransferID,
 			Step:         "initiated",
 			Status:       transfer.State,
 			Payload: map[string]any{
-				"payerFsp": transfer.PayerFSP,
-				"payeeFsp": transfer.PayeeFSP,
-				"amount":   transfer.Amount,
-				"currency": transfer.Currency,
+				"payerFsp":    transfer.PayerFSP,
+				"payeeFsp":    transfer.PayeeFSP,
+				"amountMinor": transfer.AmountMinor,
+				"currency":    transfer.Currency,
 			},
-		})
+		}
+		if err := s.storeTransferAndWorkflow(transfer, transferEvent); err != nil {
+			return nil, err
+		}
 
 		return map[string]any{
 			"transferId": transfer.TransferID,
 			"state":      transfer.State,
-			"message":    "Transfer initiated successfully",
+			"message":    "Transfer reserved; downstream delivery is durably queued",
 		}, nil
 	})
 }
@@ -274,12 +266,12 @@ func (s *MojaloopService) requestQuote(payload QuoteInitiationPayload, idempoten
 	return s.executeIdempotent("quote_request", key, payload.QuoteID, func() (map[string]any, error) {
 		if existing, ok := s.getQuote(payload.QuoteID); ok {
 			return map[string]any{
-				"quoteId":       existing.QuoteID,
-				"transactionId": existing.TransactionID,
-				"fees":          existing.Fees,
-				"totalAmount":   existing.Amount + existing.Fees,
-				"currency":      existing.Currency,
-				"cached":        true,
+				"quoteId":          existing.QuoteID,
+				"transactionId":    existing.TransactionID,
+				"feesMinor":        existing.FeesMinor,
+				"totalAmountMinor": existing.AmountMinor + existing.FeesMinor,
+				"currency":         existing.Currency,
+				"cached":           true,
 			}, nil
 		}
 
@@ -288,40 +280,37 @@ func (s *MojaloopService) requestQuote(payload QuoteInitiationPayload, idempoten
 			TransactionID: payload.TransactionID,
 			PayerFSP:      payload.PayerFSP,
 			PayeeFSP:      payload.PayeeFSP,
-			Amount:        payload.Amount,
+			AmountMinor:   payload.AmountMinor,
 			Currency:      fallbackString(payload.Currency, "EUR"),
-			Fees:          calculateFees(payload.Amount),
+			FeesMinor:     calculateFeesMinor(payload.AmountMinor),
 			Expiration:    time.Now().Add(30 * time.Minute),
 			State:         "PENDING",
 		}
 
-		if err := s.storeQuote(quote); err != nil {
-			return nil, err
-		}
-		if err := s.sendToSwitch("POST", "/quotes", quote); err != nil {
-			log.Printf("warning: failed to forward quote to switch: %v", err)
-		}
-		_ = s.recordFundsWorkflowEvent(FundsWorkflowEvent{
+		quoteEvent := FundsWorkflowEvent{
 			WorkflowType: "quote",
 			WorkflowID:   payload.QuoteID,
 			ResourceID:   payload.TransactionID,
 			Step:         "requested",
 			Status:       quote.State,
 			Payload: map[string]any{
-				"payerFsp": quote.PayerFSP,
-				"payeeFsp": quote.PayeeFSP,
-				"amount":   quote.Amount,
-				"fees":     quote.Fees,
-				"currency": quote.Currency,
+				"payerFsp":    quote.PayerFSP,
+				"payeeFsp":    quote.PayeeFSP,
+				"amountMinor": quote.AmountMinor,
+				"feesMinor":   quote.FeesMinor,
+				"currency":    quote.Currency,
 			},
-		})
+		}
+		if err := s.storeQuoteAndWorkflow(quote, quoteEvent); err != nil {
+			return nil, err
+		}
 
 		return map[string]any{
-			"quoteId":       quote.QuoteID,
-			"transactionId": quote.TransactionID,
-			"fees":          quote.Fees,
-			"totalAmount":   quote.Amount + quote.Fees,
-			"currency":      quote.Currency,
+			"quoteId":          quote.QuoteID,
+			"transactionId":    quote.TransactionID,
+			"feesMinor":        quote.FeesMinor,
+			"totalAmountMinor": quote.AmountMinor + quote.FeesMinor,
+			"currency":         quote.Currency,
 		}, nil
 	})
 }
@@ -350,7 +339,7 @@ func (s *MojaloopService) initiateRefund(payload RefundInitiationPayload, idempo
 		if err != nil {
 			return nil, err
 		}
-		if currentRefunded+payload.Amount > transfer.Amount+0.00001 {
+		if currentRefunded > transfer.AmountMinor || payload.AmountMinor > transfer.AmountMinor-currentRefunded {
 			return nil, fmt.Errorf("refund amount exceeds remaining settled amount")
 		}
 
@@ -359,59 +348,35 @@ func (s *MojaloopService) initiateRefund(payload RefundInitiationPayload, idempo
 			OriginalTransferID: payload.OriginalTransferID,
 			PayerFSP:           transfer.PayerFSP,
 			PayeeFSP:           transfer.PayeeFSP,
-			Amount:             payload.Amount,
+			AmountMinor:        payload.AmountMinor,
 			Currency:           fallbackString(payload.Currency, transfer.Currency),
 			Reason:             strings.TrimSpace(payload.Reason),
-			State:              "COMPLETED",
-			CompletedTime:      time.Now().UTC(),
+			State:              "PENDING_LEDGER",
 		}
 
-		if err := s.tigerBeetle.ReverseMojaloopTransfer(refund.RefundID, refund.OriginalTransferID, transfer.PayerFSP, transfer.PayeeFSP, amountToCents(refund.Amount)); err != nil {
-			return nil, fmt.Errorf("ledger refund failed: %w", err)
-		}
-
-		if err := s.storeRefund(refund); err != nil {
-			return nil, err
-		}
-		if err := s.sendToSwitch("POST", "/refunds", refund); err != nil {
-			log.Printf("warning: failed to forward refund to switch: %v", err)
-		}
-		_ = s.recordFundsWorkflowEvent(FundsWorkflowEvent{
+		refundEvent := FundsWorkflowEvent{
 			WorkflowType: "refund",
 			WorkflowID:   payload.RefundID,
 			ResourceID:   payload.OriginalTransferID,
-			Step:         "completed",
+			Step:         "queued",
 			Status:       refund.State,
 			Payload: map[string]any{
-				"payerFsp": refund.PayerFSP,
-				"payeeFsp": refund.PayeeFSP,
-				"amount":   refund.Amount,
-				"currency": refund.Currency,
-				"reason":   refund.Reason,
+				"payerFsp":    refund.PayerFSP,
+				"payeeFsp":    refund.PayeeFSP,
+				"amountMinor": refund.AmountMinor,
+				"currency":    refund.Currency,
+				"reason":      refund.Reason,
 			},
-		})
-
-		report, err := s.buildReconciliationReport(payload.OriginalTransferID)
-		if err != nil {
-			return nil, err
 		}
-		transferState := deriveTransferStateFromRefunds(transfer.Amount, report.PlatformRefunded)
-		if err := s.updateTransferState(transfer.TransferID, transferState); err != nil {
-			return nil, err
-		}
-		report.Transfer.State = transferState
-		if err := s.storeReconciliationAudit(report); err != nil {
+		if err := s.storeRefundAndWorkflow(refund, refundEvent); err != nil {
 			return nil, err
 		}
 
 		return map[string]any{
-			"refundId":             refund.RefundID,
-			"originalTransferId":   refund.OriginalTransferID,
-			"state":                refund.State,
-			"platformRefunded":     report.PlatformRefunded,
-			"platformNetSettled":   report.PlatformNetSettled,
-			"ledgerConsistent":     report.LedgerConsistent,
-			"updatedTransferState": transferState,
+			"refundId":           refund.RefundID,
+			"originalTransferId": refund.OriginalTransferID,
+			"state":              refund.State,
+			"message":            "Refund is durably queued for ledger reversal",
 		}, nil
 	})
 }
@@ -574,12 +539,13 @@ func (s *MojaloopService) getFromSwitch(endpoint string, result interface{}) err
 func (s *MojaloopService) storeTransfer(transfer Transfer) error {
 	_, err := s.db.Exec(
 		`INSERT INTO mojaloop_transfers (
-			transfer_id, payer_fsp, payee_fsp, amount, currency, ilp_packet, condition, expiration, state, completed_time, fulfilment_value, created_at, updated_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,NOW(),NOW())
-		ON CONFLICT (transfer_id) DO UPDATE SET
-			payer_fsp = EXCLUDED.payer_fsp,
-			payee_fsp = EXCLUDED.payee_fsp,
-			amount = EXCLUDED.amount,
+			transfer_id, payer_fsp, payee_fsp, amount, amount_minor, currency, ilp_packet, condition, expiration, state, completed_time, fulfilment_value, created_at, updated_at
+		) VALUES ($1,$2,$3,$4::numeric / 100,$4,$5,$6,$7,$8,$9,$10,$11,NOW(),NOW())
+			ON CONFLICT (transfer_id) DO UPDATE SET
+				payer_fsp = EXCLUDED.payer_fsp,
+				payee_fsp = EXCLUDED.payee_fsp,
+				amount = EXCLUDED.amount,
+				amount_minor = EXCLUDED.amount_minor,
 			currency = EXCLUDED.currency,
 			ilp_packet = EXCLUDED.ilp_packet,
 			condition = EXCLUDED.condition,
@@ -591,7 +557,7 @@ func (s *MojaloopService) storeTransfer(transfer Transfer) error {
 		transfer.TransferID,
 		transfer.PayerFSP,
 		transfer.PayeeFSP,
-		transfer.Amount,
+		int64(transfer.AmountMinor),
 		transfer.Currency,
 		transfer.IlpPacket,
 		transfer.Condition,
@@ -609,15 +575,17 @@ func (s *MojaloopService) storeTransfer(transfer Transfer) error {
 func (s *MojaloopService) storeQuote(quote Quote) error {
 	_, err := s.db.Exec(
 		`INSERT INTO mojaloop_quotes (
-			quote_id, transaction_id, payer_fsp, payee_fsp, amount, currency, fees, expiration, state, created_at, updated_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NOW(),NOW())
-		ON CONFLICT (quote_id) DO UPDATE SET
+			quote_id, transaction_id, payer_fsp, payee_fsp, amount, amount_minor, currency, fees, fees_minor, expiration, state, created_at, updated_at
+		) VALUES ($1,$2,$3,$4,$5::numeric / 100,$5,$6,$7::numeric / 100,$7,$8,$9,NOW(),NOW())
+			ON CONFLICT (quote_id) DO UPDATE SET
 			transaction_id = EXCLUDED.transaction_id,
 			payer_fsp = EXCLUDED.payer_fsp,
 			payee_fsp = EXCLUDED.payee_fsp,
-			amount = EXCLUDED.amount,
-			currency = EXCLUDED.currency,
-			fees = EXCLUDED.fees,
+				amount = EXCLUDED.amount,
+				amount_minor = EXCLUDED.amount_minor,
+				currency = EXCLUDED.currency,
+				fees = EXCLUDED.fees,
+				fees_minor = EXCLUDED.fees_minor,
 			expiration = EXCLUDED.expiration,
 			state = EXCLUDED.state,
 			updated_at = NOW()`,
@@ -625,9 +593,9 @@ func (s *MojaloopService) storeQuote(quote Quote) error {
 		quote.TransactionID,
 		quote.PayerFSP,
 		quote.PayeeFSP,
-		quote.Amount,
+		int64(quote.AmountMinor),
 		quote.Currency,
-		quote.Fees,
+		int64(quote.FeesMinor),
 		quote.Expiration,
 		quote.State,
 	)
@@ -640,13 +608,14 @@ func (s *MojaloopService) storeQuote(quote Quote) error {
 func (s *MojaloopService) storeRefund(refund Refund) error {
 	_, err := s.db.Exec(
 		`INSERT INTO mojaloop_refunds (
-			refund_id, original_transfer_id, payer_fsp, payee_fsp, amount, currency, reason, state, completed_time, created_at, updated_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NOW(),NOW())
+			refund_id, original_transfer_id, payer_fsp, payee_fsp, amount, amount_minor, currency, reason, state, completed_time, created_at, updated_at
+		) VALUES ($1,$2,$3,$4,$5::numeric / 100,$5,$6,$7,$8,$9,NOW(),NOW())
 		ON CONFLICT (refund_id) DO UPDATE SET
 			original_transfer_id = EXCLUDED.original_transfer_id,
 			payer_fsp = EXCLUDED.payer_fsp,
 			payee_fsp = EXCLUDED.payee_fsp,
-			amount = EXCLUDED.amount,
+				amount = EXCLUDED.amount,
+				amount_minor = EXCLUDED.amount_minor,
 			currency = EXCLUDED.currency,
 			reason = EXCLUDED.reason,
 			state = EXCLUDED.state,
@@ -656,7 +625,7 @@ func (s *MojaloopService) storeRefund(refund Refund) error {
 		refund.OriginalTransferID,
 		refund.PayerFSP,
 		refund.PayeeFSP,
-		refund.Amount,
+		int64(refund.AmountMinor),
 		refund.Currency,
 		nullableString(refund.Reason),
 		refund.State,
@@ -669,7 +638,7 @@ func (s *MojaloopService) storeRefund(refund Refund) error {
 }
 
 func (s *MojaloopService) getTransfer(id string) (Transfer, bool) {
-	row := s.db.QueryRow(`SELECT transfer_id, payer_fsp, payee_fsp, amount, currency, ilp_packet, condition, expiration, state, completed_time, fulfilment_value FROM mojaloop_transfers WHERE transfer_id = $1`, id)
+	row := s.db.QueryRow(`SELECT transfer_id, payer_fsp, payee_fsp, amount_minor, currency, ilp_packet, condition, expiration, state, completed_time, fulfilment_value FROM mojaloop_transfers WHERE transfer_id = $1`, id)
 	var transfer Transfer
 	var completed sql.NullTime
 	var fulfilment sql.NullString
@@ -677,7 +646,7 @@ func (s *MojaloopService) getTransfer(id string) (Transfer, bool) {
 		&transfer.TransferID,
 		&transfer.PayerFSP,
 		&transfer.PayeeFSP,
-		&transfer.Amount,
+		&transfer.AmountMinor,
 		&transfer.Currency,
 		&transfer.IlpPacket,
 		&transfer.Condition,
@@ -699,16 +668,16 @@ func (s *MojaloopService) getTransfer(id string) (Transfer, bool) {
 }
 
 func (s *MojaloopService) getQuote(id string) (Quote, bool) {
-	row := s.db.QueryRow(`SELECT quote_id, transaction_id, payer_fsp, payee_fsp, amount, currency, fees, expiration, state FROM mojaloop_quotes WHERE quote_id = $1`, id)
+	row := s.db.QueryRow(`SELECT quote_id, transaction_id, payer_fsp, payee_fsp, amount_minor, currency, fees_minor, expiration, state FROM mojaloop_quotes WHERE quote_id = $1`, id)
 	var quote Quote
 	err := row.Scan(
 		&quote.QuoteID,
 		&quote.TransactionID,
 		&quote.PayerFSP,
 		&quote.PayeeFSP,
-		&quote.Amount,
+		&quote.AmountMinor,
 		&quote.Currency,
-		&quote.Fees,
+		&quote.FeesMinor,
 		&quote.Expiration,
 		&quote.State,
 	)
@@ -719,7 +688,7 @@ func (s *MojaloopService) getQuote(id string) (Quote, bool) {
 }
 
 func (s *MojaloopService) getRefund(id string) (Refund, bool) {
-	row := s.db.QueryRow(`SELECT refund_id, original_transfer_id, payer_fsp, payee_fsp, amount, currency, reason, state, completed_time FROM mojaloop_refunds WHERE refund_id = $1`, id)
+	row := s.db.QueryRow(`SELECT refund_id, original_transfer_id, payer_fsp, payee_fsp, amount_minor, currency, reason, state, completed_time FROM mojaloop_refunds WHERE refund_id = $1`, id)
 	var refund Refund
 	var reason sql.NullString
 	var completed sql.NullTime
@@ -728,7 +697,7 @@ func (s *MojaloopService) getRefund(id string) (Refund, bool) {
 		&refund.OriginalTransferID,
 		&refund.PayerFSP,
 		&refund.PayeeFSP,
-		&refund.Amount,
+		&refund.AmountMinor,
 		&refund.Currency,
 		&reason,
 		&refund.State,
@@ -747,7 +716,7 @@ func (s *MojaloopService) getRefund(id string) (Refund, bool) {
 }
 
 func (s *MojaloopService) listRefundsForTransfer(transferID string) ([]Refund, error) {
-	rows, err := s.db.Query(`SELECT refund_id, original_transfer_id, payer_fsp, payee_fsp, amount, currency, reason, state, completed_time FROM mojaloop_refunds WHERE original_transfer_id = $1 ORDER BY created_at ASC`, transferID)
+	rows, err := s.db.Query(`SELECT refund_id, original_transfer_id, payer_fsp, payee_fsp, amount_minor, currency, reason, state, completed_time FROM mojaloop_refunds WHERE original_transfer_id = $1 ORDER BY created_at ASC`, transferID)
 	if err != nil {
 		return nil, fmt.Errorf("list refunds: %w", err)
 	}
@@ -758,7 +727,7 @@ func (s *MojaloopService) listRefundsForTransfer(transferID string) ([]Refund, e
 		var refund Refund
 		var reason sql.NullString
 		var completed sql.NullTime
-		if err := rows.Scan(&refund.RefundID, &refund.OriginalTransferID, &refund.PayerFSP, &refund.PayeeFSP, &refund.Amount, &refund.Currency, &reason, &refund.State, &completed); err != nil {
+		if err := rows.Scan(&refund.RefundID, &refund.OriginalTransferID, &refund.PayerFSP, &refund.PayeeFSP, &refund.AmountMinor, &refund.Currency, &reason, &refund.State, &completed); err != nil {
 			return nil, fmt.Errorf("scan refund: %w", err)
 		}
 		if reason.Valid {
@@ -772,15 +741,15 @@ func (s *MojaloopService) listRefundsForTransfer(transferID string) ([]Refund, e
 	return refunds, nil
 }
 
-func (s *MojaloopService) getRefundedAmount(transferID string) (float64, error) {
-	var amount sql.NullFloat64
-	if err := s.db.QueryRow(`SELECT COALESCE(SUM(amount), 0) FROM mojaloop_refunds WHERE original_transfer_id = $1 AND state IN ('PENDING','COMPLETED')`, transferID).Scan(&amount); err != nil {
+func (s *MojaloopService) getRefundedAmount(transferID string) (uint64, error) {
+	var amount sql.NullInt64
+	if err := s.db.QueryRow(`SELECT COALESCE(SUM(amount_minor), 0) FROM mojaloop_refunds WHERE original_transfer_id = $1 AND state IN ('PENDING','COMPLETED')`, transferID).Scan(&amount); err != nil {
 		return 0, fmt.Errorf("sum refunded amount: %w", err)
 	}
-	if !amount.Valid {
+	if !amount.Valid || amount.Int64 < 0 {
 		return 0, nil
 	}
-	return amount.Float64, nil
+	return uint64(amount.Int64), nil
 }
 
 func (s *MojaloopService) updateTransferState(transferID, state string) error {
@@ -801,13 +770,16 @@ func (s *MojaloopService) buildReconciliationReport(transferID string) (Reconcil
 		return ReconciliationReport{}, err
 	}
 
-	platformRefunded := 0.0
+	platformRefunded := uint64(0)
 	for _, refund := range refunds {
-		platformRefunded += refund.Amount
+		if ^uint64(0)-platformRefunded < refund.AmountMinor {
+			return ReconciliationReport{}, fmt.Errorf("refund aggregation overflow")
+		}
+		platformRefunded += refund.AmountMinor
 	}
-	platformNetSettled := transfer.Amount - platformRefunded
-	if platformNetSettled < 0 {
-		platformNetSettled = 0
+	platformNetSettled := uint64(0)
+	if platformRefunded <= transfer.AmountMinor {
+		platformNetSettled = transfer.AmountMinor - platformRefunded
 	}
 
 	reconciliation, err := s.tigerBeetle.GetTransferReconciliation(transferID)
@@ -815,26 +787,26 @@ func (s *MojaloopService) buildReconciliationReport(transferID string) (Reconcil
 		return ReconciliationReport{}, err
 	}
 	ledger := &reconciliation
-	ledgerConsistent := reconciliation.LedgerConsistent && amountToCents(platformRefunded) == reconciliation.RefundedAmount
+	ledgerConsistent := reconciliation.LedgerConsistent && platformRefunded == reconciliation.RefundedAmount
 
 	recommendation := "No action required."
 	if !ledgerConsistent {
 		recommendation = "Investigate ledger and refund divergence before any further settlement or customer communication."
-	} else if platformRefunded > 0 && platformRefunded < transfer.Amount {
+	} else if platformRefunded > 0 && platformRefunded < transfer.AmountMinor {
 		recommendation = "Transfer is partially refunded; confirm downstream statements and merchant payout adjustments."
-	} else if platformRefunded >= transfer.Amount {
+	} else if platformRefunded >= transfer.AmountMinor {
 		recommendation = "Transfer is fully refunded; ensure downstream treasury and customer statements reflect full reversal."
 	}
 
 	return ReconciliationReport{
-		Transfer:           transfer,
-		Refunds:            refunds,
-		Ledger:             ledger,
-		PlatformRefunded:   round2(platformRefunded),
-		PlatformNetSettled: round2(platformNetSettled),
-		LedgerConsistent:   ledgerConsistent,
-		Recommendation:     recommendation,
-		RecordedAt:         time.Now().UTC(),
+		Transfer:                transfer,
+		Refunds:                 refunds,
+		Ledger:                  ledger,
+		PlatformRefundedMinor:   platformRefunded,
+		PlatformNetSettledMinor: platformNetSettled,
+		LedgerConsistent:        ledgerConsistent,
+		Recommendation:          recommendation,
+		RecordedAt:              time.Now().UTC(),
 	}, nil
 }
 
@@ -844,13 +816,13 @@ func (s *MojaloopService) storeReconciliationAudit(report ReconciliationReport) 
 		return fmt.Errorf("marshal reconciliation audit: %w", err)
 	}
 	_, err = s.db.Exec(
-		`INSERT INTO mojaloop_reconciliation_audits (transfer_id, transfer_state, ledger_consistent, platform_refunded_amount, platform_net_settled_amount, details, created_at)
-		 VALUES ($1, $2, $3, $4, $5, $6::jsonb, NOW())`,
+		`INSERT INTO mojaloop_reconciliation_audits (transfer_id, transfer_state, ledger_consistent, platform_refunded_amount, platform_net_settled_amount, platform_refunded_minor, platform_net_settled_minor, details, created_at)
+		 VALUES ($1, $2, $3, $4::numeric / 100, $5::numeric / 100, $4, $5, $6::jsonb, NOW())`,
 		report.Transfer.TransferID,
 		report.Transfer.State,
 		report.LedgerConsistent,
-		report.PlatformRefunded,
-		report.PlatformNetSettled,
+		int64(report.PlatformRefundedMinor),
+		int64(report.PlatformNetSettledMinor),
 		string(details),
 	)
 	if err != nil {
@@ -859,35 +831,31 @@ func (s *MojaloopService) storeReconciliationAudit(report ReconciliationReport) 
 	return nil
 }
 
-func generateILPPacket(transferID, payeeFSP string, amount float64) string {
-	return fmt.Sprintf("ilp_packet_%s_%s_%.2f", transferID, payeeFSP, amount)
+func generateILPPacket(transferID, payeeFSP string, amountMinor uint64) string {
+	return fmt.Sprintf("ilp_packet_%s_%s_%d", transferID, payeeFSP, amountMinor)
 }
 
 func generateCondition(transferID string) string {
 	return fmt.Sprintf("condition_%s", transferID)
 }
 
-func calculateFees(amount float64) float64 {
-	fee := amount * 0.01
-	if fee < 0.50 {
-		fee = 0.50
+func calculateFeesMinor(amountMinor uint64) uint64 {
+	const minimumFeeMinor uint64 = 50
+	fee := amountMinor / 100
+	if amountMinor%100 >= 50 {
+		fee++
 	}
-	return round2(fee)
+	if fee < minimumFeeMinor {
+		return minimumFeeMinor
+	}
+	return fee
 }
 
-func amountToCents(amount float64) uint64 {
-	return uint64(round2(amount) * 100)
-}
-
-func round2(value float64) float64 {
-	return float64(int64(value*100+0.5)) / 100
-}
-
-func deriveTransferStateFromRefunds(originalAmount, refundedAmount float64) string {
-	if refundedAmount <= 0 {
+func deriveTransferStateFromRefunds(originalAmountMinor, refundedAmountMinor uint64) string {
+	if refundedAmountMinor == 0 {
 		return "SETTLED"
 	}
-	if refundedAmount >= originalAmount {
+	if refundedAmountMinor >= originalAmountMinor {
 		return "REFUNDED"
 	}
 	return "PARTIALLY_REFUNDED"
@@ -1112,7 +1080,7 @@ func (s *MojaloopService) handleInitiateTransferHTTP(w http.ResponseWriter, r *h
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if payload.TransferID == "" || payload.PayerFSP == "" || payload.PayeeFSP == "" || payload.Amount <= 0 {
+	if payload.TransferID == "" || payload.PayerFSP == "" || payload.PayeeFSP == "" || payload.AmountMinor == 0 {
 		http.Error(w, "missing required transfer fields", http.StatusBadRequest)
 		return
 	}
@@ -1138,7 +1106,7 @@ func (s *MojaloopService) handleRequestQuoteHTTP(w http.ResponseWriter, r *http.
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if payload.QuoteID == "" || payload.TransactionID == "" || payload.PayerFSP == "" || payload.PayeeFSP == "" || payload.Amount <= 0 {
+	if payload.QuoteID == "" || payload.TransactionID == "" || payload.PayerFSP == "" || payload.PayeeFSP == "" || payload.AmountMinor == 0 {
 		http.Error(w, "missing required quote fields", http.StatusBadRequest)
 		return
 	}
@@ -1164,7 +1132,7 @@ func (s *MojaloopService) handleInitiateRefundHTTP(w http.ResponseWriter, r *htt
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if payload.RefundID == "" || payload.OriginalTransferID == "" || payload.Amount <= 0 {
+	if payload.RefundID == "" || payload.OriginalTransferID == "" || payload.AmountMinor == 0 {
 		http.Error(w, "missing required refund fields", http.StatusBadRequest)
 		return
 	}
@@ -1284,9 +1252,9 @@ func (s *MojaloopService) handleReconcileTransferHTTP(w http.ResponseWriter, r *
 		Step:         "audited",
 		Status:       map[bool]string{true: "consistent", false: "inconsistent"}[report.LedgerConsistent],
 		Payload: map[string]any{
-			"platformRefunded":   report.PlatformRefunded,
-			"platformNetSettled": report.PlatformNetSettled,
-			"recommendation":     report.Recommendation,
+			"platformRefundedMinor":   report.PlatformRefundedMinor,
+			"platformNetSettledMinor": report.PlatformNetSettledMinor,
+			"recommendation":          report.Recommendation,
 		},
 	})
 	writeJSON(w, http.StatusOK, report)
@@ -1314,6 +1282,22 @@ func main() {
 		log.Printf("Mojaloop Temporal worker listening on %s (namespace=%s, taskQueue=%s)", effectiveTemporalHostPort(), effectiveTemporalNamespace(), effectiveTemporalTaskQueue())
 		if err := RunTemporalWorker(ctx, service); err != nil {
 			log.Fatalf("Failed to run Temporal worker: %v", err)
+		}
+		return
+	}
+	if serviceMode == "outbox-worker" {
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		workerID := strings.TrimSpace(os.Getenv("FUNDS_OUTBOX_WORKER_ID"))
+		if workerID == "" {
+			workerID = "mojaloop-outbox-" + time.Now().UTC().Format("20060102T150405.000000000Z")
+		}
+		if _, err := requiredFundsOutboxDestinations(); err != nil {
+			log.Fatalf("Failed to configure funds outbox worker: %v", err)
+		}
+		log.Printf("Mojaloop durable funds outbox worker started as %s", workerID)
+		if err := service.RunFundsOutboxDispatcher(ctx, workerID); err != nil {
+			log.Fatalf("Failed to run funds outbox worker: %v", err)
 		}
 		return
 	}
