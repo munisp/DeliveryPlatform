@@ -17,12 +17,13 @@ The assessed release state is **BLOCKED**. The entries below are evidence-backed
 | F-011 | Medium | DISCOVERED | Runtime schema creation duplicates migration responsibility and is not captured by CI migration application. | `server/db.ts:55-400`; `services/go/mojaloop/main.go:134-204`; `workflow_runtime.go:41-85`. | Production service performs `CREATE TABLE IF NOT EXISTS` / `ALTER TABLE` at request-time initialization. | Move required schema to reviewed migrations; ensure startup only validates version compatibility; test upgrade/rollback. |
 | F-012 | High | VERIFIED_FIXED | Go module verification, compilation, tests, race detection, and static checks were unavailable in the original assessment environment. | `services/go/mojaloop/go.mod`; `services/go/mojaloop/main_test.go`. | Go `1.22.2` was provisioned. `go mod verify`, `go vet ./...`, and `go test -race ./...` all passed after module-proxy recovery. | Verified for the local module. Real TigerBeetle/Mojaloop/Temporal/broker integration remains separately blocked by F-001 through F-006. |
 | F-013 | High | DISCOVERED | Production dependency audit reports unresolved High-severity transitive vulnerabilities in the Expo 54 mobile toolchain. | `pnpm-lock.yaml`; `mobile/switchos-native`. | 2026-08-14 `pnpm audit --prod --audit-level=high`: 39 findings, including 16 High; affected paths include `brace-expansion`, `js-yaml`, and `fast-uri` under Expo / React Native tooling. | Complete a compatibility-reviewed Expo / React Native upgrade or approved overrides, test each target, and rerun the audit with no High/Critical findings. |
+| F-014 | Critical | DISCOVERED | The declared platform stack does not deploy the mandatory Mojaloop service or a TigerBeetle cluster, so no deployment manifest proves the actual funds topology. | `deploy/platform/docker-compose.stack.yml`; `services/go/mojaloop/TIGERBEETLE_RUNBOOK.md`. | The compose stack has no `mojaloop` or `tigerbeetle` service entry. The new client correctly refuses missing cluster configuration, but that does not create or operate the required ledger infrastructure. | Add a separately reviewed, production-appropriate replicated TigerBeetle and Mojaloop deployment manifest with managed configuration, readiness probes, backup/recovery, and isolated end-to-end verification. |
 
 ## State totals
 
 | State | Count |
 |---|---:|
-| DISCOVERED | 8 |
+| DISCOVERED | 9 |
 | EXTERNAL_BLOCKED | 1 |
 | IMPLEMENTING | 0 |
 | REGRESSION_PROVEN | 0 |
