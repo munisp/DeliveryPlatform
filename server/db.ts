@@ -3601,34 +3601,18 @@ export async function awardPoints(
   await getDb();
   if (!_pool) return null;
 
-  // Add points to account
-  const updateResult = await _pool.query<any>(
-    `UPDATE loyalty_points 
-     SET points_balance = points_balance + $1,
-         lifetime_points = lifetime_points + $1,
-         updated_at = NOW()
-     WHERE user_id = $2
-     RETURNING *`,
-    [points, userId]
-  );
-
-  if (updateResult.rows.length === 0) {
-    await initializeLoyaltyAccount(userId);
-    return await awardPoints(userId, points, transactionType, description, orderId);
+  const client = await _pool.connect();
+  try {
+    await client.query('BEGIN');
+    await awardPointsTransactional(client, userId, points, transactionType, description, orderId);
+    await client.query('COMMIT');
+    return await getLoyaltyAccount(userId);
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
   }
-
-  // Check for tier upgrade
-  const account = updateResult.rows[0];
-  await checkAndUpgradeTier(userId, account.lifetime_points);
-
-  // Log transaction
-  await _pool.query<any>(
-    `INSERT INTO loyalty_transactions (user_id, transaction_type, points, order_id, description)
-     VALUES ($1, $2, $3, $4, $5)`,
-    [userId, transactionType, points, orderId, description]
-  );
-
-  return await getLoyaltyAccount(userId);
 }
 
 async function checkAndUpgradeTier(userId: number, lifetimePoints: number) {
@@ -3666,6 +3650,7 @@ export async function redeemPoints(userId: number, rewardId: number, idempotency
   let idempotencyClaimed = false;
 
   try {
+    await client.query('BEGIN');
     const idempotency = await beginPlatformIdempotentOperation(
       client,
       'loyalty.redeem',
@@ -3674,10 +3659,9 @@ export async function redeemPoints(userId: number, rewardId: number, idempotency
     );
     idempotencyClaimed = Boolean(idempotency.normalizedKey) && !idempotency.replay;
     if (idempotency.replay) {
+      await client.query('COMMIT');
       return idempotency.response;
     }
-
-    await client.query('BEGIN');
 
     const rewardResult = await client.query<any>(
       'SELECT * FROM loyalty_rewards WHERE id = $1 AND is_active = true',
@@ -3738,8 +3722,8 @@ export async function redeemPoints(userId: number, rewardId: number, idempotency
       [userId, rewardId, reward.points_cost, voucherCode, expiresAt],
     );
 
-    await client.query('COMMIT');
     await finalizePlatformIdempotentOperation(client, 'loyalty.redeem', idempotencyKey, 'completed', redemptionResult.rows[0]);
+    await client.query('COMMIT');
     return redemptionResult.rows[0];
   } catch (error) {
     try {
@@ -4081,6 +4065,7 @@ export async function applyReferralCode(newUserId: number, referralCode: string,
   let idempotencyClaimed = false;
 
   try {
+    await client.query('BEGIN');
     const idempotency = await beginPlatformIdempotentOperation(
       client,
       'referral.apply_code',
@@ -4089,10 +4074,9 @@ export async function applyReferralCode(newUserId: number, referralCode: string,
     );
     idempotencyClaimed = Boolean(idempotency.normalizedKey) && !idempotency.replay;
     if (idempotency.replay) {
+      await client.query('COMMIT');
       return idempotency.response;
     }
-
-    await client.query('BEGIN');
 
     const referrerResult = await client.query<any>(
       'SELECT id FROM users WHERE referral_code = $1',
@@ -4116,8 +4100,8 @@ export async function applyReferralCode(newUserId: number, referralCode: string,
     if (existingResult.rows.length > 0) {
       const existing = existingResult.rows[0];
       if (existing.referral_code === normalizedReferralCode) {
-        await client.query('COMMIT');
         await finalizePlatformIdempotentOperation(client, 'referral.apply_code', idempotencyKey, 'completed', existing);
+        await client.query('COMMIT');
         return existing;
       }
 
@@ -4147,8 +4131,8 @@ export async function applyReferralCode(newUserId: number, referralCode: string,
       `Welcome bonus for using referral code ${normalizedReferralCode}`,
     );
 
-    await client.query('COMMIT');
     await finalizePlatformIdempotentOperation(client, 'referral.apply_code', idempotencyKey, 'completed', referralResult.rows[0]);
+    await client.query('COMMIT');
     return referralResult.rows[0];
   } catch (error) {
     try {
@@ -4178,6 +4162,7 @@ export async function completeReferral(referralId: number, idempotencyKey?: stri
   let idempotencyClaimed = false;
 
   try {
+    await client.query('BEGIN');
     const idempotency = await beginPlatformIdempotentOperation(
       client,
       'referral.complete',
@@ -4186,10 +4171,9 @@ export async function completeReferral(referralId: number, idempotencyKey?: stri
     );
     idempotencyClaimed = Boolean(idempotency.normalizedKey) && !idempotency.replay;
     if (idempotency.replay) {
+      await client.query('COMMIT');
       return idempotency.response;
     }
-
-    await client.query('BEGIN');
 
     const referralResult = await client.query<any>(
       'SELECT * FROM customer_referrals WHERE id = $1 FOR UPDATE',
@@ -4218,9 +4202,13 @@ export async function completeReferral(referralId: number, idempotencyKey?: stri
       );
     }
 
-    await client.query('COMMIT');
-    const completedReferral = await getReferralById(referralId);
+    const completedReferralResult = await client.query<any>(
+      'SELECT * FROM customer_referrals WHERE id = $1',
+      [referralId],
+    );
+    const completedReferral = completedReferralResult.rows[0] ?? null;
     await finalizePlatformIdempotentOperation(client, 'referral.complete', idempotencyKey, 'completed', completedReferral);
+    await client.query('COMMIT');
     return completedReferral;
   } catch (error) {
     try {

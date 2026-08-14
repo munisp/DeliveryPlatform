@@ -147,6 +147,43 @@ describe("Non-Mojaloop durable idempotency hardening", () => {
     expect(Number(balance.rows[0].points_balance)).toBe(700);
   });
 
+  it("rolls back a failed loyalty idempotency claim so the same request can retry after funds are restored", async (context) => {
+    await requireDbOrSkip(context);
+
+    const userId = await createUser("Retryable Redemption User", `retryable-redeem-${Date.now()}@switchos.test`);
+    const rewardResult = await pool!.query(
+      `INSERT INTO loyalty_rewards (reward_name, description, points_cost, points_required, reward_type, reward_value, is_active)
+       VALUES ($1, $2, $3, $4, $5, $6, true)
+       RETURNING id`,
+      ["Retryable Idempotent Reward", "test reward", 300, 300, "voucher", "NGN 300"],
+    );
+    const rewardId = rewardResult.rows[0].id as number;
+    createdRewardIds.push(rewardId);
+    const idempotencyKey = "redeem-retry-after-funds-key";
+
+    await expect(redeemPoints(userId, rewardId, idempotencyKey)).rejects.toThrow("Insufficient points");
+
+    const failedClaim = await pool!.query(
+      `SELECT COUNT(*)::int AS count
+       FROM platform_idempotency_keys
+       WHERE scope = 'loyalty.redeem' AND idempotency_key = $1`,
+      [idempotencyKey],
+    );
+    expect(failedClaim.rows[0].count).toBe(0);
+
+    await awardPoints(userId, 300, "bonus", "restore redemption budget");
+    const redemption = await redeemPoints(userId, rewardId, idempotencyKey);
+    expect(Number(redemption.points_spent)).toBe(300);
+
+    const completedClaim = await pool!.query(
+      `SELECT status
+       FROM platform_idempotency_keys
+       WHERE scope = 'loyalty.redeem' AND idempotency_key = $1`,
+      [idempotencyKey],
+    );
+    expect(completedClaim.rows[0].status).toBe("completed");
+  });
+
   it("replays referral apply and completion safely with durable idempotency keys", async (context) => {
     await requireDbOrSkip(context);
 

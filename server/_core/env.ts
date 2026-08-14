@@ -45,6 +45,25 @@ function getCookieSecret() {
   return "switchos-local-development-secret-change-before-production";
 }
 
+function getInternalServiceToken() {
+  const configured = process.env.INTERNAL_SERVICE_TOKEN?.trim();
+  const insecurePlaceholder = "switchos-internal-dev-token-change-before-production";
+
+  if (configured) {
+    if (process.env.NODE_ENV === "production" && configured === insecurePlaceholder) {
+      throw new Error("INTERNAL_SERVICE_TOKEN must be rotated before running in production");
+    }
+    return configured;
+  }
+
+  if (process.env.NODE_ENV === "production") {
+    throw new Error("INTERNAL_SERVICE_TOKEN is required in production");
+  }
+
+  // An empty local value is deliberately fail-closed: protected endpoints reject empty headers.
+  return "";
+}
+
 function getBootstrapOperatorPassword() {
   const configured = process.env.BOOTSTRAP_OPERATOR_PASSWORD?.trim();
   if (configured) {
@@ -120,7 +139,7 @@ export const ENV = {
   bootstrapTenantId: process.env.BOOTSTRAP_TENANT_ID ?? "switchos-core",
   sessionIssuer: process.env.SESSION_ISSUER ?? "switchos.local",
   sessionAudience: process.env.SESSION_AUDIENCE ?? "switchos-operator-dashboard",
-  internalServiceToken: process.env.INTERNAL_SERVICE_TOKEN ?? "switchos-internal-dev-token-change-before-production",
+  internalServiceToken: getInternalServiceToken(),
   port: Number.parseInt(process.env.PORT ?? "3005", 10) || 3005,
   bindHost: process.env.BIND_HOST ?? "127.0.0.1",
   apisixAdminUrl: process.env.APISIX_ADMIN_URL ?? "http://127.0.0.1:9180",

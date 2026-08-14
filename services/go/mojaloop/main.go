@@ -102,8 +102,14 @@ type ReconciliationReport struct {
 	RecordedAt         time.Time               `json:"recordedAt"`
 }
 
+const insecureInternalServiceToken = "switchos-internal-dev-token-change-before-production"
+
 func NewMojaloopService(tigerBeetle *TigerBeetleClient) (*MojaloopService, error) {
 	databaseURL := getEnv("DATABASE_URL", "postgresql://ubuntu:ubuntu@127.0.0.1:5432/switchos?sslmode=disable")
+	internalServiceToken := strings.TrimSpace(os.Getenv("INTERNAL_SERVICE_TOKEN"))
+	if internalServiceToken == "" || subtle.ConstantTimeCompare([]byte(internalServiceToken), []byte(insecureInternalServiceToken)) == 1 {
+		return nil, fmt.Errorf("INTERNAL_SERVICE_TOKEN must be explicitly configured with a non-placeholder secret")
+	}
 	db, err := sql.Open("postgres", databaseURL)
 	if err != nil {
 		return nil, fmt.Errorf("open mojaloop database: %w", err)
@@ -116,7 +122,7 @@ func NewMojaloopService(tigerBeetle *TigerBeetleClient) (*MojaloopService, error
 		httpClient:           &http.Client{Timeout: 30 * time.Second},
 		switchURL:            getEnv("MOJALOOP_SWITCH_URL", "http://localhost:4001"),
 		participantID:        getEnv("MOJALOOP_PARTICIPANT_ID", "switchos"),
-		internalServiceToken: getEnv("INTERNAL_SERVICE_TOKEN", "switchos-internal-dev-token-change-before-production"),
+		internalServiceToken: internalServiceToken,
 		tigerBeetle:          tigerBeetle,
 		db:                   db,
 	}
@@ -1341,4 +1347,3 @@ func main() {
 		log.Fatalf("Failed to serve HTTP: %v", err)
 	}
 }
-
