@@ -66,6 +66,9 @@ func TestFundsOutboxAtomicPersistenceAndRecovery(t *testing.T) {
 	if err != nil || !found {
 		t.Fatalf("claim pending outbox record: found=%v err=%v", found, err)
 	}
+	if record.Destination != "tigerbeetle" {
+		t.Fatalf("expected TigerBeetle predecessor to claim first, got %q", record.Destination)
+	}
 	if err := service.retryFundsOutboxRecord(record.ID, assertableOutboxError{}); err != nil {
 		t.Fatalf("record durable retry state: %v", err)
 	}
@@ -85,6 +88,13 @@ func TestFundsOutboxAtomicPersistenceAndRecovery(t *testing.T) {
 	}
 	if status != "delivered" {
 		t.Fatalf("expected delivered outbox status, got %q", status)
+	}
+	nextRecord, found, err := service.claimFundsOutboxRecord("outbox-test-worker")
+	if err != nil || !found {
+		t.Fatalf("claim downstream record after ledger delivery: found=%v err=%v", found, err)
+	}
+	if nextRecord.Destination != "kafka" && nextRecord.Destination != "temporal" {
+		t.Fatalf("expected a downstream broker intent after ledger delivery, got %q", nextRecord.Destination)
 	}
 }
 
