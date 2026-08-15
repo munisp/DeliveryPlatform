@@ -1,0 +1,162 @@
+name: switchos-financial-rehearsal
+
+x-mojaloop-environment: &mojaloop-environment
+  DATABASE_URL: postgresql://financial_rehearsal:${FINANCIAL_TEST_POSTGRES_PASSWORD:?FINANCIAL_TEST_POSTGRES_PASSWORD must be set}@127.0.0.1:55432/financial_rehearsal?sslmode=disable
+  INTERNAL_SERVICE_TOKEN: ${FINANCIAL_TEST_INTERNAL_SERVICE_TOKEN:?FINANCIAL_TEST_INTERNAL_SERVICE_TOKEN must be set}
+  TIGERBEETLE_ADDRESSES: 127.0.0.1:3001,127.0.0.1:3002,127.0.0.1:3003
+  TIGERBEETLE_CLUSTER_ID: ${FINANCIAL_TEST_CLUSTER_ID:?FINANCIAL_TEST_CLUSTER_ID must be set}
+  TIGERBEETLE_LEDGER: "1"
+  TIGERBEETLE_ACCOUNT_MAP_JSON: ${FINANCIAL_TEST_ACCOUNT_MAP_JSON:?FINANCIAL_TEST_ACCOUNT_MAP_JSON must be set}
+  FUNDS_OUTBOX_DESTINATIONS: tigerbeetle,kafka,temporal
+  KAFKA_BROKERS: 127.0.0.1:19092
+  KAFKA_FUNDS_TOPIC: switchos.financial.rehearsal
+  TEMPORAL_ADDRESS: 127.0.0.1:17233
+  TEMPORAL_NAMESPACE: default
+  TEMPORAL_TASK_QUEUE: switchos-funds-workflows
+  TEMPORAL_BRIDGE_URL: http://127.0.0.1:18087
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: financial_rehearsal
+      POSTGRES_USER: financial_rehearsal
+      POSTGRES_PASSWORD: ${FINANCIAL_TEST_POSTGRES_PASSWORD:?FINANCIAL_TEST_POSTGRES_PASSWORD must be set}
+    ports: ["55432:5432"]
+    volumes: ["financial_rehearsal_postgres:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U financial_rehearsal -d financial_rehearsal"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: "no"
+
+  migrate:
+    image: postgres:16
+    depends_on:
+      postgres: {condition: service_healthy}
+    environment:
+      DATABASE_URL: postgresql://financial_rehearsal:${FINANCIAL_TEST_POSTGRES_PASSWORD:?FINANCIAL_TEST_POSTGRES_PASSWORD must be set}@postgres:5432/financial_rehearsal?sslmode=disable
+    volumes:
+      - ../../drizzle/0006_mojaloop_exact_money_and_outbox.sql:/migrations/0006.sql:ro
+      - ../../drizzle/0007_mojaloop_schema_contract.sql:/migrations/0007.sql:ro
+    entrypoint: ["/bin/sh", "-ec"]
+    command: >-
+      psql "$${DATABASE_URL}" -v ON_ERROR_STOP=1 -f /migrations/0006.sql
+      && psql "$${DATABASE_URL}" -v ON_ERROR_STOP=1 -f /migrations/0007.sql
+    restart: "no"
+
+  tigerbeetle-0:
+    image: ghcr.io/tigerbeetle/tigerbeetle:0.17.9
+    network_mode: host
+    security_opt: ["seccomp=unconfined"]
+    volumes: ["${FINANCIAL_REHEARSAL_DATA_DIR:?FINANCIAL_REHEARSAL_DATA_DIR must be set}:/data"]
+    command: start --addresses=127.0.0.1:3001,127.0.0.1:3002,127.0.0.1:3003 --cache-grid=256MiB /data/0_0.tigerbeetle
+    restart: "no"
+
+  tigerbeetle-1:
+    image: ghcr.io/tigerbeetle/tigerbeetle:0.17.9
+    network_mode: host
+    security_opt: ["seccomp=unconfined"]
+    volumes: ["${FINANCIAL_REHEARSAL_DATA_DIR:?FINANCIAL_REHEARSAL_DATA_DIR must be set}:/data"]
+    command: start --addresses=127.0.0.1:3001,127.0.0.1:3002,127.0.0.1:3003 --cache-grid=256MiB /data/0_1.tigerbeetle
+    restart: "no"
+
+  tigerbeetle-2:
+    image: ghcr.io/tigerbeetle/tigerbeetle:0.17.9
+    network_mode: host
+    security_opt: ["seccomp=unconfined"]
+    volumes: ["${FINANCIAL_REHEARSAL_DATA_DIR:?FINANCIAL_REHEARSAL_DATA_DIR must be set}:/data"]
+    command: start --addresses=127.0.0.1:3001,127.0.0.1:3002,127.0.0.1:3003 --cache-grid=256MiB /data/0_2.tigerbeetle
+    restart: "no"
+
+  redpanda:
+    image: docker.redpanda.com/redpandadata/redpanda:v26.2.1
+    command:
+      - redpanda
+      - start
+      - --kafka-addr=internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr=internal://redpanda:9092,external://127.0.0.1:19092
+      - --rpc-addr=redpanda:33145
+      - --advertise-rpc-addr=redpanda:33145
+      - --mode=dev-container
+      - --smp=1
+      - --default-log-level=info
+    ports: ["19092:19092", "19644:9644"]
+    volumes: ["financial_rehearsal_redpanda:/var/lib/redpanda/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster info --brokers=localhost:9092"]
+      interval: 5s
+      timeout: 10s
+      retries: 20
+    restart: "no"
+
+  temporal:
+    image: temporalio/temporal:1.8.2
+    command: server start-dev --ip 0.0.0.0 --headless --db-filename /var/lib/temporal/temporal.db
+    ports: ["17233:7233"]
+    volumes: ["financial_rehearsal_temporal:/var/lib/temporal"]
+    restart: "no"
+
+  mojaloop-api:
+    build: {context: ../../services/go/mojaloop, dockerfile: Dockerfile}
+    image: switchos/mojaloop-financial-rehearsal:local
+    network_mode: host
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      tigerbeetle-0: {condition: service_started}
+      tigerbeetle-1: {condition: service_started}
+      tigerbeetle-2: {condition: service_started}
+      redpanda: {condition: service_healthy}
+      temporal: {condition: service_started}
+    environment:
+      <<: *mojaloop-environment
+      MOJALOOP_SERVICE_MODE: http
+      BIND_HOST: 127.0.0.1
+      HTTP_PORT: "18086"
+    restart: "no"
+
+  temporal-bridge:
+    image: switchos/mojaloop-financial-rehearsal:local
+    network_mode: host
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      temporal: {condition: service_started}
+    environment:
+      <<: *mojaloop-environment
+      MOJALOOP_SERVICE_MODE: temporal-bridge
+      BIND_HOST: 127.0.0.1
+      HTTP_PORT: "18087"
+    restart: "no"
+
+  temporal-worker:
+    image: switchos/mojaloop-financial-rehearsal:local
+    network_mode: host
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      temporal: {condition: service_started}
+    environment:
+      <<: *mojaloop-environment
+      MOJALOOP_SERVICE_MODE: worker
+    restart: "no"
+
+  mojaloop-outbox-worker:
+    image: switchos/mojaloop-financial-rehearsal:local
+    network_mode: host
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      tigerbeetle-0: {condition: service_started}
+      tigerbeetle-1: {condition: service_started}
+      tigerbeetle-2: {condition: service_started}
+      redpanda: {condition: service_healthy}
+      temporal: {condition: service_started}
+    environment:
+      <<: *mojaloop-environment
+      MOJALOOP_SERVICE_MODE: outbox-worker
+      FUNDS_OUTBOX_WORKER_ID: financial-rehearsal-outbox
+    restart: "no"
+
+volumes:
+  financial_rehearsal_postgres:
+  financial_rehearsal_redpanda:
+  financial_rehearsal_temporal:

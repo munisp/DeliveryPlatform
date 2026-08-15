@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -101,3 +102,72 @@ func TestFundsOutboxAtomicPersistenceAndRecovery(t *testing.T) {
 type assertableOutboxError struct{}
 
 func (assertableOutboxError) Error() string { return "simulated broker acknowledgment failure" }
+
+func TestRefundReservationsIncludePendingLedgerAndSerializeConcurrentRequests(t *testing.T) {
+	databaseURL := strings.TrimSpace(os.Getenv("TEST_DATABASE_URL"))
+	if databaseURL == "" {
+		t.Skip("TEST_DATABASE_URL must target an isolated PostgreSQL database")
+	}
+	if strings.Contains(strings.ToLower(databaseURL), "prod") {
+		t.Fatal("refusing to run refund reservation test against a production-looking database URL")
+	}
+
+	db, err := sql.Open("postgres", databaseURL)
+	if err != nil {
+		t.Fatalf("open test database: %v", err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`TRUNCATE mojaloop_funds_outbox, mojaloop_workflow_events, mojaloop_workflows, mojaloop_refunds, mojaloop_idempotency_keys, mojaloop_transfers RESTART IDENTITY`); err != nil {
+		t.Fatalf("reset isolated refund tables: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO mojaloop_transfers (transfer_id, payer_fsp, payee_fsp, amount, amount_minor, currency, ilp_packet, condition, expiration, state, created_at, updated_at)
+		VALUES ('refund-bound-transfer', 'payer', 'payee', 10.00, 1000, 'EUR', 'packet', 'condition', NOW() + INTERVAL '1 hour', 'SETTLED', NOW(), NOW())`); err != nil {
+		t.Fatalf("insert settled transfer: %v", err)
+	}
+
+	t.Setenv("FUNDS_OUTBOX_DESTINATIONS", "tigerbeetle")
+	service := &MojaloopService{db: db}
+	payloads := []RefundInitiationPayload{
+		{RefundID: "refund-bound-a", OriginalTransferID: "refund-bound-transfer", AmountMinor: 700, Currency: "EUR"},
+		{RefundID: "refund-bound-b", OriginalTransferID: "refund-bound-transfer", AmountMinor: 700, Currency: "EUR"},
+	}
+	results := make(chan error, len(payloads))
+	var group sync.WaitGroup
+	for _, payload := range payloads {
+		payload := payload
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			_, err := service.initiateRefund(payload, payload.RefundID)
+			results <- err
+		}()
+	}
+	group.Wait()
+	close(results)
+
+	successes, failures := 0, 0
+	for err := range results {
+		if err == nil {
+			successes++
+			continue
+		}
+		if !strings.Contains(err.Error(), "refund amount exceeds remaining settled amount") {
+			t.Fatalf("unexpected concurrent refund error: %v", err)
+		}
+		failures++
+	}
+	if successes != 1 || failures != 1 {
+		t.Fatalf("expected one refund reservation and one bounded rejection; successes=%d failures=%d", successes, failures)
+	}
+
+	reserved, err := service.getRefundedAmount("refund-bound-transfer")
+	if err != nil {
+		t.Fatalf("sum pending-ledger refund reservations: %v", err)
+	}
+	if reserved != 700 {
+		t.Fatalf("expected pending-ledger reservation to consume 700 minor units, got %d", reserved)
+	}
+	if _, err := service.initiateRefund(RefundInitiationPayload{RefundID: "refund-bound-c", OriginalTransferID: "refund-bound-transfer", AmountMinor: 301, Currency: "EUR"}, "refund-bound-c"); err == nil {
+		t.Fatal("refund exceeding the remaining 300 minor units was accepted")
+	}
+}

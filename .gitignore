@@ -10,6 +10,7 @@ services/go/vertical-provisioning/switchos-vertical-provisioning
 .env
 .env.*
 *.log
+.financial-rehearsal/
 __pycache__/
 .pytest_cache/
 .DS_Store

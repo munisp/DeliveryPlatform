@@ -292,48 +292,8 @@ func (s *MojaloopService) initiateRefund(payload RefundInitiationPayload, idempo
 			}, nil
 		}
 
-		transfer, ok := s.getTransfer(payload.OriginalTransferID)
-		if !ok {
-			return nil, fmt.Errorf("original transfer not found")
-		}
-		if !isRefundableTransferState(transfer.State) {
-			return nil, fmt.Errorf("transfer state %s cannot be refunded", transfer.State)
-		}
-
-		currentRefunded, err := s.getRefundedAmount(payload.OriginalTransferID)
+		refund, err := s.reserveRefundAndWorkflow(payload)
 		if err != nil {
-			return nil, err
-		}
-		if currentRefunded > transfer.AmountMinor || payload.AmountMinor > transfer.AmountMinor-currentRefunded {
-			return nil, fmt.Errorf("refund amount exceeds remaining settled amount")
-		}
-
-		refund := Refund{
-			RefundID:           payload.RefundID,
-			OriginalTransferID: payload.OriginalTransferID,
-			PayerFSP:           transfer.PayerFSP,
-			PayeeFSP:           transfer.PayeeFSP,
-			AmountMinor:        payload.AmountMinor,
-			Currency:           fallbackString(payload.Currency, transfer.Currency),
-			Reason:             strings.TrimSpace(payload.Reason),
-			State:              "PENDING_LEDGER",
-		}
-
-		refundEvent := FundsWorkflowEvent{
-			WorkflowType: "refund",
-			WorkflowID:   payload.RefundID,
-			ResourceID:   payload.OriginalTransferID,
-			Step:         "queued",
-			Status:       refund.State,
-			Payload: map[string]any{
-				"payerFsp":    refund.PayerFSP,
-				"payeeFsp":    refund.PayeeFSP,
-				"amountMinor": refund.AmountMinor,
-				"currency":    refund.Currency,
-				"reason":      refund.Reason,
-			},
-		}
-		if err := s.storeRefundAndWorkflow(refund, refundEvent); err != nil {
 			return nil, err
 		}
 
@@ -344,6 +304,85 @@ func (s *MojaloopService) initiateRefund(payload RefundInitiationPayload, idempo
 			"message":            "Refund is durably queued for ledger reversal",
 		}, nil
 	})
+}
+
+// reserveRefundAndWorkflow serializes all reservations for one original
+// transfer. Pending ledger reversals consume the same available amount as
+// completed reversals so a broker or ledger interruption cannot make the same
+// settled value refundable twice.
+func (s *MojaloopService) reserveRefundAndWorkflow(payload RefundInitiationPayload) (Refund, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return Refund{}, fmt.Errorf("begin refund reservation transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	transfer, found, err := getTransferForRefundReservation(tx, payload.OriginalTransferID)
+	if err != nil {
+		return Refund{}, err
+	}
+	if !found {
+		return Refund{}, fmt.Errorf("original transfer not found")
+	}
+	if !isRefundableTransferState(transfer.State) {
+		return Refund{}, fmt.Errorf("transfer state %s cannot be refunded", transfer.State)
+	}
+
+	currentRefunded, err := getRefundedAmountTx(tx, payload.OriginalTransferID)
+	if err != nil {
+		return Refund{}, err
+	}
+	if currentRefunded > transfer.AmountMinor || payload.AmountMinor > transfer.AmountMinor-currentRefunded {
+		return Refund{}, fmt.Errorf("refund amount exceeds remaining settled amount")
+	}
+
+	refund := Refund{
+		RefundID:           payload.RefundID,
+		OriginalTransferID: payload.OriginalTransferID,
+		PayerFSP:           transfer.PayerFSP,
+		PayeeFSP:           transfer.PayeeFSP,
+		AmountMinor:        payload.AmountMinor,
+		Currency:           fallbackString(payload.Currency, transfer.Currency),
+		Reason:             strings.TrimSpace(payload.Reason),
+		State:              "PENDING_LEDGER",
+	}
+	refundEvent := FundsWorkflowEvent{
+		WorkflowType: "refund",
+		WorkflowID:   payload.RefundID,
+		ResourceID:   payload.OriginalTransferID,
+		Step:         "queued",
+		Status:       refund.State,
+		Payload: map[string]any{
+			"payerFsp":    refund.PayerFSP,
+			"payeeFsp":    refund.PayeeFSP,
+			"amountMinor": refund.AmountMinor,
+			"currency":    refund.Currency,
+			"reason":      refund.Reason,
+		},
+	}
+	if err := s.storeRefundAndWorkflowTx(tx, refund, refundEvent); err != nil {
+		return Refund{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return Refund{}, fmt.Errorf("commit refund reservation transaction: %w", err)
+	}
+	return refund, nil
+}
+
+func getTransferForRefundReservation(tx *sql.Tx, transferID string) (Transfer, bool, error) {
+	transfer := Transfer{}
+	err := tx.QueryRow(
+		`SELECT transfer_id, payer_fsp, payee_fsp, amount_minor, currency, state
+		 FROM mojaloop_transfers WHERE transfer_id = $1 FOR UPDATE`,
+		transferID,
+	).Scan(&transfer.TransferID, &transfer.PayerFSP, &transfer.PayeeFSP, &transfer.AmountMinor, &transfer.Currency, &transfer.State)
+	if err == sql.ErrNoRows {
+		return Transfer{}, false, nil
+	}
+	if err != nil {
+		return Transfer{}, false, fmt.Errorf("lock original transfer for refund: %w", err)
+	}
+	return transfer, true, nil
 }
 
 func (s *MojaloopService) executeIdempotent(operation, key, resourceID string, action func() (map[string]any, error)) (map[string]any, error) {
@@ -707,8 +746,21 @@ func (s *MojaloopService) listRefundsForTransfer(transferID string) ([]Refund, e
 }
 
 func (s *MojaloopService) getRefundedAmount(transferID string) (uint64, error) {
+	return scanRefundedAmount(s.db.QueryRow(refundReservationAmountQuery, transferID))
+}
+
+func getRefundedAmountTx(tx *sql.Tx, transferID string) (uint64, error) {
+	if tx == nil {
+		return 0, fmt.Errorf("refund reservation transaction is required")
+	}
+	return scanRefundedAmount(tx.QueryRow(refundReservationAmountQuery, transferID))
+}
+
+const refundReservationAmountQuery = `SELECT COALESCE(SUM(amount_minor), 0) FROM mojaloop_refunds WHERE original_transfer_id = $1 AND state IN ('PENDING_LEDGER','PENDING','COMPLETED')`
+
+func scanRefundedAmount(row *sql.Row) (uint64, error) {
 	var amount sql.NullInt64
-	if err := s.db.QueryRow(`SELECT COALESCE(SUM(amount_minor), 0) FROM mojaloop_refunds WHERE original_transfer_id = $1 AND state IN ('PENDING','COMPLETED')`, transferID).Scan(&amount); err != nil {
+	if err := row.Scan(&amount); err != nil {
 		return 0, fmt.Errorf("sum refunded amount: %w", err)
 	}
 	if !amount.Valid || amount.Int64 < 0 {
@@ -1263,6 +1315,17 @@ func main() {
 		log.Printf("Mojaloop durable funds outbox worker started as %s", workerID)
 		if err := service.RunFundsOutboxDispatcher(ctx, workerID); err != nil {
 			log.Fatalf("Failed to run funds outbox worker: %v", err)
+		}
+		return
+	}
+	if serviceMode == "temporal-bridge" {
+		mux := http.NewServeMux()
+		mux.HandleFunc("/health", service.handleHealthHTTP)
+		mux.HandleFunc("/funds/workflows", service.handleTemporalWorkflowBridgeHTTP)
+		addr := bindHost + ":" + httpPort
+		log.Printf("Mojaloop Temporal workflow bridge listening on %s (namespace=%s, taskQueue=%s)", addr, effectiveTemporalNamespace(), effectiveTemporalTaskQueue())
+		if err := http.ListenAndServe(addr, mux); err != nil {
+			log.Fatalf("Failed to serve Temporal workflow bridge: %v", err)
 		}
 		return
 	}

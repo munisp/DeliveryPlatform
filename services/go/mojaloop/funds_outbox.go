@@ -90,7 +90,20 @@ func (s *MojaloopService) storeRefundAndWorkflow(refund Refund, event FundsWorkf
 		return fmt.Errorf("begin refund and outbox transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	if _, err = tx.Exec(
+	if err = s.storeRefundAndWorkflowTx(tx, refund, event); err != nil {
+		return err
+	}
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("commit refund and outbox transaction: %w", err)
+	}
+	return nil
+}
+
+func (s *MojaloopService) storeRefundAndWorkflowTx(tx *sql.Tx, refund Refund, event FundsWorkflowEvent) error {
+	if tx == nil {
+		return fmt.Errorf("refund and outbox transaction is required")
+	}
+	if _, err := tx.Exec(
 		`INSERT INTO mojaloop_refunds (
 			refund_id, original_transfer_id, payer_fsp, payee_fsp, amount, amount_minor, currency, reason, state, completed_time, created_at, updated_at
 		) VALUES ($1,$2,$3,$4,$5::numeric / 100,$5,$6,$7,$8,$9,NOW(),NOW())
@@ -103,11 +116,8 @@ func (s *MojaloopService) storeRefundAndWorkflow(refund Refund, event FundsWorkf
 	); err != nil {
 		return fmt.Errorf("store refund with outbox: %w", err)
 	}
-	if err = s.persistFundsWorkflowEvent(tx, event); err != nil {
+	if err := s.persistFundsWorkflowEvent(tx, event); err != nil {
 		return err
-	}
-	if err = tx.Commit(); err != nil {
-		return fmt.Errorf("commit refund and outbox transaction: %w", err)
 	}
 	return nil
 }
