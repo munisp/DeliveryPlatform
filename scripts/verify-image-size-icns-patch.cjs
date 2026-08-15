@@ -1,9 +1,10 @@
 const path = require("node:path");
 
-const packageRoot = process.argv[2];
-if (!packageRoot) {
+const requestedPackageRoot = process.argv[2];
+if (!requestedPackageRoot) {
   throw new Error("Pass the resolved image-size package directory as the first argument");
 }
+const packageRoot = path.resolve(requestedPackageRoot);
 
 const { ICNS } = require(path.join(packageRoot, "dist/types/icns.js"));
 const boxTraversal = require("node:fs").readFileSync(path.join(packageRoot, "dist/types/utils.js"), "utf8");
