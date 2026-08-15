@@ -129,84 +129,49 @@ func NewMojaloopService(tigerBeetle *TigerBeetleClient) (*MojaloopService, error
 		tigerBeetle:          tigerBeetle,
 		db:                   db,
 	}
-	if err := service.ensurePersistence(); err != nil {
-		_ = db.Close()
-		return nil, err
-	}
-	if err := service.ensureWorkflowPersistence(); err != nil {
+	if err := service.verifyPersistenceContract(); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
 	return service, nil
 }
 
-func (s *MojaloopService) ensurePersistence() error {
-	statements := []string{
-		`CREATE TABLE IF NOT EXISTS mojaloop_transfers (
-			transfer_id TEXT PRIMARY KEY,
-			payer_fsp TEXT NOT NULL,
-			payee_fsp TEXT NOT NULL,
-			amount NUMERIC(18,2) NOT NULL,
-			currency TEXT NOT NULL,
-			ilp_packet TEXT NOT NULL,
-			condition TEXT NOT NULL,
-			expiration TIMESTAMPTZ NOT NULL,
-			state TEXT NOT NULL,
-			completed_time TIMESTAMPTZ,
-			fulfilment_value TEXT,
-			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-		)`,
-		`CREATE TABLE IF NOT EXISTS mojaloop_quotes (
-			quote_id TEXT PRIMARY KEY,
-			transaction_id TEXT NOT NULL,
-			payer_fsp TEXT NOT NULL,
-			payee_fsp TEXT NOT NULL,
-			amount NUMERIC(18,2) NOT NULL,
-			currency TEXT NOT NULL,
-			fees NUMERIC(18,2) NOT NULL,
-			expiration TIMESTAMPTZ NOT NULL,
-			state TEXT NOT NULL,
-			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-		)`,
-		`CREATE TABLE IF NOT EXISTS mojaloop_refunds (
-			refund_id TEXT PRIMARY KEY,
-			original_transfer_id TEXT NOT NULL,
-			payer_fsp TEXT NOT NULL,
-			payee_fsp TEXT NOT NULL,
-			amount NUMERIC(18,2) NOT NULL,
-			currency TEXT NOT NULL,
-			reason TEXT,
-			state TEXT NOT NULL,
-			completed_time TIMESTAMPTZ,
-			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-		)`,
-		`CREATE TABLE IF NOT EXISTS mojaloop_idempotency_keys (
-			operation TEXT NOT NULL,
-			idempotency_key TEXT NOT NULL,
-			resource_id TEXT,
-			status TEXT NOT NULL,
-			response_body JSONB,
-			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-			PRIMARY KEY (operation, idempotency_key)
-		)`,
-		`CREATE TABLE IF NOT EXISTS mojaloop_reconciliation_audits (
-			id BIGSERIAL PRIMARY KEY,
-			transfer_id TEXT NOT NULL,
-			transfer_state TEXT NOT NULL,
-			ledger_consistent BOOLEAN NOT NULL,
-			platform_refunded_amount NUMERIC(18,2) NOT NULL,
-			platform_net_settled_amount NUMERIC(18,2) NOT NULL,
-			details JSONB NOT NULL,
-			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-		)`,
+const mojaloopFundsSchemaContractVersion = 7
+
+func (s *MojaloopService) verifyPersistenceContract() error {
+	var version int
+	if err := s.db.QueryRow(`SELECT version FROM platform_schema_contracts WHERE component = 'mojaloop_funds'`).Scan(&version); err != nil {
+		if err == sql.ErrNoRows {
+			return fmt.Errorf("Mojaloop funds schema contract is missing; apply migration 0007_mojaloop_schema_contract.sql before starting the service")
+		}
+		return fmt.Errorf("read Mojaloop funds schema contract: %w", err)
 	}
-	for _, statement := range statements {
-		if _, err := s.db.Exec(statement); err != nil {
-			return fmt.Errorf("ensure mojaloop persistence schema: %w", err)
+	if version < mojaloopFundsSchemaContractVersion {
+		return fmt.Errorf("Mojaloop funds schema contract version %d is obsolete; apply migration 0007_mojaloop_schema_contract.sql", version)
+	}
+
+	requiredColumns := [][2]string{
+		{"mojaloop_transfers", "amount_minor"},
+		{"mojaloop_quotes", "amount_minor"},
+		{"mojaloop_quotes", "fees_minor"},
+		{"mojaloop_refunds", "amount_minor"},
+		{"mojaloop_reconciliation_audits", "platform_net_settled_minor"},
+		{"mojaloop_idempotency_keys", "operation"},
+		{"mojaloop_workflows", "workflow_id"},
+		{"mojaloop_workflow_events", "workflow_id"},
+		{"mojaloop_workflow_orchestration", "workflow_id"},
+		{"mojaloop_funds_outbox", "dispatch_order"},
+	}
+	for _, requirement := range requiredColumns {
+		var exists bool
+		if err := s.db.QueryRow(`SELECT EXISTS (
+			SELECT 1 FROM information_schema.columns
+			WHERE table_schema = current_schema() AND table_name = $1 AND column_name = $2
+		)`, requirement[0], requirement[1]).Scan(&exists); err != nil {
+			return fmt.Errorf("verify Mojaloop schema requirement %s.%s: %w", requirement[0], requirement[1], err)
+		}
+		if !exists {
+			return fmt.Errorf("Mojaloop schema requirement %s.%s is missing; apply reviewed migrations before starting the service", requirement[0], requirement[1])
 		}
 	}
 	return nil

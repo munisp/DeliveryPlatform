@@ -38,52 +38,6 @@ type ReconciliationOverview struct {
 	Recommendation        string     `json:"recommendation"`
 }
 
-func (s *MojaloopService) ensureWorkflowPersistence() error {
-	statements := []string{
-		`CREATE TABLE IF NOT EXISTS mojaloop_workflows (
-			workflow_id TEXT PRIMARY KEY,
-			workflow_type TEXT NOT NULL,
-			resource_id TEXT NOT NULL,
-			current_step TEXT NOT NULL,
-			status TEXT NOT NULL,
-			last_error TEXT,
-			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-		)`,
-		`CREATE TABLE IF NOT EXISTS mojaloop_workflow_events (
-			id BIGSERIAL PRIMARY KEY,
-			workflow_id TEXT NOT NULL,
-			workflow_type TEXT NOT NULL,
-			resource_id TEXT NOT NULL,
-			step TEXT NOT NULL,
-			status TEXT NOT NULL,
-			payload JSONB NOT NULL DEFAULT '{}'::jsonb,
-			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-		)`,
-		`CREATE INDEX IF NOT EXISTS idx_mojaloop_workflow_events_workflow_id ON mojaloop_workflow_events (workflow_id, created_at DESC)`,
-		`CREATE TABLE IF NOT EXISTS mojaloop_workflow_orchestration (
-			id BIGSERIAL PRIMARY KEY,
-			workflow_id TEXT NOT NULL,
-			workflow_type TEXT NOT NULL,
-			resource_id TEXT NOT NULL,
-			orchestrator TEXT NOT NULL,
-			target TEXT NOT NULL,
-			status TEXT NOT NULL,
-			payload JSONB NOT NULL DEFAULT '{}'::jsonb,
-			last_error TEXT,
-			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-		)`,
-		`CREATE INDEX IF NOT EXISTS idx_mojaloop_workflow_orchestration_workflow ON mojaloop_workflow_orchestration (workflow_id, created_at DESC)`,
-	}
-	for _, statement := range statements {
-		if _, err := s.db.Exec(statement); err != nil {
-			return fmt.Errorf("ensure mojaloop workflow persistence: %w", err)
-		}
-	}
-	return nil
-}
-
 func (s *MojaloopService) recordFundsWorkflowEvent(event FundsWorkflowEvent) error {
 	tx, err := s.db.Begin()
 	if err != nil {

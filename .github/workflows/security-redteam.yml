@@ -4,10 +4,6 @@ on:
     branches: [main]
   push:
     branches: [main]
-    paths:
-      - 'server/_core/longcat.ts'
-      - 'tests/longcat.*.test.ts'
-      - '.github/workflows/security-redteam.yml'
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -92,11 +88,8 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile --ignore-scripts
 
-      - name: Run production audit (critical/high only)
-        run: |
-          pnpm audit --prod --audit-level=critical 2>&1 || true
-          echo "---"
-          echo "Note: Remaining high findings are Expo SDK toolchain — requires SDK upgrade."
+      - name: Enforce production audit gate (High/Critical)
+        run: pnpm audit --prod --audit-level=high
 
   database-integration:
     name: Disposable PostgreSQL Integration & Rollback Rehearsal
@@ -132,11 +125,15 @@ jobs:
         uses: pnpm/action-setup@v4
       - name: Install dependencies
         run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.x'
       - name: Install PostgreSQL client
         run: sudo apt-get update && sudo apt-get install -y postgresql-client
       - name: Apply migrations and deterministic integration seed
         run: |
-          for migration in drizzle/0000_jittery_pride.sql drizzle/0001_shallow_fat_cobra.sql drizzle/0002_secret_kronos.sql drizzle/0003_tigerbeetle_schema_audit.sql drizzle/0004_platform_integration_audit.sql drizzle/0005_users_phone_for_growth_idempotency.sql drizzle/0006_mojaloop_exact_money_and_outbox.sql; do
+          for migration in drizzle/0000_jittery_pride.sql drizzle/0001_shallow_fat_cobra.sql drizzle/0002_secret_kronos.sql drizzle/0003_tigerbeetle_schema_audit.sql drizzle/0004_platform_integration_audit.sql drizzle/0005_users_phone_for_growth_idempotency.sql drizzle/0006_mojaloop_exact_money_and_outbox.sql drizzle/0007_mojaloop_schema_contract.sql; do
             psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$migration"
           done
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f scripts/init-local-postgres.sql
@@ -144,6 +141,7 @@ jobs:
         run: |
           scripts/run-db-backed-integration-tests.sh
           pnpm exec vitest run tests/loyalty-campaign-concurrency.test.ts --reporter=verbose
+          (cd services/go/mojaloop && go test -race ./...)
       - name: Rehearse reversible migration rollback against an isolated snapshot clone
         run: |
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c 'CREATE DATABASE switchos_rollback'

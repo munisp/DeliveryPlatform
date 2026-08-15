@@ -56,6 +56,8 @@ if [[ "$(table_exists users)" == "t" ]]; then
   psql "${ROLLBACK_TARGET_DATABASE_URL}" -v ON_ERROR_STOP=1 -f "${ROOT_DIR}/drizzle/0005_users_phone_for_growth_idempotency.sql" >/dev/null
 fi
 psql "${ROLLBACK_TARGET_DATABASE_URL}" -v ON_ERROR_STOP=1 -f "${ROOT_DIR}/drizzle/0006_mojaloop_exact_money_and_outbox.sql" >/dev/null
+psql "${ROLLBACK_TARGET_DATABASE_URL}" -v ON_ERROR_STOP=1 -f "${ROOT_DIR}/drizzle/0007_mojaloop_schema_contract.sql" >/dev/null
+psql "${ROLLBACK_TARGET_DATABASE_URL}" -v ON_ERROR_STOP=1 -f "${ROOT_DIR}/drizzle/rollback/0007_mojaloop_schema_contract.down.sql" >/dev/null
 psql "${ROLLBACK_TARGET_DATABASE_URL}" -v ON_ERROR_STOP=1 -f "${ROOT_DIR}/drizzle/rollback/0006_mojaloop_exact_money_and_outbox.down.sql" >/dev/null
 if [[ "${rehearse_users_phone}" == "true" ]]; then
   psql "${ROLLBACK_TARGET_DATABASE_URL}" -v ON_ERROR_STOP=1 -f "${ROOT_DIR}/drizzle/rollback/0005_users_phone_for_growth_idempotency.down.sql" >/dev/null
@@ -66,11 +68,13 @@ target_campaigns="$(table_count marketing_campaigns)"
 phone_column="$(psql "${ROLLBACK_TARGET_DATABASE_URL}" -Atc "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'users' AND column_name = 'phone'")"
 minor_column="$(psql "${ROLLBACK_TARGET_DATABASE_URL}" -Atc "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'mojaloop_transfers' AND column_name = 'amount_minor'")"
 outbox_table="$(psql "${ROLLBACK_TARGET_DATABASE_URL}" -Atc "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'mojaloop_funds_outbox'")"
+schema_contract_table="$(psql "${ROLLBACK_TARGET_DATABASE_URL}" -Atc "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'platform_schema_contracts'")"
 
 [[ "${source_users}" == "${target_users}" ]] || { echo "User count changed during clone/rollback" >&2; exit 1; }
 [[ "${source_campaigns}" == "${target_campaigns}" ]] || { echo "Campaign count changed during clone/rollback" >&2; exit 1; }
 [[ "${rehearse_users_phone}" != "true" || "${phone_column}" == "0" ]] || { echo "Rollback did not remove users.phone in the isolated target" >&2; exit 1; }
 [[ "${minor_column}" == "0" ]] || { echo "Rollback did not remove mojaloop_transfers.amount_minor in the isolated target" >&2; exit 1; }
 [[ "${outbox_table}" == "0" ]] || { echo "Rollback did not remove mojaloop_funds_outbox in the isolated target" >&2; exit 1; }
+[[ "${schema_contract_table}" == "0" ]] || { echo "Rollback did not remove the empty Mojaloop schema-contract registry in the isolated target" >&2; exit 1; }
 
-echo "PASS: isolated snapshot clone preserved users=${target_users}, campaigns=${target_campaigns}, and rolled back migrations 0005 and 0006"
+echo "PASS: isolated snapshot clone preserved users=${target_users}, campaigns=${target_campaigns}, and rolled back migrations 0005, 0006, and 0007"
