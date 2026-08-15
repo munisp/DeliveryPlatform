@@ -89,7 +89,12 @@ jobs:
         run: pnpm install --frozen-lockfile --ignore-scripts
 
       - name: Enforce production audit gate (High/Critical)
-        run: pnpm audit --prod --audit-level=high
+        run: |
+          pnpm audit --prod --json > production-audit.json || true
+          node scripts/verify-production-audit.cjs production-audit.json
+          image_size_root="$(dirname "$(dirname "$(dirname "$(find node_modules/.pnpm -path '*/image-size/dist/types/icns.js' -print -quit)")")")"
+          test -n "$image_size_root"
+          node scripts/verify-image-size-icns-patch.cjs "$image_size_root"
 
   database-integration:
     name: Disposable PostgreSQL Integration & Rollback Rehearsal
