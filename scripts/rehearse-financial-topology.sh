@@ -9,11 +9,11 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 compose_file="${repo_root}/deploy/testing/docker-compose.financial-rehearsal.yml"
 runtime_dir="${FINANCIAL_REHEARSAL_RUNTIME_DIR:-${repo_root}/.financial-rehearsal}"
 env_file="${runtime_dir}/rehearsal.env"
-minimum_available_kib=$((7 * 1024 * 1024))
+minimum_available_kib=$((5 * 1024 * 1024))
 
 available_kib="$(awk '/MemAvailable:/ { print $2 }' /proc/meminfo)"
 if [[ -z "${available_kib}" || "${available_kib}" -lt "${minimum_available_kib}" ]]; then
-  echo "Refusing rehearsal: at least 7 GiB of available memory is required for the isolated TigerBeetle, Redpanda, Temporal, PostgreSQL, and service stack; found ${available_kib:-unknown} KiB." >&2
+  echo "Refusing rehearsal: at least 5 GiB of available memory is required for the isolated TigerBeetle, memory-capped Redpanda, Temporal, PostgreSQL, and service stack; found ${available_kib:-unknown} KiB." >&2
   exit 2
 fi
 if [[ -f "${env_file}" ]]; then

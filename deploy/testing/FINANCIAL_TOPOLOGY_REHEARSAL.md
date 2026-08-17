@@ -2,13 +2,13 @@
 
 This is a **disposable real-service rehearsal**, not a production deployment. It starts an empty PostgreSQL database, a three-replica TigerBeetle cluster, one Redpanda broker, a persistent Temporal development service, and dedicated Mojaloop API, outbox-worker, Temporal bridge, and Temporal worker processes. It never accepts production credentials, production databases, or customer data.
 
-> The rehearsal starts only on a Linux host with Docker, functional Docker bridge endpoint attachment, and at least **7 GiB currently available memory**. It deliberately refuses constrained or stale environments rather than producing partial financial-test evidence.
+> The rehearsal starts only on a Linux host with Docker, functional Docker bridge endpoint attachment, and at least **5 GiB currently available memory**. Redpanda is explicitly capped at 1 GiB and the three TigerBeetle replicas retain their 256 MiB cache grids, so this safety margin covers the full test stack without removing a ledger replica or recovery phase. The harness deliberately refuses more constrained or stale environments rather than producing partial financial-test evidence.
 
 | Component | Pinned rehearsal version | Purpose | Explicit limitation |
 |---|---:|---|---|
 | TigerBeetle | `0.17.9` | Three replicas on ports `3001-3003` with `--cache-grid=256MiB` | Same-host replicas do not demonstrate multi-host or regional durability. |
 | PostgreSQL | `16` | Migration-owned workflow, idempotency, and outbox records | Uses a fresh test database only. |
-| Redpanda | `v26.2.1` | Kafka-compatible outbox delivery and broker recovery | One broker is a test fixture, not a production quorum. |
+| Redpanda | `v26.2.1` | Kafka-compatible outbox delivery and broker recovery | Capped at 1 GiB; one broker is a test fixture, not a production quorum. |
 | Temporal CLI | `1.8.2` | Persistent development server, bridge, and worker restart validation | Validates recovery behavior, not production Temporal capacity. |
 | Mojaloop | Local build | Ledger-first outbox, authenticated bridge, and worker | Uses the service’s fail-closed credentials and schema contract. |
 

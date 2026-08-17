@@ -72,6 +72,7 @@ services:
 
   redpanda:
     image: docker.redpanda.com/redpandadata/redpanda:v26.2.1
+    mem_limit: 1g
     command:
       - redpanda
       - start
@@ -81,6 +82,7 @@ services:
       - --advertise-rpc-addr=redpanda:33145
       - --mode=dev-container
       - --smp=1
+      - --memory=1G
       - --default-log-level=info
     ports: ["19092:19092", "19644:9644"]
     volumes: ["financial_rehearsal_redpanda:/var/lib/redpanda/data"]

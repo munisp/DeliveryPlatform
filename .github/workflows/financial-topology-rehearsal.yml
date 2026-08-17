@@ -33,9 +33,10 @@ jobs:
           printf 'FINANCIAL_REHEARSAL_EVIDENCE_DIR=%s\n' "$evidence_dir" >> "$GITHUB_ENV"
           docker version
           docker compose version
+          free -h
           available_kib="$(awk '/MemAvailable:/ { print $2 }' /proc/meminfo)"
           test -n "$available_kib"
-          test "$available_kib" -ge $((7 * 1024 * 1024))
+          test "$available_kib" -ge $((5 * 1024 * 1024))
           mkdir -p "$evidence_dir"
           printf 'runner=%s\navailable_memory_kib=%s\n' "$RUNNER_NAME" "$available_kib" \
             > "$evidence_dir/runner-capacity.txt"
