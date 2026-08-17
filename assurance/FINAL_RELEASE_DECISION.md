@@ -2,11 +2,13 @@
 
 **Decision:** **NO-GO — production release remains blocked by live financial-infrastructure and recovery evidence gaps.**
 
-**Current candidate:** `1bc6ee423187dd2fe7e89c007216726c1676025d` on `main` and `origin/main`.
+**Current candidate:** the current revision on `main` and `origin/main`; each linked workflow run below identifies the revision it exercised.
 
 **Hosted evidence:** GitHub Actions run [`31888076799`](https://github.com/munisp/DeliveryPlatform/actions/runs/31888076799), triggered from `1bc6ee4`, completed successfully after the GitHub App permission and Actions budget gates were resolved. The run passed its three jobs: Red-Team & Security Tests, Dependency Vulnerability Scan, and Disposable PostgreSQL Integration & Rollback Rehearsal.
 
 This decision distinguishes verified repository and disposable-database controls from unproven live ledger, broker, Temporal, switch, and deployment behavior. A successful hosted disposable-PostgreSQL gate is not represented as proof of production funds settlement.
+
+**Real-topology execution finding:** the manually dispatched GitHub Actions run [`32015888506`](https://github.com/munisp/DeliveryPlatform/actions/runs/32015888506) reached the disposable PostgreSQL, Redpanda, Temporal, three-replica TigerBeetle, and Mojaloop startup path. Its redacted artifact showed that the actual TigerBeetle Go client could not initialize because the hosted runner blocked `io_uring` (`PermissionDenied`). The job was destroyed and uploaded only allowlisted, non-secret diagnostics. This is useful compatibility evidence, but it is **not** a successful live-funds rehearsal: no transfer, refund, broker-recovery, or Temporal-recovery assertion is counted as passed from this run.
 
 ## Verified controls
 
@@ -21,6 +23,7 @@ This decision distinguishes verified repository and disposable-database controls
 | Schema ownership | migrations `0006`/`0007`, schema-contract integration test and rollback rehearsal | **Passed locally and in hosted database suite** | Mojaloop runtime DDL was replaced by a fail-closed migration-contract check; upgrade and rollback rehearsals are retained. |
 | Credential handling | Node and Go environment/constructor regressions | **Passed** | Production paths reject missing and known-placeholder internal-service credentials. |
 | TigerBeetle client boundary | Official Go client adapter and Go race/static checks | **Passed at source level** | Mojaloop requires explicit cluster, replica, ledger, and account-map configuration and no longer seeds payer funds or falls back to PostgreSQL as a ledger. [1] |
+| Hosted real-topology compatibility probe | GitHub Actions run [`32015888506`](https://github.com/munisp/DeliveryPlatform/actions/runs/32015888506) | **Blocked, safely cleaned up** | The isolated stack exposed hosted-runner `io_uring` denial in the real TigerBeetle client. The workflow retained redacted diagnostics and removed all generated test state; it did not fabricate a passing fallback. |
 
 ## Dependency disposition
 
@@ -33,6 +36,7 @@ The hosted audit deliberately **does not suppress** High/Critical results. It fa
 | Priority | Blocker | Why production release remains blocked | Minimum verified closure |
 |---|---|---|---|
 | Critical | Real TigerBeetle settlement proof | The adapter and outbox compile, but no controlled replicated TigerBeetle cluster and treasury-funded account set has been exercised. | Run account creation, insufficient-funds, duplicate replay, transfer/refund, reconciliation, client-restart, and partition recovery scenarios against an isolated replicated cluster. |
+| Critical | TigerBeetle-compatible execution host | GitHub-hosted runners block the `io_uring` capability required by the exercised TigerBeetle client, so the prepared manual workflow cannot provide real-ledger proof there. | Use an isolated persistent Linux host with Docker, functional bridge networking, at least 5 GiB available memory, and enabled, container-accessible `io_uring`; prove the capability before starting the cluster. |
 | Critical | Production funds topology | The reviewed compose stack is not a complete Mojaloop/TigerBeetle production topology. | Deploy a separately reviewed manifest with replicated ledger nodes, Mojaloop, configuration management, readiness checks, backups, recovery runbooks, and operator controls. |
 | High | Real downstream middleware faults | PostgreSQL outbox state and ordering are verified, but Kafka, Fluvio, Dapr, OpenSearch, and external-switch failures have not been exercised against the real services. | Run broker unavailability, duplicate delivery, poison-message/dead-letter, recovery, and reconciliation tests against real dependencies. |
 | High | Temporal recovery and compensation | Persisted workflow/outbox records exist, but durable execution and compensation require validation against a live Temporal service. | Start workers against a real Temporal service and test retry, crash/restart, compensation, and operator recovery paths. |
@@ -40,7 +44,7 @@ The hosted audit deliberately **does not suppress** High/Critical results. It fa
 
 ## Release decision and next sequence
 
-The hosted CI gate is now operational and green. The GitHub App has Actions and Workflows read/write permission, and the Actions account budget permits the gate to execute with stop-usage protection. The next release attempt should provision the real financial topology, execute the live ledger/broker/Temporal recovery matrix, retain artifacts, and then update this decision.
+The hosted CI gate is operational, and the manual topology workflow now provides an isolated, secret-free compatibility probe with redacted failure diagnostics. The GitHub App has Actions and Workflows read/write permission, and the Actions account budget permits the gate to execute with stop-usage protection. The next release attempt must use a TigerBeetle-compatible persistent Linux host, execute the live ledger/broker/Temporal recovery matrix, retain artifacts, and then update this decision.
 
 > **Production eligibility:** **No-Go.** Repository and disposable-database readiness improved substantially and hosted CI is verified, but the candidate remains **0/100 eligible for a production funds release** until the two Critical live-financial blockers are closed and the listed High recovery gates have real-service evidence.
 
