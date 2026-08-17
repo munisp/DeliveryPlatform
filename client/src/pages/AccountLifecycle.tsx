@@ -163,6 +163,25 @@ export function InvitationAcceptancePage() {
 
 type OnboardingState = { operator: { name: string; email: string; tenantId: string | null; emailVerified: boolean; onboardingCompleted: boolean }; needsEmailVerification: boolean; needsOrganization: boolean; needsCompletion: boolean };
 
+function OnboardingProgress({ state }: { state: OnboardingState }) {
+  const completedSteps = Number(!state.needsEmailVerification) + Number(!state.needsOrganization) + Number(state.operator.onboardingCompleted);
+  const activeStep = state.needsEmailVerification ? 1 : state.needsOrganization ? 2 : 3;
+  const progress = Math.round((completedSteps / 3) * 100);
+  const steps = ["Verify account", "Create workspace", "Invite team"];
+
+  return <section className="onboarding-progress" aria-labelledby="onboarding-progress-title">
+    <div className="onboarding-progress-heading"><p id="onboarding-progress-title">Setup progress</p><span>{completedSteps} of 3 complete</span></div>
+    <div className="onboarding-progress-track" role="progressbar" aria-valuemin={0} aria-valuemax={3} aria-valuenow={completedSteps} aria-valuetext={`${completedSteps} of 3 onboarding steps complete`}><span style={{ width: `${progress}%` }} /></div>
+    <ol className="onboarding-steps">
+      {steps.map((step, index) => {
+        const number = index + 1;
+        const stateClass = number < activeStep || (number === 3 && state.operator.onboardingCompleted) ? "is-complete" : number === activeStep ? "is-current" : "";
+        return <li key={step} className={stateClass} aria-current={number === activeStep ? "step" : undefined}><span>{number < activeStep || (number === 3 && state.operator.onboardingCompleted) ? "✓" : number}</span>{step}</li>;
+      })}
+    </ol>
+  </section>;
+}
+
 export function OnboardingPage() {
   const [organizationName, setOrganizationName] = useState("");
   const [organizationSlug, setOrganizationSlug] = useState("");
@@ -171,13 +190,17 @@ export function OnboardingPage() {
   const createOrganization = useMutation({ mutationFn: () => request<{ redirect: string }>("/api/auth/onboarding/organization", { organizationName, organizationSlug, tenantName }), onSuccess: (result) => { window.location.href = result.redirect; } });
   return <PublicShell eyebrow="Workspace setup" title="Set up your organization" description="Create the first organization and tenant workspace. You will become its initial administrator and can invite your team next.">
     <Card><CardHeader><CardTitle>{state.data?.needsOrganization ? `Welcome, ${state.data.operator.name}` : "Onboarding"}</CardTitle><CardDescription>Complete the remaining setup steps before operating the platform.</CardDescription></CardHeader><CardContent>
-      {state.isLoading ? <p className="text-sm text-slate-400">Checking your setup status…</p> : state.isError ? <div className="space-y-3"><p className="text-sm text-rose-300">Your session could not be verified.</p><Link href="/portal" className="text-sm font-medium text-cyan-300">Sign in</Link></div> : state.data?.needsEmailVerification ? <p className="rounded-xl border border-amber-400/30 bg-amber-400/10 p-4 text-sm text-amber-100">Verify your email from the message we sent before creating a workspace.</p> : state.data?.needsOrganization ? <form className="space-y-4" onSubmit={(event) => { event.preventDefault(); createOrganization.mutate(); }}>
+      {state.isLoading ? <p className="text-sm text-slate-400">Checking your setup status…</p> : state.isError ? <div className="space-y-3"><p className="text-sm text-rose-300">Your session could not be verified.</p><Link href="/portal" className="text-sm font-medium text-cyan-300">Sign in</Link></div> : state.data ? <>
+        <OnboardingProgress state={state.data} />
+        {!state.data.needsEmailVerification && state.data.needsOrganization ? <div className="onboarding-welcome" role="status"><p>Welcome, {state.data.operator.name}.</p><span>Your verified account is ready for its first workspace.</span></div> : null}
+        {state.data.needsEmailVerification ? <p className="rounded-xl border border-amber-400/30 bg-amber-400/10 p-4 text-sm text-amber-100">Verify your email from the message we sent before creating a workspace.</p> : state.data.needsOrganization ? <form className="space-y-4" onSubmit={(event) => { event.preventDefault(); createOrganization.mutate(); }}>
         <Field id="organization-name" label="Organization name" value={organizationName} onChange={setOrganizationName} autoComplete="organization" />
         <Field id="organization-slug" label="Workspace URL name" value={organizationSlug} onChange={setOrganizationSlug} placeholder="example-logistics" />
         <Field id="tenant-name" label="Primary tenant name" value={tenantName} onChange={setTenantName} placeholder="Operations" />
         {createOrganization.isError ? <p className="text-sm text-rose-300">{readableError(createOrganization.error)}</p> : null}
         <ActionButton pending={createOrganization.isPending}>Create organization and workspace</ActionButton>
-      </form> : <div className="space-y-4"><p className="rounded-xl border border-emerald-400/30 bg-emerald-400/10 p-4 text-sm text-emerald-100">Your workspace is ready.</p><Link href="/dashboard" className="inline-flex rounded-xl bg-cyan-400 px-5 py-3 text-sm font-semibold text-slate-950">Open dashboard</Link></div>}
+        </form> : <div className="space-y-4"><p className="rounded-xl border border-emerald-400/30 bg-emerald-400/10 p-4 text-sm text-emerald-100">Your workspace is ready. Invite teammates from the dashboard whenever you are ready.</p><Link href="/dashboard" className="inline-flex rounded-xl bg-cyan-400 px-5 py-3 text-sm font-semibold text-slate-950">Open dashboard</Link></div>}
+      </> : null}
     </CardContent></Card>
   </PublicShell>;
 }

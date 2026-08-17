@@ -107,6 +107,27 @@
 .lifecycle-button:focus-visible { outline: 3px solid #a5f3fc; outline-offset: 3px; }
 .lifecycle-button:disabled { cursor: not-allowed; opacity: .6; }
 
+.onboarding-progress { margin: 0 0 26px; }
+.onboarding-progress-heading { display: flex; justify-content: space-between; gap: 16px; color: #cbd5e1; font-size: 13px; }
+.onboarding-progress-heading p { margin: 0; color: #f8fafc; font-weight: 700; }
+.onboarding-progress-track { height: 8px; margin-top: 10px; overflow: hidden; border-radius: 999px; background: #1e293b; }
+.onboarding-progress-track span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #22d3ee, #a5f3fc); transition: width 260ms ease-out; }
+.onboarding-steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 14px 0 0; padding: 0; list-style: none; }
+.onboarding-steps li { display: grid; gap: 6px; color: #64748b; font-size: 12px; line-height: 1.25; }
+.onboarding-steps li span { display: grid; width: 24px; height: 24px; place-items: center; border: 1px solid #475569; border-radius: 50%; color: #cbd5e1; font-size: 12px; font-weight: 800; }
+.onboarding-steps .is-complete, .onboarding-steps .is-current { color: #e2e8f0; font-weight: 700; }
+.onboarding-steps .is-complete span { border-color: #34d399; background: #065f46; color: #d1fae5; }
+.onboarding-steps .is-current span { border-color: #22d3ee; background: #164e63; color: #cffafe; }
+.onboarding-welcome { margin: 0 0 20px; padding: 16px; border: 1px solid rgba(34, 211, 238, .28); border-radius: 14px; background: rgba(8, 145, 178, .1); color: #cffafe; animation: onboarding-welcome-in 320ms ease-out both; }
+.onboarding-welcome p { margin: 0 0 4px; font-weight: 800; }
+.onboarding-welcome span { color: #bae6fd; font-size: 14px; }
+
+@keyframes onboarding-welcome-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .onboarding-progress-track span, .onboarding-welcome { transition: none; animation: none; }
+}
+
 @media (min-width: 900px) {
   .lifecycle-page { padding: 72px 48px; }
   .lifecycle-grid { grid-template-columns: minmax(0, .94fr) minmax(420px, 1.06fr); gap: 64px; }

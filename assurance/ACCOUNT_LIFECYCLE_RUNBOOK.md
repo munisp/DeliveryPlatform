@@ -38,6 +38,12 @@ Apply `drizzle/0008_account_lifecycle.sql` through the controlled database migra
 
 `drizzle/rollback/0008_account_lifecycle.down.sql` is provided only for an isolated rollback rehearsal. It removes lifecycle accounts' supporting data and should not be used on a live system without an approved data-retention and customer-notification plan.
 
+## Local email-delivery rehearsal
+
+`scripts/testing/lifecycle-email-sink.mjs` is a **test-only** local dispatcher. It requires `NODE_ENV=test` and a strong `TEST_INTERNAL_TOKEN`, verifies the same internal token header used by the application, and retains messages only in memory at its local `/messages` endpoint. It is not included in the production application path.
+
+After starting that sink and an application instance pointed at an isolated database, run `scripts/testing/rehearse-account-lifecycle-e2e.sh`. The script rejects production-looking URLs, follows the emitted verification link from the local sink, creates an organization and tenant using the issued session, and checks the verified/onboarded operator state in PostgreSQL.
+
 ## Evidence and limitations
 
 The implementation has passed the lifecycle migration/configuration regressions, production environment security tests, the complete repository suite (**155 passed, 30 environment-gated skipped**), TypeScript checking, production build, and a visual signup-screen review. The unconfigured email dispatcher and production identity provider were not invoked from this development environment; production enablement therefore requires a controlled integration test that proves a real transactional email reaches a test mailbox and that the configured identity provider sends an asserted email claim.
