@@ -1,0 +1,113 @@
+.lifecycle-page {
+  min-height: 100vh;
+  background: #020617;
+  color: #f8fafc;
+  padding: 48px 24px;
+}
+
+.lifecycle-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 32px;
+  width: min(1120px, 100%);
+  margin: 0 auto;
+}
+
+.lifecycle-copy {
+  padding-top: 16px;
+}
+
+.lifecycle-eyebrow {
+  margin: 0 0 14px;
+  color: #67e8f9;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: .2em;
+  text-transform: uppercase;
+}
+
+.lifecycle-title {
+  margin: 0;
+  color: #f8fafc;
+  font-size: clamp(2.15rem, 5vw, 3.5rem);
+  line-height: 1.05;
+}
+
+.lifecycle-description {
+  max-width: 620px;
+  margin: 20px 0 0;
+  color: #cbd5e1;
+  font-size: 18px;
+  line-height: 1.65;
+}
+
+.lifecycle-security-note {
+  max-width: 560px;
+  margin-top: 28px;
+  padding: 18px;
+  border: 1px solid rgba(34, 211, 238, .24);
+  border-radius: 16px;
+  background: rgba(6, 182, 212, .07);
+  color: #cbd5e1;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.lifecycle-security-note strong { color: #cffafe; }
+
+.lifecycle-panel > * {
+  display: block;
+  border: 1px solid #334155;
+  border-radius: 20px;
+  background: #0f172a;
+  box-shadow: 0 24px 48px rgba(0, 0, 0, .22);
+}
+
+.lifecycle-panel h3 { color: #f8fafc; font-size: 22px; }
+.lifecycle-panel p { line-height: 1.55; }
+
+.lifecycle-panel form { display: grid; gap: 18px; }
+
+.lifecycle-field {
+  display: grid;
+  gap: 8px;
+  color: #e2e8f0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.lifecycle-field input,
+.lifecycle-panel select {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 48px;
+  border: 1px solid #475569;
+  border-radius: 12px;
+  background: #020617;
+  color: #f8fafc;
+  padding: 11px 13px;
+  font: inherit;
+}
+
+.lifecycle-field input:focus,
+.lifecycle-panel select:focus { outline: 2px solid #22d3ee; outline-offset: 2px; border-color: #22d3ee; }
+
+.lifecycle-button {
+  min-height: 48px;
+  border: 0;
+  border-radius: 12px;
+  background: #22d3ee;
+  color: #082f49;
+  cursor: pointer;
+  font-weight: 800;
+  padding: 12px 18px;
+}
+
+.lifecycle-button:hover { background: #67e8f9; }
+.lifecycle-button:focus-visible { outline: 3px solid #a5f3fc; outline-offset: 3px; }
+.lifecycle-button:disabled { cursor: not-allowed; opacity: .6; }
+
+@media (min-width: 900px) {
+  .lifecycle-page { padding: 72px 48px; }
+  .lifecycle-grid { grid-template-columns: minmax(0, .94fr) minmax(420px, 1.06fr); gap: 64px; }
+}

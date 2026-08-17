@@ -11,6 +11,7 @@ import WhiteLabelApps from "@/pages/WhiteLabelApps";
 import MerchantChannels from "@/pages/MerchantChannels";
 import ServiceRecovery from "@/pages/ServiceRecovery";
 import PhoneOrderingStudio from "@/pages/PhoneOrderingStudio";
+import { InvitationAcceptancePage, InviteTeamPage, OnboardingPage, PasswordResetPage, SignupPage, VerifyEmailPage } from "@/pages/AccountLifecycle";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
 type AuthConfig = {
@@ -20,6 +21,7 @@ type AuthConfig = {
   oidcLogoutUrl: string | null;
   oidcStartPath: string | null;
   fallbackLoginEnabled: boolean;
+  selfServiceSignupEnabled: boolean;
 };
 
 const quickLinks = [
@@ -84,6 +86,9 @@ function HomePage() {
             </Link>
             <Link href="/portal" className="rounded-full border border-cyan-400/30 bg-cyan-500/10 px-5 py-3 text-sm font-medium text-cyan-100 transition hover:bg-cyan-500/20">
               Operator portal
+            </Link>
+            <Link href="/signup" className="rounded-full border border-slate-700 px-5 py-3 text-sm font-medium text-slate-100 transition hover:border-cyan-400/40 hover:bg-slate-900">
+              Create organization
             </Link>
           </div>
         </div>
@@ -275,6 +280,7 @@ function PortalPage() {
                 >
                   {loginMutation.isPending ? "Signing in..." : "Enter operator dashboard"}
                 </button>
+                <p className="text-center text-sm text-slate-400"><Link href="/reset-password" className="font-medium text-cyan-300 hover:text-cyan-200">Forgot password?</Link></p>
               </form>
               {loginMutation.isError ? (
                 <p className="text-sm text-rose-300">{loginMutation.error.message}</p>
@@ -306,6 +312,7 @@ function PortalPage() {
             </CardContent>
           </Card>
         ) : null}
+        {authConfig?.selfServiceSignupEnabled ? <p className="text-center text-sm text-slate-400">New to SwitchOS? <Link href="/signup" className="font-medium text-cyan-300 hover:text-cyan-200">Create an organization</Link></p> : null}
       </div>
     </div>
   );
@@ -337,6 +344,10 @@ function DashboardPage() {
             </Card>
           ))}
         </div>
+        <Card>
+          <CardHeader><CardTitle>Team access</CardTitle><CardDescription>Invite colleagues with a role tailored to this tenant.</CardDescription></CardHeader>
+          <CardContent><Link href="/team/invite" className="inline-flex rounded-full border border-cyan-400/30 bg-cyan-500/10 px-4 py-2 text-sm font-medium text-cyan-100 transition hover:bg-cyan-500/20">Invite team member</Link></CardContent>
+        </Card>
       </div>
     </DashboardLayout>
   );
@@ -363,6 +374,12 @@ export default function App() {
     <Switch>
       <Route path="/" component={HomePage} />
       <Route path="/portal" component={PortalPage} />
+      <Route path="/signup" component={SignupPage} />
+      <Route path="/verify-email" component={VerifyEmailPage} />
+      <Route path="/reset-password" component={PasswordResetPage} />
+      <Route path="/accept-invitation" component={InvitationAcceptancePage} />
+      <Route path="/onboarding" component={OnboardingPage} />
+      <Route path="/team/invite" component={InviteTeamPage} />
       <Route path="/dashboard" component={DashboardPage} />
       <Route path="/analytics" component={Analytics} />
       <Route path="/driver-mobility" component={DriverMobility} />

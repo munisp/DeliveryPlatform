@@ -4,7 +4,7 @@ import pg from "pg";
 
 import { ENV } from "./env";
 
-type OperatorRecord = {
+export type OperatorRecord = {
   id: number;
   email: string;
   name: string;
@@ -17,7 +17,7 @@ type OperatorRecord = {
 const { Pool } = pg;
 let pool: pg.Pool | null = null;
 
-function getPool() {
+export function getOperatorAuthPool() {
   if (!pool) {
     pool = new Pool({
       connectionString: ENV.databaseUrl,
@@ -27,13 +27,13 @@ function getPool() {
   return pool;
 }
 
-function buildPasswordHash(password: string) {
+export function buildOperatorPasswordHash(password: string) {
   const salt = randomUUID().replace(/-/g, "");
   const derived = scryptSync(password, salt, 64).toString("hex");
   return `${salt}:${derived}`;
 }
 
-function verifyPassword(password: string, storedHash: string) {
+export function verifyOperatorPassword(password: string, storedHash: string) {
   const [salt, expected] = storedHash.split(":");
   if (!salt || !expected) return false;
   const derived = scryptSync(password, salt, 64);
@@ -43,7 +43,7 @@ function verifyPassword(password: string, storedHash: string) {
 }
 
 export async function ensureOperatorAuthStore() {
-  const client = await getPool().connect();
+  const client = await getOperatorAuthPool().connect();
   try {
     await client.query(`
       CREATE TABLE IF NOT EXISTS operator_credentials (
@@ -73,7 +73,7 @@ export async function ensureOperatorAuthStore() {
           ENV.bootstrapOperatorName,
           ENV.bootstrapOperatorRole,
           ENV.bootstrapTenantId,
-          buildPasswordHash(ENV.bootstrapOperatorPassword),
+          buildOperatorPasswordHash(ENV.bootstrapOperatorPassword),
         ],
       );
     }
@@ -86,7 +86,7 @@ export async function authenticateOperator(email: string, password: string) {
   const normalizedEmail = email.trim().toLowerCase();
   if (!normalizedEmail || !password) return null;
 
-  const result = await getPool().query<OperatorRecord>(
+  const result = await getOperatorAuthPool().query<OperatorRecord>(
     `SELECT id, email, name, role, tenant_id, password_hash, is_active
      FROM operator_credentials
      WHERE LOWER(email) = $1
@@ -99,10 +99,36 @@ export async function authenticateOperator(email: string, password: string) {
     return null;
   }
 
-  if (!verifyPassword(password, operator.password_hash)) {
+  if (!verifyOperatorPassword(password, operator.password_hash)) {
     return null;
   }
 
+  return {
+    id: operator.id,
+    email: operator.email,
+    name: operator.name,
+    role: operator.role,
+    tenantId: operator.tenant_id,
+  };
+}
+
+export async function ensureExternalOperator(input: { email: string; name: string; tenantId: string | null }) {
+  const email = input.email.trim().toLowerCase();
+  if (!email) throw new Error("external_identity_missing_email");
+  await ensureOperatorAuthStore();
+  const result = await getOperatorAuthPool().query<OperatorRecord>(
+    `INSERT INTO operator_credentials (email, name, role, tenant_id, password_hash, is_active, email_verified_at)
+     VALUES ($1, $2, 'operator', $3, $4, true, NOW())
+     ON CONFLICT (email) DO UPDATE SET
+       name = EXCLUDED.name,
+       tenant_id = COALESCE(operator_credentials.tenant_id, EXCLUDED.tenant_id),
+       is_active = true,
+       email_verified_at = COALESCE(operator_credentials.email_verified_at, NOW()),
+       updated_at = NOW()
+     RETURNING id, email, name, role, tenant_id, password_hash, is_active`,
+    [email, input.name.trim() || email, input.tenantId, buildOperatorPasswordHash(randomUUID())],
+  );
+  const operator = result.rows[0];
   return {
     id: operator.id,
     email: operator.email,

@@ -16,7 +16,19 @@ import {
   getSessionUserFromRequest,
   resolveUserFromExternalTokens,
 } from "./auth";
-import { authenticateOperator, ensureOperatorAuthStore } from "./operatorAuthStore";
+import {
+  acceptInvitation,
+  beginSignup,
+  confirmEmailVerification,
+  confirmPasswordReset,
+  createInvitation,
+  createOrganizationAndTenant,
+  ensureAccountLifecycleStore,
+  getOnboardingState,
+  requestPasswordReset,
+  resendVerification,
+} from "./accountLifecycleStore";
+import { authenticateOperator, ensureExternalOperator, ensureOperatorAuthStore } from "./operatorAuthStore";
 import { recordOperationalEvent } from "./operationalEvents";
 import { consumeRateLimit, getRateLimiterStatus } from "./rateLimiter";
 import type { SessionUser } from "./trpc";
@@ -204,7 +216,92 @@ app.get("/api/auth/config", async (_req, res) => {
     oidcLogoutUrl: (discovery?.end_session_endpoint ?? ENV.oidcLogoutUrl) || null,
     oidcStartPath: ENV.enableExternalOidc ? "/api/auth/oidc/start" : null,
     fallbackLoginEnabled: !ENV.enableExternalOidc || !ENV.isProduction,
+    selfServiceSignupEnabled: ENV.selfServiceSignupEnabled,
   });
+});
+
+function lifecycleErrorStatus(error: unknown) {
+  const code = error instanceof Error ? error.message : "account_lifecycle_failed";
+  if (code === "self_service_signup_disabled") return { status: 404, code };
+  if (code === "lifecycle_email_delivery_failed" || code === "notification_dispatcher_not_configured") return { status: 503, code: "email_delivery_unavailable" };
+  if (code.startsWith("invalid_or_expired_") || code === "invalid_email") return { status: 400, code };
+  if (code.includes("required") || code.includes("already") || code.includes("invalid_") || code.startsWith("password_")) return { status: 400, code };
+  return { status: 500, code: "account_lifecycle_failed" };
+}
+
+app.post("/api/auth/signup", rateLimit(5), async (req, res) => {
+  try {
+    const result = await beginSignup({
+      email: `${req.body?.email ?? ""}`,
+      name: `${req.body?.name ?? ""}`,
+      password: `${req.body?.password ?? ""}`,
+    });
+    await recordOperationalEvent({ eventType: "auth.signup.requested", route: req.path, outcome: "info" });
+    res.status(202).json(result);
+  } catch (error) {
+    const mapped = lifecycleErrorStatus(error);
+    await recordOperationalEvent({ eventType: "auth.signup.requested", route: req.path, outcome: "failure", payload: { code: mapped.code } });
+    res.status(mapped.status).json({ error: mapped.code });
+  }
+});
+
+app.post("/api/auth/email-verification/resend", rateLimit(5), async (req, res) => {
+  try {
+    await resendVerification(`${req.body?.email ?? ""}`);
+  } catch (error) {
+    console.warn("[SwitchOS] Verification resend request failed", error);
+  }
+  // Do not reveal whether an account exists or is already verified.
+  res.status(202).json({ accepted: true });
+});
+
+app.post("/api/auth/email-verification/confirm", rateLimit(10), async (req, res) => {
+  try {
+    const operator = await confirmEmailVerification(`${req.body?.token ?? ""}`);
+    await issueOperatorSession(res, operator);
+    await recordOperationalEvent({ eventType: "auth.email_verified", actorId: `${operator.id}`, actorRole: operator.role, route: req.path, outcome: "success" });
+    res.status(200).json({ ok: true, user: operator, redirect: "/onboarding" });
+  } catch (error) {
+    const mapped = lifecycleErrorStatus(error);
+    res.status(mapped.status).json({ error: mapped.code });
+  }
+});
+
+app.post("/api/auth/password-reset/request", rateLimit(5), async (req, res) => {
+  try {
+    await requestPasswordReset(`${req.body?.email ?? ""}`);
+  } catch (error) {
+    console.warn("[SwitchOS] Password reset request failed", error);
+  }
+  // Generic completion response prevents account enumeration.
+  res.status(202).json({ accepted: true });
+});
+
+app.post("/api/auth/password-reset/confirm", rateLimit(10), async (req, res) => {
+  try {
+    await confirmPasswordReset({ token: `${req.body?.token ?? ""}`, password: `${req.body?.password ?? ""}` });
+    await recordOperationalEvent({ eventType: "auth.password_reset", route: req.path, outcome: "success" });
+    res.status(200).json({ ok: true, redirect: "/portal" });
+  } catch (error) {
+    const mapped = lifecycleErrorStatus(error);
+    res.status(mapped.status).json({ error: mapped.code });
+  }
+});
+
+app.post("/api/auth/invitations/accept", rateLimit(10), async (req, res) => {
+  try {
+    const result = await acceptInvitation({
+      token: `${req.body?.token ?? ""}`,
+      name: `${req.body?.name ?? ""}`,
+      password: `${req.body?.password ?? ""}`,
+    });
+    await issueOperatorSession(res, result.operator);
+    await recordOperationalEvent({ eventType: "auth.invitation_accepted", actorId: `${result.operator.id}`, actorRole: result.operator.role, tenantId: result.operator.tenantId, route: req.path, outcome: "success" });
+    res.status(200).json({ ok: true, user: result.operator, redirect: "/dashboard" });
+  } catch (error) {
+    const mapped = lifecycleErrorStatus(error);
+    res.status(mapped.status).json({ error: mapped.code });
+  }
 });
 
 app.get("/api/auth/oidc/start", rateLimit(20), async (req, res) => {
@@ -288,22 +385,22 @@ app.get("/api/auth/oidc/callback", rateLimit(30), async (req, res) => {
       return;
     }
 
-    await issueOperatorSession(res, {
-      id: Number(identity.id),
-      name: identity.name,
+    await ensureAccountLifecycleStore();
+    const operator = await ensureExternalOperator({
       email: identity.email,
-      role: identity.role,
+      name: identity.name,
       tenantId: identity.tenantId,
     });
+    await issueOperatorSession(res, operator);
     await recordOperationalEvent({
       eventType: "auth.oidc.callback",
-      actorId: `${identity.id}`,
-      actorRole: identity.role,
-      tenantId: identity.tenantId,
+      actorId: `${operator.id}`,
+      actorRole: operator.role,
+      tenantId: operator.tenantId,
       route: req.path,
       outcome: "success",
       payload: {
-        email: identity.email,
+        email: operator.email,
       },
     });
     clearOidcFlowCookies(res);
@@ -400,6 +497,64 @@ app.use(async (req, _res, next) => {
     request.user = null;
   }
   next();
+});
+
+function requireAuthenticatedOperator(req: express.Request, res: express.Response): SessionUser | null {
+  const user = (req as AppRequest).user;
+  if (!user) {
+    res.status(401).json({ error: "authentication_required" });
+    return null;
+  }
+  return user;
+}
+
+app.get("/api/auth/onboarding", async (req, res) => {
+  const user = requireAuthenticatedOperator(req, res);
+  if (!user) return;
+  try {
+    const state = await getOnboardingState(Number(user.id));
+    res.status(200).json(state);
+  } catch (error) {
+    const mapped = lifecycleErrorStatus(error);
+    res.status(mapped.status).json({ error: mapped.code });
+  }
+});
+
+app.post("/api/auth/onboarding/organization", rateLimit(10), async (req, res) => {
+  const user = requireAuthenticatedOperator(req, res);
+  if (!user) return;
+  try {
+    const result = await createOrganizationAndTenant({
+      operatorId: Number(user.id),
+      organizationName: `${req.body?.organizationName ?? ""}`,
+      organizationSlug: `${req.body?.organizationSlug ?? ""}`,
+      tenantName: `${req.body?.tenantName ?? ""}`,
+    });
+    const state = await getOnboardingState(Number(user.id));
+    await issueOperatorSession(res, state.operator);
+    await recordOperationalEvent({ eventType: "auth.organization_created", actorId: `${user.id}`, actorRole: user.role, tenantId: result.tenantId, route: req.path, outcome: "success" });
+    res.status(201).json({ ok: true, ...result, redirect: "/dashboard" });
+  } catch (error) {
+    const mapped = lifecycleErrorStatus(error);
+    res.status(mapped.status).json({ error: mapped.code });
+  }
+});
+
+app.post("/api/auth/invitations", rateLimit(20), async (req, res) => {
+  const user = requireAuthenticatedOperator(req, res);
+  if (!user) return;
+  try {
+    const result = await createInvitation({
+      inviterId: Number(user.id),
+      email: `${req.body?.email ?? ""}`,
+      role: `${req.body?.role ?? "operator"}` as "admin" | "operator" | "viewer",
+    });
+    await recordOperationalEvent({ eventType: "auth.invitation_created", actorId: `${user.id}`, actorRole: user.role, tenantId: user.tenantId, route: req.path, outcome: "success" });
+    res.status(202).json(result);
+  } catch (error) {
+    const mapped = lifecycleErrorStatus(error);
+    res.status(mapped.status).json({ error: mapped.code });
+  }
 });
 
 app.use(

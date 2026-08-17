@@ -7,9 +7,14 @@ const productionEnvironment = {
 	BOOTSTRAP_OPERATOR_PASSWORD: "a-high-entropy-test-operator-password",
 	PERMIFY_ENDPOINT: "https://permify.switchos.test",
 	PERMIFY_AUTH_TOKEN: "a-high-entropy-test-permify-token",
+	PUBLIC_APP_ORIGIN: "https://app.switchos.test",
 };
 
-async function loadEnvironment(internalServiceToken?: string, permifyOverrides: Partial<Record<"endpoint" | "authToken", string>> = {}) {
+async function loadEnvironment(
+	internalServiceToken?: string,
+	permifyOverrides: Partial<Record<"endpoint" | "authToken", string>> = {},
+	lifecycleOverrides: Partial<Record<"publicOrigin" | "signupEnabled" | "notificationDispatcher", string>> = {},
+) {
 	vi.resetModules();
 	for (const [key, value] of Object.entries(productionEnvironment)) {
 		vi.stubEnv(key, value);
@@ -17,6 +22,9 @@ async function loadEnvironment(internalServiceToken?: string, permifyOverrides: 
 	vi.stubEnv("INTERNAL_SERVICE_TOKEN", internalServiceToken ?? "");
 	if (permifyOverrides.endpoint !== undefined) vi.stubEnv("PERMIFY_ENDPOINT", permifyOverrides.endpoint);
 	if (permifyOverrides.authToken !== undefined) vi.stubEnv("PERMIFY_AUTH_TOKEN", permifyOverrides.authToken);
+	if (lifecycleOverrides.publicOrigin !== undefined) vi.stubEnv("PUBLIC_APP_ORIGIN", lifecycleOverrides.publicOrigin);
+	if (lifecycleOverrides.signupEnabled !== undefined) vi.stubEnv("ENABLE_SELF_SERVICE_SIGNUP", lifecycleOverrides.signupEnabled);
+	if (lifecycleOverrides.notificationDispatcher !== undefined) vi.stubEnv("NOTIFICATION_DISPATCHER_URL", lifecycleOverrides.notificationDispatcher);
   return import("../server/_core/env");
 }
 
@@ -50,6 +58,18 @@ describe("production internal-service credential configuration", () => {
 	it("rejects a missing Permify service credential in production", async () => {
 		await expect(loadEnvironment("a-high-entropy-test-internal-token", { authToken: "" })).rejects.toThrow(
 			"PERMIFY_AUTH_TOKEN is required in production",
+		);
+	});
+
+	it("rejects a missing public origin for lifecycle links in production", async () => {
+		await expect(loadEnvironment("a-high-entropy-test-internal-token", {}, { publicOrigin: "" })).rejects.toThrow(
+			"PUBLIC_APP_ORIGIN is required in production for account lifecycle links",
+		);
+	});
+
+	it("requires transactional email delivery when self-service signup is enabled", async () => {
+		await expect(loadEnvironment("a-high-entropy-test-internal-token", {}, { signupEnabled: "true", notificationDispatcher: "" })).rejects.toThrow(
+			"NOTIFICATION_DISPATCHER_URL is required in production when self-service signup is enabled",
 		);
 	});
 });

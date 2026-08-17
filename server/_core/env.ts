@@ -129,6 +129,24 @@ function parseInteger(value: string | undefined, fallback: number) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function normalizeRequiredPublicOrigin() {
+  const configured = normalizeOptionalUrl("PUBLIC_APP_ORIGIN");
+  if (process.env.NODE_ENV === "production" && configured === "") {
+    throw new Error("PUBLIC_APP_ORIGIN is required in production for account lifecycle links");
+  }
+  return configured || "http://localhost:3000";
+}
+
+function getLifecycleNotificationDispatcherUrl(selfServiceEnabled: boolean) {
+  const configured = normalizeOptionalUrl("NOTIFICATION_DISPATCHER_URL");
+  if (process.env.NODE_ENV === "production" && selfServiceEnabled && configured === "") {
+    throw new Error("NOTIFICATION_DISPATCHER_URL is required in production when self-service signup is enabled");
+  }
+  return configured || "http://127.0.0.1:8099";
+}
+
+const selfServiceSignupEnabled = parseBoolean(process.env.ENABLE_SELF_SERVICE_SIGNUP, false);
+
 export const ENV = {
   appId: getRequiredEnv("VITE_APP_ID", "switchos-operator-dashboard"),
   cookieSecret: getCookieSecret(),
@@ -136,6 +154,11 @@ export const ENV = {
   oAuthServerUrl: normalizeOAuthServerUrl(),
   ownerOpenId: process.env.OWNER_OPEN_ID ?? "switchos-owner",
   isProduction: process.env.NODE_ENV === "production",
+  selfServiceSignupEnabled,
+  publicAppOrigin: normalizeRequiredPublicOrigin(),
+  lifecycleVerificationTtlMinutes: parseInteger(process.env.LIFECYCLE_VERIFICATION_TTL_MINUTES, 60 * 24),
+  lifecyclePasswordResetTtlMinutes: parseInteger(process.env.LIFECYCLE_PASSWORD_RESET_TTL_MINUTES, 60),
+  lifecycleInvitationTtlMinutes: parseInteger(process.env.LIFECYCLE_INVITATION_TTL_MINUTES, 60 * 24 * 7),
   forgeApiUrl: process.env.BUILT_IN_FORGE_API_URL ?? "",
   forgeApiKey: process.env.BUILT_IN_FORGE_API_KEY ?? "",
   ollamaUrl: normalizeOptionalUrl("OLLAMA_URL") || "http://127.0.0.1:11434",
@@ -183,7 +206,7 @@ export const ENV = {
   lakehouseServiceUrl: process.env.LAKEHOUSE_SERVICE_URL ?? "http://127.0.0.1:8007",
   lakehousePath: process.env.LAKEHOUSE_PATH ?? "/tmp/switchos-lakehouse",
   dispatchOptimizerUrl: process.env.DISPATCH_OPTIMIZER_URL ?? "http://127.0.0.1:8090",
-  notificationDispatcherUrl: process.env.NOTIFICATION_DISPATCHER_URL ?? "http://127.0.0.1:8099",
+  notificationDispatcherUrl: getLifecycleNotificationDispatcherUrl(selfServiceSignupEnabled),
   longcatVoiceGatewayUrl: process.env.LONGCAT_VOICE_GATEWAY_URL ?? "http://127.0.0.1:8104",
   longcatSpeechServiceUrl: process.env.LONGCAT_SPEECH_SERVICE_URL ?? "http://127.0.0.1:8105",
   localCommerceGatewayUrl: process.env.LOCAL_COMMERCE_GATEWAY_URL ?? "http://127.0.0.1:8114",
