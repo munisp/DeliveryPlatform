@@ -12,6 +12,11 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ../../scripts/init-local-postgres.sql:/docker-entrypoint-initdb.d/001-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U switchos -d switchos"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
 
   redis:
     image: redis:7
@@ -39,10 +44,26 @@ services:
       - opensearch_data:/usr/share/opensearch/data
 
   permify:
-    image: ghcr.io/permify/permify:latest
+    image: ghcr.io/permify/permify:v1.7.2
     container_name: switchos-permify
     restart: unless-stopped
     command: ["serve"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PERMIFY_DATABASE_ENGINE: postgres
+      PERMIFY_DATABASE_URI: postgresql://switchos:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/switchos?sslmode=disable
+      PERMIFY_DATABASE_AUTO_MIGRATE: "true"
+      PERMIFY_AUTHN_ENABLED: "true"
+      PERMIFY_AUTHN_METHOD: preshared
+      PERMIFY_AUTHN_PRESHARED_KEYS: ${PERMIFY_AUTHN_PRESHARED_KEYS:?PERMIFY_AUTHN_PRESHARED_KEYS must be set}
+      PERMIFY_LOG_OUTPUT: json
+    healthcheck:
+      test: ["CMD", "grpc_health_probe", "-addr=localhost:3478"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
 
   keycloak:
     image: quay.io/keycloak/keycloak:26.0
@@ -63,7 +84,8 @@ services:
       KC_HOSTNAME: ${SWITCHOS_AUTH_HOST:-auth.localhost}
       KC_HOSTNAME_STRICT: "true"
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
     volumes:
       - ../identity/keycloak-realm-switchos.json:/opt/keycloak/data/import/switchos-realm.json:ro
 

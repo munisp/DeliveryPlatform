@@ -97,9 +97,25 @@ function normalizeOAuthServerUrl() {
 }
 
 function normalizeOptionalUrl(name: string) {
-  const raw = process.env[name]?.trim();
-  if (!raw) return "";
-  return raw.replace(/\/$/, "");
+	const raw = process.env[name]?.trim();
+	if (!raw) return "";
+	return raw.replace(/\/$/, "");
+}
+
+function getRequiredOptionalUrl(name: string) {
+	const value = normalizeOptionalUrl(name);
+	if (process.env.NODE_ENV === "production" && value === "") {
+		throw new Error(`${name} is required in production`);
+	}
+	return value;
+}
+
+function getRequiredServiceCredential(name: string) {
+	const value = process.env[name]?.trim() ?? "";
+	if (process.env.NODE_ENV === "production" && value === "") {
+		throw new Error(`${name} is required in production`);
+	}
+	return value;
 }
 
 function parseBoolean(value: string | undefined, fallback: boolean) {
@@ -145,7 +161,8 @@ export const ENV = {
   apisixAdminUrl: process.env.APISIX_ADMIN_URL ?? "http://127.0.0.1:9180",
   apisixAdminKey: process.env.APISIX_ADMIN_KEY ?? "",
   apisixControlUrl: process.env.APISIX_CONTROL_URL ?? "http://127.0.0.1:8006",
-  permifyEndpoint: process.env.PERMIFY_ENDPOINT ?? "",
+	permifyEndpoint: getRequiredOptionalUrl("PERMIFY_ENDPOINT"),
+	permifyAuthToken: getRequiredServiceCredential("PERMIFY_AUTH_TOKEN"),
   permifySchemaVersion: process.env.PERMIFY_SCHEMA_VERSION ?? "switchos-v1",
   redisUrl: process.env.REDIS_URL ?? "",
   kafkaBrokers: process.env.KAFKA_BROKERS ?? process.env.KAFKA_BOOTSTRAP_SERVERS ?? "",

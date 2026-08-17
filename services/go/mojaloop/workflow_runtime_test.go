@@ -207,6 +207,37 @@ func TestTemporalTargetPrefersQueueAndBridgeDescription(t *testing.T) {
 	}
 }
 
+func TestDispatchTemporalWorkflowIntentAuthenticatesBridge(t *testing.T) {
+	requestCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		if r.Method != http.MethodPost || r.URL.Path != "/funds/workflows" {
+			t.Fatalf("unexpected Temporal bridge request %s %s", r.Method, r.URL.Path)
+		}
+		if r.Header.Get("X-Internal-Service-Token") != "bridge-token" {
+			t.Fatalf("Temporal bridge did not receive the configured internal token")
+		}
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer server.Close()
+
+	service := &MojaloopService{httpClient: server.Client(), internalServiceToken: "bridge-token"}
+	if err := service.dispatchTemporalWorkflowIntent(server.URL, []byte(`{"workflowId":"workflow-1"}`)); err != nil {
+		t.Fatalf("dispatch authenticated Temporal workflow intent: %v", err)
+	}
+	if requestCount != 1 {
+		t.Fatalf("expected one authenticated bridge request, got %d", requestCount)
+	}
+
+	service.internalServiceToken = ""
+	if err := service.dispatchTemporalWorkflowIntent(server.URL, []byte(`{}`)); err == nil {
+		t.Fatal("expected missing internal token to reject the Temporal dispatch")
+	}
+	if requestCount != 1 {
+		t.Fatalf("missing token attempted bridge dispatch; request count=%d", requestCount)
+	}
+}
+
 func TestDeriveTransferStateFromRefunds(t *testing.T) {
 	tests := []struct {
 		name           string

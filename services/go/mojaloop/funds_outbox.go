@@ -147,6 +147,37 @@ func requiredFundsOutboxDestinations() ([]string, error) {
 	return destinations, nil
 }
 
+func validateFundsOutboxDestinationConfiguration(destination string) error {
+	configured := func(values ...string) bool {
+		for _, value := range values {
+			if strings.TrimSpace(value) == "" {
+				return false
+			}
+		}
+		return true
+	}
+
+	switch destination {
+	case "dapr":
+		if !configured(os.Getenv("DAPR_HTTP_PORT"), os.Getenv("DAPR_PUBSUB_NAME"), os.Getenv("DAPR_FUNDS_TOPIC")) {
+			return fmt.Errorf("required dapr outbox destination needs DAPR_HTTP_PORT, DAPR_PUBSUB_NAME, and DAPR_FUNDS_TOPIC")
+		}
+	case "kafka":
+		if !configured(os.Getenv("KAFKA_BROKERS"), os.Getenv("KAFKA_FUNDS_TOPIC")) {
+			return fmt.Errorf("required kafka outbox destination needs KAFKA_BROKERS and KAFKA_FUNDS_TOPIC")
+		}
+	case "fluvio":
+		if !configured(os.Getenv("FLUVIO_KAFKA_BROKERS"), os.Getenv("FLUVIO_FUNDS_TOPIC")) {
+			return fmt.Errorf("required fluvio outbox destination needs FLUVIO_KAFKA_BROKERS and FLUVIO_FUNDS_TOPIC")
+		}
+	case "temporal":
+		if !configured(os.Getenv("TEMPORAL_BRIDGE_URL"), os.Getenv("TEMPORAL_TASK_QUEUE")) {
+			return fmt.Errorf("required temporal outbox destination needs TEMPORAL_BRIDGE_URL and TEMPORAL_TASK_QUEUE")
+		}
+	}
+	return nil
+}
+
 func eventIDFor(event FundsWorkflowEvent) string {
 	return strings.Join([]string{event.WorkflowType, event.WorkflowID, event.Step, event.Status}, ":")
 }
@@ -160,6 +191,9 @@ func destinationsForFundsEvent(event FundsWorkflowEvent) ([]string, error) {
 	containsLedger := false
 	filtered := make([]string, 0, len(destinations))
 	for _, destination := range destinations {
+		if err := validateFundsOutboxDestinationConfiguration(destination); err != nil {
+			return nil, err
+		}
 		if destination == "tigerbeetle" {
 			containsLedger = true
 			if requiresLedger {

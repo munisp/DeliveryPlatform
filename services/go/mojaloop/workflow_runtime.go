@@ -172,29 +172,11 @@ func (s *MojaloopService) enqueueTemporalWorkflowTask(event FundsWorkflowEvent) 
 	status := "queued"
 	lastError := ""
 	if temporalBridgeURL != "" {
-		request, requestErr := http.NewRequest(
-			http.MethodPost,
-			strings.TrimRight(temporalBridgeURL, "/")+"/funds/workflows",
-			bytes.NewReader(payloadBytes),
-		)
-		if requestErr != nil {
+		if dispatchErr := s.dispatchTemporalWorkflowIntent(temporalBridgeURL, payloadBytes); dispatchErr != nil {
 			status = "failed"
-			lastError = requestErr.Error()
+			lastError = dispatchErr.Error()
 		} else {
-			request.Header.Set("Content-Type", "application/json")
-			response, doErr := s.httpClient.Do(request)
-			if doErr != nil {
-				status = "failed"
-				lastError = doErr.Error()
-			} else {
-				defer response.Body.Close()
-				if response.StatusCode >= 400 {
-					status = "failed"
-					lastError = fmt.Sprintf("temporal bridge returned status %d", response.StatusCode)
-				} else {
-					status = "submitted"
-				}
-			}
+			status = "submitted"
 		}
 	}
 
@@ -217,6 +199,33 @@ func (s *MojaloopService) enqueueTemporalWorkflowTask(event FundsWorkflowEvent) 
 
 	if lastError != "" {
 		return fmt.Errorf("enqueue temporal workflow task: %s", lastError)
+	}
+	return nil
+}
+
+func (s *MojaloopService) dispatchTemporalWorkflowIntent(temporalBridgeURL string, payload []byte) error {
+	internalToken := strings.TrimSpace(s.internalServiceToken)
+	if internalToken == "" {
+		return fmt.Errorf("Temporal bridge dispatch requires an internal service token")
+	}
+	request, err := http.NewRequest(
+		http.MethodPost,
+		strings.TrimRight(temporalBridgeURL, "/")+"/funds/workflows",
+		bytes.NewReader(payload),
+	)
+	if err != nil {
+		return fmt.Errorf("create temporal workflow request: %w", err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-Internal-Service-Token", internalToken)
+
+	response, err := s.httpClient.Do(request)
+	if err != nil {
+		return fmt.Errorf("dispatch temporal workflow request: %w", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode >= http.StatusBadRequest {
+		return fmt.Errorf("temporal bridge returned status %d", response.StatusCode)
 	}
 	return nil
 }

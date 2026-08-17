@@ -54,4 +54,17 @@ describe("Caddy and API gateway security configuration", () => {
     expect(policy).toContain('"host": "switchos.localhost"');
     expect(policy).toContain('"host": "auth.localhost"');
   });
+
+  it("pins Permify and requires durable PostgreSQL plus authenticated service access", async () => {
+    const compose = await source("deploy/platform/docker-compose.stack.yml");
+
+    expect(compose).toContain("ghcr.io/permify/permify:v1.7.2");
+    expect(compose).not.toContain("ghcr.io/permify/permify:latest");
+    expect(compose).toContain("PERMIFY_DATABASE_ENGINE: postgres");
+    expect(compose).toContain("PERMIFY_DATABASE_URI:");
+    expect(compose).toContain('PERMIFY_DATABASE_AUTO_MIGRATE: "true"');
+    expect(compose).toContain('PERMIFY_AUTHN_ENABLED: "true"');
+    expect(compose).toContain("PERMIFY_AUTHN_PRESHARED_KEYS:");
+    expect(compose).toContain("grpc_health_probe");
+  });
 });

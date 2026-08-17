@@ -14,9 +14,10 @@ async function loadPolicyModule() {
 }
 
 describe("SwitchOS policy integration", () => {
-  const originalEnv = {
-    PERMIFY_ENDPOINT: process.env.PERMIFY_ENDPOINT,
-    PERMIFY_SCHEMA_VERSION: process.env.PERMIFY_SCHEMA_VERSION,
+	const originalEnv = {
+		PERMIFY_ENDPOINT: process.env.PERMIFY_ENDPOINT,
+		PERMIFY_AUTH_TOKEN: process.env.PERMIFY_AUTH_TOKEN,
+		PERMIFY_SCHEMA_VERSION: process.env.PERMIFY_SCHEMA_VERSION,
     PERMIFY_DEPTH: process.env.PERMIFY_DEPTH,
     REDIS_URL: process.env.REDIS_URL,
     POLICY_CACHE_TTL_SECONDS: process.env.POLICY_CACHE_TTL_SECONDS,
@@ -24,17 +25,19 @@ describe("SwitchOS policy integration", () => {
 
   beforeEach(() => {
     fetchMock.mockReset();
-    createClientMock.mockReset();
-    process.env.PERMIFY_ENDPOINT = "";
-    process.env.PERMIFY_SCHEMA_VERSION = "switchos-v1";
+		createClientMock.mockReset();
+		process.env.PERMIFY_ENDPOINT = "";
+		process.env.PERMIFY_AUTH_TOKEN = "";
+		process.env.PERMIFY_SCHEMA_VERSION = "switchos-v1";
     process.env.PERMIFY_DEPTH = "20";
     process.env.REDIS_URL = "";
     process.env.POLICY_CACHE_TTL_SECONDS = "30";
   });
 
-  afterEach(() => {
-    process.env.PERMIFY_ENDPOINT = originalEnv.PERMIFY_ENDPOINT;
-    process.env.PERMIFY_SCHEMA_VERSION = originalEnv.PERMIFY_SCHEMA_VERSION;
+		afterEach(() => {
+		process.env.PERMIFY_ENDPOINT = originalEnv.PERMIFY_ENDPOINT;
+		process.env.PERMIFY_AUTH_TOKEN = originalEnv.PERMIFY_AUTH_TOKEN;
+		process.env.PERMIFY_SCHEMA_VERSION = originalEnv.PERMIFY_SCHEMA_VERSION;
     process.env.PERMIFY_DEPTH = originalEnv.PERMIFY_DEPTH;
     process.env.REDIS_URL = originalEnv.REDIS_URL;
     process.env.POLICY_CACHE_TTL_SECONDS = originalEnv.POLICY_CACHE_TTL_SECONDS;
@@ -79,8 +82,9 @@ describe("SwitchOS policy integration", () => {
   });
 
   it("calls the configured external policy engine and caches the decision in Redis when available", async () => {
-    process.env.PERMIFY_ENDPOINT = "http://127.0.0.1:3476";
-    process.env.PERMIFY_SCHEMA_VERSION = "switchos-v2";
+		process.env.PERMIFY_ENDPOINT = "http://127.0.0.1:3476";
+		process.env.PERMIFY_AUTH_TOKEN = "permify-test-token";
+		process.env.PERMIFY_SCHEMA_VERSION = "switchos-v2";
     process.env.REDIS_URL = "redis://127.0.0.1:6379";
     process.env.POLICY_CACHE_TTL_SECONDS = "45";
 
@@ -117,9 +121,12 @@ describe("SwitchOS policy integration", () => {
     expect(createClientMock).toHaveBeenCalledWith({ url: "redis://127.0.0.1:6379" });
     expect(redisClient.connect).toHaveBeenCalledTimes(1);
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(fetchMock).toHaveBeenCalledWith(
-      "http://127.0.0.1:3476/v1/permissions/check",
-      expect.objectContaining({ method: "POST" }),
+		expect(fetchMock).toHaveBeenCalledWith(
+			"http://127.0.0.1:3476/v1/permissions/check",
+			expect.objectContaining({
+				method: "POST",
+				headers: expect.objectContaining({ Authorization: "Bearer permify-test-token" }),
+			}),
     );
 
     const [, request] = fetchMock.mock.calls[0];
@@ -145,17 +152,19 @@ describe("SwitchOS policy integration", () => {
     expect(getPolicyIntegrationStatus()).toMatchObject({
       enabled: true,
       endpoint: "http://127.0.0.1:3476",
-      schemaVersion: "switchos-v2",
-      fallbackMode: false,
-      cacheConfigured: true,
+			schemaVersion: "switchos-v2",
+			fallbackMode: false,
+			authenticated: true,
+			cacheConfigured: true,
       cacheEnabled: true,
       cacheTtlSeconds: 45,
     });
   });
 
   it("continues without cache when Redis is configured but unavailable", async () => {
-    process.env.PERMIFY_ENDPOINT = "http://127.0.0.1:3476";
-    process.env.REDIS_URL = "redis://127.0.0.1:6379";
+		process.env.PERMIFY_ENDPOINT = "http://127.0.0.1:3476";
+		process.env.PERMIFY_AUTH_TOKEN = "permify-test-token";
+		process.env.REDIS_URL = "redis://127.0.0.1:6379";
 
     createClientMock.mockImplementation(() => {
       throw new Error("redis unavailable");
@@ -185,9 +194,10 @@ describe("SwitchOS policy integration", () => {
   });
 
   it("throws when the external policy engine returns a failed response", async () => {
-    process.env.PERMIFY_ENDPOINT = "http://127.0.0.1:3476";
+		process.env.PERMIFY_ENDPOINT = "http://127.0.0.1:3476";
+		process.env.PERMIFY_AUTH_TOKEN = "permify-test-token";
 
-    fetchMock.mockResolvedValue({
+		fetchMock.mockResolvedValue({
       ok: false,
       status: 503,
       text: async () => "policy unavailable",
@@ -206,6 +216,19 @@ describe("SwitchOS policy integration", () => {
         permission: "read_platform",
         resource: { type: "tenant", id: "switchos-core" },
       }),
-    ).rejects.toThrow(/Permify permission check failed: 503 policy unavailable/);
-  });
+		).rejects.toThrow(/Permify permission check failed: 503 policy unavailable/);
+	});
+
+	it("rejects an enabled policy engine without its service credential", async () => {
+		process.env.PERMIFY_ENDPOINT = "http://127.0.0.1:3476";
+		process.env.PERMIFY_AUTH_TOKEN = "";
+		const { checkPolicy } = await loadPolicyModule();
+
+		await expect(checkPolicy({
+			subject: { id: 13, name: "Operator", role: "operator" },
+			permission: "read_platform",
+			resource: { type: "tenant", id: "switchos-core" },
+		})).rejects.toThrow("Permify policy client requires PERMIFY_AUTH_TOKEN");
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
 });

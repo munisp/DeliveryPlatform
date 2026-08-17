@@ -21,8 +21,11 @@ export type PolicyCheckInput = {
 let redisPolicyCacheClientPromise: Promise<RedisPolicyCacheClient | null> | null = null;
 
 function normalizePermifyEndpoint() {
-  const endpoint = `${process.env.PERMIFY_ENDPOINT ?? ""}`.trim();
-  return endpoint.replace(/\/$/, "");
+	return ENV.permifyEndpoint;
+}
+
+function getPermifyAuthToken() {
+	return ENV.permifyAuthToken;
 }
 
 function buildAuthzModelId() {
@@ -131,9 +134,13 @@ async function writeCachedPolicyDecision(input: PolicyCheckInput, allowed: boole
 }
 
 export async function checkPolicy(input: PolicyCheckInput): Promise<boolean> {
-  if (!isPolicyEngineEnabled()) {
-    return scopeFallbackAllows(input.subject, input.permission);
-  }
+	if (!isPolicyEngineEnabled()) {
+		return scopeFallbackAllows(input.subject, input.permission);
+	}
+	const authToken = getPermifyAuthToken();
+	if (authToken === "") {
+		throw new Error("Permify policy client requires PERMIFY_AUTH_TOKEN when PERMIFY_ENDPOINT is configured");
+	}
 
   const cachedDecision = await readCachedPolicyDecision(input);
   if (cachedDecision != null) {
@@ -143,8 +150,9 @@ export async function checkPolicy(input: PolicyCheckInput): Promise<boolean> {
   const endpoint = normalizePermifyEndpoint();
   const response = await fetch(`${endpoint}/v1/permissions/check`, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
+		headers: {
+			"Content-Type": "application/json",
+			Authorization: `Bearer ${authToken}`,
     },
     body: JSON.stringify({
       tenantId: input.subject.tenantId ?? "switchos-core",
@@ -184,7 +192,8 @@ export function getPolicyIntegrationStatus() {
     enabled: isPolicyEngineEnabled(),
     endpoint: normalizePermifyEndpoint() || null,
     schemaVersion: buildAuthzModelId(),
-    fallbackMode: !isPolicyEngineEnabled(),
+		fallbackMode: !isPolicyEngineEnabled(),
+		authenticated: getPermifyAuthToken() !== "",
     cacheConfigured: Boolean(ENV.redisUrl),
     cacheEnabled: isPolicyCacheEnabled(),
     cacheTtlSeconds: getPolicyCacheTtlSeconds(),
