@@ -16,4 +16,12 @@ describe("isolated financial topology configuration", () => {
     expect(migrationSection).toContain("psql -v ON_ERROR_STOP=1 -f /migrations/0006.sql");
     expect(migrationSection).not.toContain("DATABASE_URL:");
   });
+
+  it("keeps the single-node broker below its measured container memory limit", async () => {
+    const compose = await readFile(composePath, "utf8");
+    const brokerSection = compose.slice(compose.indexOf("  redpanda:"), compose.indexOf("  temporal:"));
+
+    expect(brokerSection).toContain("mem_limit: 1g");
+    expect(brokerSection).toContain("- --memory=768M");
+  });
 });

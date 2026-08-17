@@ -86,7 +86,7 @@ services:
       - --advertise-rpc-addr=redpanda:33145
       - --mode=dev-container
       - --smp=1
-      - --memory=1G
+      - --memory=768M
       - --default-log-level=info
     ports: ["19092:19092", "19644:9644"]
     volumes: ["financial_rehearsal_redpanda:/var/lib/redpanda/data"]
