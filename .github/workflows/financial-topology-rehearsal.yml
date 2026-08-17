@@ -60,6 +60,10 @@ jobs:
             docker compose --env-file "$FINANCIAL_REHEARSAL_RUNTIME_DIR/rehearsal.env" \
               -f deploy/testing/docker-compose.financial-rehearsal.yml ps \
               > "$FINANCIAL_REHEARSAL_EVIDENCE_DIR/compose-status.txt" || true
+            docker compose --env-file "$FINANCIAL_REHEARSAL_RUNTIME_DIR/rehearsal.env" \
+              -f deploy/testing/docker-compose.financial-rehearsal.yml logs --no-color 2>&1 \
+              | sed -E 's#(postgresql://[^:[:space:]]+:)[^@[:space:]]+@#\1[REDACTED]@#g' \
+              > "$FINANCIAL_REHEARSAL_EVIDENCE_DIR/compose-services.redacted.log" || true
           fi
           find "$FINANCIAL_REHEARSAL_EVIDENCE_DIR" -type f -maxdepth 1 -printf '%f\n' \
             | sort > "$FINANCIAL_REHEARSAL_EVIDENCE_DIR/evidence-manifest.txt"
