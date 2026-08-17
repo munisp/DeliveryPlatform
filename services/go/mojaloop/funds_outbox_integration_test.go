@@ -52,6 +52,10 @@ func TestFundsOutboxAtomicPersistenceAndRecovery(t *testing.T) {
 	}
 
 	t.Setenv("FUNDS_OUTBOX_DESTINATIONS", "tigerbeetle,kafka,temporal")
+	t.Setenv("KAFKA_BROKERS", "broker.test:9092")
+	t.Setenv("KAFKA_FUNDS_TOPIC", "switchos.funds")
+	t.Setenv("TEMPORAL_BRIDGE_URL", "http://temporal-bridge.test:8080")
+	t.Setenv("TEMPORAL_TASK_QUEUE", "switchos-funds")
 	if err := service.recordFundsWorkflowEvent(event); err != nil {
 		t.Fatalf("persist funds workflow and outbox: %v", err)
 	}
