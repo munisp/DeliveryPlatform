@@ -17,3 +17,13 @@ The API enforcement documentation specifies that enabled Permify authentication 
 [3] [Permify configuration reference](https://docs.permify.co/setting-up/configuration)
 
 [4] [Permify API enforcement and authentication](https://docs.permify.co/getting-started/enforcement)
+
+## GitHub-hosted isolated rehearsal controls
+
+The manual real-service rehearsal uses a standard `ubuntu-24.04` GitHub-hosted runner rather than the lightweight `ubuntu-slim` container. GitHub documents that private-repository Ubuntu standard runners provide 2 CPUs and 8 GB RAM, and that they are new virtual machines for each job.[5] This meets the rehearsal’s 7 GiB available-memory guard while ensuring that the disposable topology and generated credentials are discarded with the job.
+
+GitHub’s service-container guidance requires an Ubuntu runner for containerized service workloads and states that services are destroyed when the job completes.[6] The workflow consequently uses `workflow_dispatch`, test-generated credentials only, an always-run cleanup step, and an artifact allowlist that excludes the generated environment file.
+
+[5] [GitHub-hosted runners reference](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)
+
+[6] [GitHub Actions service-container guidance](https://docs.github.com/actions/tutorials/communicating-with-docker-service-containers)

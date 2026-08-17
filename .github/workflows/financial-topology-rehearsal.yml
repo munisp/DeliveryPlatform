@@ -1,0 +1,82 @@
+name: Real Financial Topology Rehearsal
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: real-financial-topology-rehearsal
+  cancel-in-progress: false
+
+jobs:
+  rehearse:
+    name: Isolated TigerBeetle, Broker, and Temporal Recovery
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      FINANCIAL_REHEARSAL_RUNTIME_DIR: ${{ runner.temp }}/financial-rehearsal
+      FINANCIAL_REHEARSAL_EVIDENCE_DIR: ${{ runner.temp }}/financial-rehearsal-evidence
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.x'
+
+      - name: Verify disposable-runner prerequisites
+        run: |
+          set -euo pipefail
+          docker version
+          docker compose version
+          available_kib="$(awk '/MemAvailable:/ { print $2 }' /proc/meminfo)"
+          test -n "$available_kib"
+          test "$available_kib" -ge $((7 * 1024 * 1024))
+          mkdir -p "$FINANCIAL_REHEARSAL_EVIDENCE_DIR"
+          printf 'runner=%s\navailable_memory_kib=%s\n' "$RUNNER_NAME" "$available_kib" \
+            > "$FINANCIAL_REHEARSAL_EVIDENCE_DIR/runner-capacity.txt"
+
+      - name: Run isolated real-service rehearsal
+        run: |
+          set -euo pipefail
+          set -o pipefail
+          scripts/rehearse-financial-topology.sh 2>&1 | tee "$FINANCIAL_REHEARSAL_EVIDENCE_DIR/rehearsal-command.log"
+
+      - name: Collect non-secret evidence
+        if: always()
+        run: |
+          set -euo pipefail
+          mkdir -p "$FINANCIAL_REHEARSAL_EVIDENCE_DIR"
+          if [ -f "$FINANCIAL_REHEARSAL_RUNTIME_DIR/reconciliation-overview.json" ]; then
+            cp "$FINANCIAL_REHEARSAL_RUNTIME_DIR/reconciliation-overview.json" \
+              "$FINANCIAL_REHEARSAL_EVIDENCE_DIR/reconciliation-overview.json"
+          fi
+          if [ -f "$FINANCIAL_REHEARSAL_RUNTIME_DIR/rehearsal.env" ]; then
+            docker compose --env-file "$FINANCIAL_REHEARSAL_RUNTIME_DIR/rehearsal.env" \
+              -f deploy/testing/docker-compose.financial-rehearsal.yml ps \
+              > "$FINANCIAL_REHEARSAL_EVIDENCE_DIR/compose-status.txt" || true
+          fi
+          find "$FINANCIAL_REHEARSAL_EVIDENCE_DIR" -type f -maxdepth 1 -printf '%f\n' \
+            | sort > "$FINANCIAL_REHEARSAL_EVIDENCE_DIR/evidence-manifest.txt"
+
+      - name: Destroy isolated test topology
+        if: always()
+        run: |
+          set -euo pipefail
+          if [ -f "$FINANCIAL_REHEARSAL_RUNTIME_DIR/rehearsal.env" ]; then
+            docker compose --env-file "$FINANCIAL_REHEARSAL_RUNTIME_DIR/rehearsal.env" \
+              -f deploy/testing/docker-compose.financial-rehearsal.yml down -v --remove-orphans || true
+          fi
+          rm -rf "$FINANCIAL_REHEARSAL_RUNTIME_DIR"
+
+      - name: Upload non-secret rehearsal evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: financial-topology-rehearsal-${{ github.run_id }}
+          path: ${{ runner.temp }}/financial-rehearsal-evidence
+          if-no-files-found: warn
+          retention-days: 14
