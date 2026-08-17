@@ -56,6 +56,7 @@ jobs:
             tests/longcat.circuit-breaker.test.ts \
             tests/silent-mockware.regression.test.ts \
             tests/edge-security.config.test.ts \
+            tests/financial-topology.config.test.ts \
             --reporter=verbose
 
       - name: Cache TypeScript build info

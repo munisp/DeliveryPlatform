@@ -36,14 +36,18 @@ services:
     depends_on:
       postgres: {condition: service_healthy}
     environment:
-      DATABASE_URL: postgresql://financial_rehearsal:${FINANCIAL_TEST_POSTGRES_PASSWORD:?FINANCIAL_TEST_POSTGRES_PASSWORD must be set}@postgres:5432/financial_rehearsal?sslmode=disable
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGUSER: financial_rehearsal
+      PGPASSWORD: ${FINANCIAL_TEST_POSTGRES_PASSWORD:?FINANCIAL_TEST_POSTGRES_PASSWORD must be set}
+      PGDATABASE: financial_rehearsal
     volumes:
       - ../../drizzle/0006_mojaloop_exact_money_and_outbox.sql:/migrations/0006.sql:ro
       - ../../drizzle/0007_mojaloop_schema_contract.sql:/migrations/0007.sql:ro
     entrypoint: ["/bin/sh", "-ec"]
     command: >-
-      psql "$${DATABASE_URL}" -v ON_ERROR_STOP=1 -f /migrations/0006.sql
-      && psql "$${DATABASE_URL}" -v ON_ERROR_STOP=1 -f /migrations/0007.sql
+      psql -v ON_ERROR_STOP=1 -f /migrations/0006.sql
+      && psql -v ON_ERROR_STOP=1 -f /migrations/0007.sql
     restart: "no"
 
   tigerbeetle-0:
