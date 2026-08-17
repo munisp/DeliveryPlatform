@@ -99,9 +99,8 @@ services:
 
   temporal:
     image: temporalio/temporal:1.8.2
-    command: server start-dev --ip 0.0.0.0 --headless --db-filename /var/lib/temporal/temporal.db
+    command: server start-dev --ip 0.0.0.0 --headless --db-filename /tmp/temporal.db
     ports: ["17233:7233"]
-    volumes: ["financial_rehearsal_temporal:/var/lib/temporal"]
     restart: "no"
 
   mojaloop-api:
@@ -165,4 +164,3 @@ services:
 volumes:
   financial_rehearsal_postgres:
   financial_rehearsal_redpanda:
-  financial_rehearsal_temporal:

@@ -9,7 +9,7 @@ This is a **disposable real-service rehearsal**, not a production deployment. It
 | TigerBeetle | `0.17.9` | Three replicas on ports `3001-3003` with `--cache-grid=256MiB` | Same-host replicas do not demonstrate multi-host or regional durability. |
 | PostgreSQL | `16` | Migration-owned workflow, idempotency, and outbox records | Uses a fresh test database only. |
 | Redpanda | `v26.2.1` | Kafka-compatible outbox delivery and broker recovery | Allocated 768 MiB inside a 1 GiB container ceiling; one broker is a test fixture, not a production quorum. |
-| Temporal CLI | `1.8.2` | Persistent development server, bridge, and worker restart validation | Validates recovery behavior, not production Temporal capacity. |
+| Temporal CLI | `1.8.2` | Development server, bridge, and worker restart validation | Its SQLite file persists through the service stop/start sequence only; it is not a production persistence design. |
 | Mojaloop | Local build | Ledger-first outbox, authenticated bridge, and worker | Uses the service’s fail-closed credentials and schema contract. |
 
 ## Start and Execute

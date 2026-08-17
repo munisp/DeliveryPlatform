@@ -24,4 +24,12 @@ describe("isolated financial topology configuration", () => {
     expect(brokerSection).toContain("mem_limit: 1g");
     expect(brokerSection).toContain("- --memory=768M");
   });
+
+  it("uses a writable ephemeral SQLite path for the Temporal development server", async () => {
+    const compose = await readFile(composePath, "utf8");
+    const temporalSection = compose.slice(compose.indexOf("  temporal:"), compose.indexOf("  mojaloop-api:"));
+
+    expect(temporalSection).toContain("--db-filename /tmp/temporal.db");
+    expect(temporalSection).not.toContain("/var/lib/temporal");
+  });
 });
