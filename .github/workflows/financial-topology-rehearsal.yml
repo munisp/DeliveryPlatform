@@ -15,9 +15,6 @@ jobs:
     name: Isolated TigerBeetle, Broker, and Temporal Recovery
     runs-on: ubuntu-24.04
     timeout-minutes: 30
-    env:
-      FINANCIAL_REHEARSAL_RUNTIME_DIR: ${{ runner.temp }}/financial-rehearsal
-      FINANCIAL_REHEARSAL_EVIDENCE_DIR: ${{ runner.temp }}/financial-rehearsal-evidence
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -30,14 +27,18 @@ jobs:
       - name: Verify disposable-runner prerequisites
         run: |
           set -euo pipefail
+          runtime_dir="${RUNNER_TEMP}/financial-rehearsal"
+          evidence_dir="${RUNNER_TEMP}/financial-rehearsal-evidence"
+          printf 'FINANCIAL_REHEARSAL_RUNTIME_DIR=%s\n' "$runtime_dir" >> "$GITHUB_ENV"
+          printf 'FINANCIAL_REHEARSAL_EVIDENCE_DIR=%s\n' "$evidence_dir" >> "$GITHUB_ENV"
           docker version
           docker compose version
           available_kib="$(awk '/MemAvailable:/ { print $2 }' /proc/meminfo)"
           test -n "$available_kib"
           test "$available_kib" -ge $((7 * 1024 * 1024))
-          mkdir -p "$FINANCIAL_REHEARSAL_EVIDENCE_DIR"
+          mkdir -p "$evidence_dir"
           printf 'runner=%s\navailable_memory_kib=%s\n' "$RUNNER_NAME" "$available_kib" \
-            > "$FINANCIAL_REHEARSAL_EVIDENCE_DIR/runner-capacity.txt"
+            > "$evidence_dir/runner-capacity.txt"
 
       - name: Run isolated real-service rehearsal
         run: |
