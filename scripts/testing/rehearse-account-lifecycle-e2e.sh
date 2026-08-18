@@ -119,7 +119,7 @@ test "$revoke_status" = '200'
 
 final_invitation_status="$(curl --silent --show-error --output /tmp/lifecycle-invitation-final.json --write-out '%{http_code}' \
   -b "$cookie_file" -H 'Content-Type: application/json' \
-  --data "{\"email\":\"${LIFECYCLE_TEST_INVITEE_EMAIL}\",\"role\":\"viewer\"}" \
+  --data "{\"email\":\"${LIFECYCLE_TEST_INVITEE_EMAIL}\",\"role\":\"admin\"}" \
   "${LIFECYCLE_TEST_BASE_URL%/}/api/auth/invitations")"
 test "$final_invitation_status" = '202'
 curl --fail --silent --show-error "${LIFECYCLE_TEST_EMAIL_SINK_URL%/}/messages" >/tmp/lifecycle-messages-after-resend.json
@@ -136,6 +136,29 @@ accepted_status="$(curl --silent --show-error -b "$cookie_file" "${LIFECYCLE_TES
 printf '%s' "$accepted_status" > /tmp/lifecycle-invitations-accepted.json
 grep -q "${LIFECYCLE_TEST_INVITEE_EMAIL}" /tmp/lifecycle-invitations-accepted.json
 grep -q '"status":"accepted"' /tmp/lifecycle-invitations-accepted.json
+
+preference_status="$(curl --silent --show-error --output /tmp/lifecycle-invitee-notification-preferences.json --write-out '%{http_code}' \
+  -b "$invitee_cookie_file" -H 'Content-Type: application/json' \
+  --data '{"roleUpdateEmail":true,"presetOwnershipTransferEmail":true}' \
+  "${LIFECYCLE_TEST_BASE_URL%/}/api/auth/tenant/notification-preferences")"
+test "$preference_status" = '200'
+grep -q '"roleUpdateEmail":true' /tmp/lifecycle-invitee-notification-preferences.json
+grep -q '"presetOwnershipTransferEmail":true' /tmp/lifecycle-invitee-notification-preferences.json
+
+role_target_email="role-target-${LIFECYCLE_TEST_INVITEE_EMAIL}"
+role_target_invitation_status="$(curl --silent --show-error --output /tmp/lifecycle-role-target-invitation.json --write-out '%{http_code}' \
+  -b "$cookie_file" -H 'Content-Type: application/json' \
+  --data "{\"email\":\"${role_target_email}\",\"role\":\"viewer\"}" \
+  "${LIFECYCLE_TEST_BASE_URL%/}/api/auth/invitations")"
+test "$role_target_invitation_status" = '202'
+curl --fail --silent --show-error "${LIFECYCLE_TEST_EMAIL_SINK_URL%/}/messages" >/tmp/lifecycle-messages-role-target.json
+role_target_token="$(grep -oE '/accept-invitation\?token=[A-Za-z0-9_-]+' /tmp/lifecycle-messages-role-target.json | tail -1 | cut -d= -f2)"
+test -n "$role_target_token"
+role_target_accept_status="$(curl --silent --show-error --output /tmp/lifecycle-role-target-accept.json --write-out '%{http_code}' \
+  -H 'Content-Type: application/json' \
+  --data "{\"token\":\"${role_target_token}\",\"name\":\"Lifecycle Role Target\",\"password\":\"ChangeMe!7Role\"}" \
+  "${LIFECYCLE_TEST_BASE_URL%/}/api/auth/invitations/accept")"
+test "$role_target_accept_status" = '200'
 
 bulk_invitee_one="bulk-one-${LIFECYCLE_TEST_INVITEE_EMAIL}"
 bulk_invitee_two="bulk-two-${LIFECYCLE_TEST_INVITEE_EMAIL}"
@@ -185,13 +208,16 @@ psql "$TEST_DATABASE_URL" -Atqc "
 " | grep -qx '1'
 
 invitee_operator_id="$(psql "$TEST_DATABASE_URL" -Atqc "SELECT id FROM operator_credentials WHERE email = '${LIFECYCLE_TEST_INVITEE_EMAIL}'")"
+role_target_operator_id="$(psql "$TEST_DATABASE_URL" -Atqc "SELECT id FROM operator_credentials WHERE email = '${role_target_email}'")"
 test -n "$invitee_operator_id"
+test -n "$role_target_operator_id"
 bulk_role_status="$(curl --silent --show-error --output /tmp/lifecycle-members-role.json --write-out '%{http_code}' \
   -b "$cookie_file" -H 'Content-Type: application/json' \
-  --data "{\"memberIds\":[${invitee_operator_id}],\"role\":\"admin\"}" \
+  --data "{\"memberIds\":[${role_target_operator_id}],\"role\":\"admin\"}" \
   "${LIFECYCLE_TEST_BASE_URL%/}/api/auth/members/actions/bulk/role")"
 test "$bulk_role_status" = '200'
 grep -q '"changed":1' /tmp/lifecycle-members-role.json
+grep -q '"notificationDelivery":"delivered"' /tmp/lifecycle-members-role.json
 
 transfer_status="$(curl --silent --show-error --output /tmp/lifecycle-preset-transfer.json --write-out '%{http_code}' \
   -b "$cookie_file" -H 'Content-Type: application/json' \
@@ -199,17 +225,19 @@ transfer_status="$(curl --silent --show-error --output /tmp/lifecycle-preset-tra
   "${LIFECYCLE_TEST_BASE_URL%/}/api/auth/tenant-branding/presets/${preset_id}/transfer-ownership")"
 test "$transfer_status" = '200'
 psql "$TEST_DATABASE_URL" -Atqc "SELECT count(*) FROM tenant_branding_presets WHERE id = '${preset_id}' AND created_by_operator_id = ${invitee_operator_id} AND ownership_transferred_at IS NOT NULL" | grep -qx '1'
+grep -q '"notificationDelivery":"delivered"' /tmp/lifecycle-preset-transfer.json
 
+activity_date="$(date +%F)"
 audit_status="$(curl --silent --show-error --output /tmp/lifecycle-preset-ownership-history.json --write-out '%{http_code}' \
-  -b "$cookie_file" "${LIFECYCLE_TEST_BASE_URL%/}/api/auth/tenant-branding/presets/audit-history")"
+  -b "$cookie_file" "${LIFECYCLE_TEST_BASE_URL%/}/api/auth/tenant-branding/presets/audit-history?startDate=${activity_date}&endDate=${activity_date}")"
 test "$audit_status" = '200'
 grep -q "\"presetId\":\"${preset_id}\"" /tmp/lifecycle-preset-ownership-history.json
 grep -q "\"toOperatorEmail\":\"${LIFECYCLE_TEST_INVITEE_EMAIL}\"" /tmp/lifecycle-preset-ownership-history.json
 
-activity_date="$(date +%F)"
-csv_status="$(curl --silent --show-error --output /tmp/lifecycle-invitation-activity.csv --write-out '%{http_code}' -b "$cookie_file" "${LIFECYCLE_TEST_BASE_URL%/}/api/auth/invitations/activity.csv?status=accepted&startDate=${activity_date}&endDate=${activity_date}")"
+csv_status="$(curl --silent --show-error --output /tmp/lifecycle-invitation-activity.csv --write-out '%{http_code}' -b "$cookie_file" "${LIFECYCLE_TEST_BASE_URL%/}/api/auth/invitations/activity.csv?status=accepted&startDate=${activity_date}&endDate=${activity_date}&columns=recipient_email,status")"
 test "$csv_status" = '200'
-grep -q '"invitation_id","recipient_email","role","status"' /tmp/lifecycle-invitation-activity.csv
+grep -q '^"recipient_email","status"' /tmp/lifecycle-invitation-activity.csv
+if grep -q '"invitation_id"' /tmp/lifecycle-invitation-activity.csv; then echo "Unexpected invitation ID CSV column" >&2; exit 1; fi
 grep -q "${LIFECYCLE_TEST_INVITEE_EMAIL}" /tmp/lifecycle-invitation-activity.csv
 grep -q '"accepted"' /tmp/lifecycle-invitation-activity.csv
 

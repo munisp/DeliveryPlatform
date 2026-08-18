@@ -95,4 +95,17 @@ describe("account lifecycle onboarding UI", () => {
     expect(page).toContain("Preset ownership history");
     expect(page).toContain("tenant-branding-preset-ownership-history");
   });
+
+  it("lets administrators select CSV columns, opt into alerts, and filter ownership history by date", async () => {
+    const page = await readFile(resolve(root, "client/src/pages/AccountLifecycle.tsx"), "utf8");
+    const actions = await readFile(resolve(root, "client/src/pages/TenantAdminActions.tsx"), "utf8");
+
+    expect(actions).toContain("ACTIVITY_COLUMNS");
+    expect(actions).toContain("activityColumns");
+    expect(actions).toContain("Email alert preferences");
+    expect(actions).toContain('"/api/auth/tenant/notification-preferences"');
+    expect(page).toContain("ownershipStartDate");
+    expect(page).toContain("ownershipEndDate");
+    expect(page).toContain("startDate");
+  });
 });

@@ -31,6 +31,7 @@ import {
   deleteTenantBrandingPreset,
   ensureAccountLifecycleStore,
   exportInvitationActivityCsv,
+  getTenantAdminNotificationPreferences,
   getTenantBranding,
   getOnboardingState,
   listInvitationStatuses,
@@ -45,6 +46,7 @@ import {
   saveTenantBrandingPreset,
   setTenantBrandingPresetOrganizationSharing,
   transferTenantBrandingPresetOwnership,
+  updateTenantAdminNotificationPreferences,
   updateTenantBranding,
 } from "./accountLifecycleStore";
 import { authenticateOperator, ensureExternalOperator, ensureOperatorAuthStore } from "./operatorAuthStore";
@@ -594,8 +596,9 @@ app.get("/api/auth/invitations/activity.csv", rateLimit(10), async (req, res) =>
     const status = typeof req.query.status === "string" ? req.query.status : null;
     const startDate = typeof req.query.startDate === "string" ? req.query.startDate : null;
     const endDate = typeof req.query.endDate === "string" ? req.query.endDate : null;
-    const csv = await exportInvitationActivityCsv({ operatorId: Number(user.id), status, startDate, endDate });
-    await recordOperationalEvent({ eventType: "auth.invitation_activity_exported", actorId: `${user.id}`, actorRole: user.role, tenantId: user.tenantId, route: req.path, outcome: "success", payload: { status, startDate, endDate } });
+    const columns = typeof req.query.columns === "string" ? req.query.columns.split(",") : [];
+    const csv = await exportInvitationActivityCsv({ operatorId: Number(user.id), status, startDate, endDate, columns });
+    await recordOperationalEvent({ eventType: "auth.invitation_activity_exported", actorId: `${user.id}`, actorRole: user.role, tenantId: user.tenantId, route: req.path, outcome: "success", payload: { status, startDate, endDate, columns } });
     res.setHeader("Content-Type", "text/csv; charset=utf-8");
     res.setHeader("Content-Disposition", 'attachment; filename="invitation-activity.csv"');
     res.status(200).send(csv);
@@ -719,7 +722,33 @@ app.get("/api/auth/tenant-branding/presets/audit-history", async (req, res) => {
   const user = requireAuthenticatedOperator(req, res);
   if (!user) return;
   try {
-    res.status(200).json({ history: await listTenantBrandingPresetOwnershipAudit(Number(user.id)) });
+    const startDate = typeof req.query.startDate === "string" ? req.query.startDate : null;
+    const endDate = typeof req.query.endDate === "string" ? req.query.endDate : null;
+    res.status(200).json({ history: await listTenantBrandingPresetOwnershipAudit({ operatorId: Number(user.id), startDate, endDate }) });
+  } catch (error) {
+    const mapped = lifecycleErrorStatus(error);
+    res.status(mapped.code === "tenant_admin_required" ? 403 : mapped.status).json({ error: mapped.code });
+  }
+});
+
+app.get("/api/auth/tenant/notification-preferences", async (req, res) => {
+  const user = requireAuthenticatedOperator(req, res);
+  if (!user) return;
+  try {
+    res.status(200).json(await getTenantAdminNotificationPreferences(Number(user.id)));
+  } catch (error) {
+    const mapped = lifecycleErrorStatus(error);
+    res.status(mapped.code === "tenant_admin_required" ? 403 : mapped.status).json({ error: mapped.code });
+  }
+});
+
+app.post("/api/auth/tenant/notification-preferences", rateLimit(20), async (req, res) => {
+  const user = requireAuthenticatedOperator(req, res);
+  if (!user) return;
+  try {
+    const preferences = await updateTenantAdminNotificationPreferences({ operatorId: Number(user.id), roleUpdateEmail: Boolean(req.body?.roleUpdateEmail), presetOwnershipTransferEmail: Boolean(req.body?.presetOwnershipTransferEmail) });
+    await recordOperationalEvent({ eventType: "auth.tenant_admin_notification_preferences_updated", actorId: `${user.id}`, actorRole: user.role, tenantId: user.tenantId, route: req.path, outcome: "success" });
+    res.status(200).json(preferences);
   } catch (error) {
     const mapped = lifecycleErrorStatus(error);
     res.status(mapped.code === "tenant_admin_required" ? 403 : mapped.status).json({ error: mapped.code });

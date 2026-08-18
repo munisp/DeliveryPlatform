@@ -28,7 +28,9 @@ database_created=false
 role_created=false
 
 port_is_occupied() {
-  ss -ltn "sport = :$1" | grep -q LISTEN
+  local sockets
+  sockets="$(ss -ltn "sport = :$1" 2>/dev/null || true)"
+  grep -q LISTEN <<<"$sockets"
 }
 
 terminate_tree() {

@@ -60,6 +60,22 @@ export type TenantBrandingPresetOwnershipAudit = {
   transferredAt: Date;
 };
 
+export type TenantAdminNotificationPreferences = {
+  roleUpdateEmail: boolean;
+  presetOwnershipTransferEmail: boolean;
+  updatedAt: Date | null;
+};
+
+export type InvitationActivityColumn =
+  | "invitation_id"
+  | "recipient_email"
+  | "role"
+  | "status"
+  | "sent_at"
+  | "expires_at"
+  | "accepted_at"
+  | "revoked_at";
+
 export type InvitationStatus = {
   id: string;
   email: string;
@@ -72,9 +88,10 @@ export type InvitationStatus = {
 };
 
 const supportedRoles = new Set<LifecycleRole>(["admin", "operator", "viewer"]);
-const requiredTables = ["organizations", "platform_tenants", "organization_memberships", "account_lifecycle_tokens", "tenant_branding_presets", "tenant_branding_preset_ownership_audit"];
+const requiredTables = ["organizations", "platform_tenants", "organization_memberships", "account_lifecycle_tokens", "tenant_branding_presets", "tenant_branding_preset_ownership_audit", "tenant_admin_notification_preferences"];
 const maxBulkInvitationActions = 10;
 const maxBulkMemberRoleChanges = 10;
+const invitationActivityColumns: InvitationActivityColumn[] = ["invitation_id", "recipient_email", "role", "status", "sent_at", "expires_at", "accepted_at", "revoked_at"];
 let schemaReady: Promise<void> | null = null;
 
 function normalizeEmail(value: string) {
@@ -154,6 +171,16 @@ function normalizeActivityFilters(input: { status?: string | null; startDate?: s
   if (startDate && endDate && startDate > endDate) throw new Error("invalid_invitation_activity_date_range");
   if (startDate && endDate && endDate.getTime() - startDate.getTime() > 366 * 24 * 60 * 60 * 1000) throw new Error("invitation_activity_range_too_large");
   return { status, startDate, endDate };
+}
+
+function normalizeInvitationActivityColumns(columns?: string[] | null) {
+  const values = columns?.flatMap((value) => value.split(",")).map((value) => value.trim()).filter(Boolean) ?? [];
+  if (!values.length) return invitationActivityColumns;
+  const unique = [...new Set(values)];
+  if (unique.length > invitationActivityColumns.length || unique.some((value) => !invitationActivityColumns.includes(value as InvitationActivityColumn))) {
+    throw new Error("invalid_invitation_activity_columns");
+  }
+  return unique as InvitationActivityColumn[];
 }
 
 function csvCell(value: string | null | undefined) {
@@ -297,6 +324,13 @@ export async function ensureAccountLifecycleStore() {
           transferred_by_operator_id INTEGER REFERENCES operator_credentials(id) ON DELETE SET NULL,
           transferred_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
         await client.query("CREATE INDEX IF NOT EXISTS tenant_branding_preset_ownership_audit_lookup ON tenant_branding_preset_ownership_audit (tenant_id, transferred_at DESC)");
+        await client.query(`CREATE TABLE IF NOT EXISTS tenant_admin_notification_preferences (
+          tenant_id VARCHAR(128) NOT NULL REFERENCES platform_tenants(id) ON DELETE CASCADE,
+          operator_id INTEGER NOT NULL REFERENCES operator_credentials(id) ON DELETE CASCADE,
+          role_update_email BOOLEAN NOT NULL DEFAULT FALSE,
+          preset_ownership_transfer_email BOOLEAN NOT NULL DEFAULT FALSE,
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), PRIMARY KEY (tenant_id, operator_id))`);
+        await client.query("CREATE INDEX IF NOT EXISTS tenant_admin_notification_preferences_lookup ON tenant_admin_notification_preferences (tenant_id, operator_id)");
         await client.query(`UPDATE tenant_branding_presets preset SET organization_id = tenant.organization_id
           FROM platform_tenants tenant WHERE preset.tenant_id = tenant.id AND preset.organization_id IS NULL`);
         await client.query("CREATE INDEX IF NOT EXISTS tenant_branding_presets_organization_sharing_lookup ON tenant_branding_presets (organization_id, shared_at DESC) WHERE organization_shared = TRUE");
@@ -366,6 +400,28 @@ async function sendLifecycleEmail(email: string, type: string, subject: string, 
   if (!delivery.accepted || delivery.results.some((result) => result.channel === "email" && !result.success)) {
     throw new Error("lifecycle_email_delivery_failed");
   }
+}
+
+async function notifyTenantAdministrators(input: { tenantId: string; actorId: number; preference: "role_update_email" | "preset_ownership_transfer_email"; subject: string; message: string }) {
+  const optedIn = await getOperatorAuthPool().query<{ email: string }>(
+    `SELECT operator.email
+     FROM operator_credentials operator
+     JOIN tenant_admin_notification_preferences preference
+       ON preference.operator_id = operator.id AND preference.tenant_id = operator.tenant_id
+     WHERE operator.tenant_id = $1 AND operator.role = 'admin' AND operator.is_active = TRUE
+       AND operator.id <> $2 AND preference.${input.preference} = TRUE`,
+    [input.tenantId, input.actorId],
+  );
+  if (!optedIn.rows.length) return { requested: 0, delivered: true };
+  const outcomes = await Promise.all(optedIn.rows.map(async ({ email }) => {
+    try {
+      await sendLifecycleEmail(email, "tenant_admin_alert", input.subject, input.message);
+      return true;
+    } catch {
+      return false;
+    }
+  }));
+  return { requested: optedIn.rows.length, delivered: outcomes.every(Boolean) };
 }
 
 export async function beginSignup(input: { email: string; name: string; password: string }) {
@@ -660,7 +716,7 @@ export async function bulkRevokeInvitations(input: { inviterId: number; invitati
   return { requested: invitationIds.length, succeeded, failed };
 }
 
-export type BulkRoleChangeResult = { requested: number; changed: number; role: LifecycleRole };
+export type BulkRoleChangeResult = { requested: number; changed: number; role: LifecycleRole; notificationDelivery: "not_requested" | "delivered" | "failed" };
 
 export type TenantMember = { id: number; email: string; name: string; role: LifecycleRole; updatedAt: Date };
 
@@ -699,7 +755,8 @@ export async function bulkChangeMemberRoles(input: { operatorId: number; memberI
     await client.query(`UPDATE operator_credentials SET role = $2, updated_at = NOW() WHERE id = ANY($1::integer[])`, [memberIds, input.role]);
     await client.query(`UPDATE organization_memberships SET role = $3 WHERE organization_id = $1 AND operator_id = ANY($2::integer[])`, [organizationId, memberIds, input.role]);
     await client.query("COMMIT");
-    return { requested: memberIds.length, changed: memberIds.length, role: input.role };
+    const notification = await notifyTenantAdministrators({ tenantId: operator.tenant_id, actorId: operator.id, preference: "role_update_email", subject: "Tenant member roles updated", message: `${memberIds.length} tenant member role${memberIds.length === 1 ? " was" : "s were"} updated to ${input.role}.` });
+    return { requested: memberIds.length, changed: memberIds.length, role: input.role, notificationDelivery: notification.requested ? notification.delivered ? "delivered" : "failed" : "not_requested" };
   } catch (error) {
     await client.query("ROLLBACK").catch(() => undefined);
     throw error;
@@ -708,10 +765,11 @@ export async function bulkChangeMemberRoles(input: { operatorId: number; memberI
   }
 }
 
-export async function exportInvitationActivityCsv(input: { operatorId: number; status?: string | null; startDate?: string | null; endDate?: string | null }) {
+export async function exportInvitationActivityCsv(input: { operatorId: number; status?: string | null; startDate?: string | null; endDate?: string | null; columns?: string[] | null }) {
   await ensureAccountLifecycleStore();
   const { operator } = await getTenantAdminContext(input.operatorId);
   const filters = normalizeActivityFilters(input);
+  const columns = normalizeInvitationActivityColumns(input.columns);
   const result = await getOperatorAuthPool().query<{
     id: string; email: string; role: LifecycleRole | null; created_at: Date; expires_at: Date; consumed_at: Date | null; revoked_at: Date | null; status: InvitationStatus["status"];
   }>(
@@ -731,9 +789,20 @@ export async function exportInvitationActivityCsv(input: { operatorId: number; s
      ORDER BY created_at DESC LIMIT 5000`,
     [operator.tenant_id, filters.status, filters.startDate, filters.endDate],
   );
-  const header = ["invitation_id", "recipient_email", "role", "status", "sent_at", "expires_at", "accepted_at", "revoked_at"];
-  const rows = result.rows.map((invitation) => [invitation.id, invitation.email, invitation.role ?? "", invitation.status, invitation.created_at.toISOString(), invitation.expires_at.toISOString(), invitation.consumed_at?.toISOString() ?? "", invitation.revoked_at?.toISOString() ?? ""]);
-  return [header, ...rows].map((row) => row.map((value) => csvCell(value)).join(",")).join("\r\n");
+  const rows = result.rows.map((invitation) => {
+    const values: Record<InvitationActivityColumn, string> = {
+      invitation_id: invitation.id,
+      recipient_email: invitation.email,
+      role: invitation.role ?? "",
+      status: invitation.status,
+      sent_at: invitation.created_at.toISOString(),
+      expires_at: invitation.expires_at.toISOString(),
+      accepted_at: invitation.consumed_at?.toISOString() ?? "",
+      revoked_at: invitation.revoked_at?.toISOString() ?? "",
+    };
+    return columns.map((column) => values[column]);
+  });
+  return [columns, ...rows].map((row) => row.map((value) => csvCell(value)).join(",")).join("\r\n");
 }
 
 export async function getTenantBranding(operatorId: number): Promise<TenantBranding> {
@@ -868,7 +937,8 @@ export async function transferTenantBrandingPresetOwnership(input: { operatorId:
       [randomUUID(), preset.id, preset.name, operator.tenant_id, organizationId, operator.id, recipient.rows[0].id, operator.id],
     );
     await client.query("COMMIT");
-    return { id: preset.id, ownerOperatorId: preset.created_by_operator_id };
+    const notification = await notifyTenantAdministrators({ tenantId: operator.tenant_id, actorId: operator.id, preference: "preset_ownership_transfer_email", subject: "Branding preset ownership transferred", message: `Ownership of branding preset “${preset.name}” was transferred to another tenant administrator.` });
+    return { id: preset.id, ownerOperatorId: preset.created_by_operator_id, notificationDelivery: notification.requested ? notification.delivered ? "delivered" : "failed" : "not_requested" };
   } catch (error) {
     await client.query("ROLLBACK").catch(() => undefined);
     throw error;
@@ -877,9 +947,10 @@ export async function transferTenantBrandingPresetOwnership(input: { operatorId:
   }
 }
 
-export async function listTenantBrandingPresetOwnershipAudit(operatorId: number): Promise<TenantBrandingPresetOwnershipAudit[]> {
+export async function listTenantBrandingPresetOwnershipAudit(input: { operatorId: number; startDate?: string | null; endDate?: string | null }): Promise<TenantBrandingPresetOwnershipAudit[]> {
   await ensureAccountLifecycleStore();
-  const { operator } = await getTenantAdminContext(operatorId);
+  const { operator } = await getTenantAdminContext(input.operatorId);
+  const filters = normalizeActivityFilters({ startDate: input.startDate, endDate: input.endDate });
   const result = await getOperatorAuthPool().query<{
     id: string; preset_id: string; preset_name: string; from_email: string | null; to_email: string | null; transferred_by_email: string | null; transferred_at: Date;
   }>(
@@ -889,10 +960,40 @@ export async function listTenantBrandingPresetOwnershipAudit(operatorId: number)
      LEFT JOIN operator_credentials source ON source.id = audit.from_operator_id
      LEFT JOIN operator_credentials recipient ON recipient.id = audit.to_operator_id
      LEFT JOIN operator_credentials actor ON actor.id = audit.transferred_by_operator_id
-     WHERE audit.tenant_id = $1 ORDER BY audit.transferred_at DESC LIMIT 100`,
-    [operator.tenant_id],
+     WHERE audit.tenant_id = $1
+       AND ($2::timestamptz IS NULL OR audit.transferred_at >= $2)
+       AND ($3::timestamptz IS NULL OR audit.transferred_at <= $3)
+     ORDER BY audit.transferred_at DESC LIMIT 100`,
+    [operator.tenant_id, filters.startDate, filters.endDate],
   );
   return result.rows.map((row) => ({ id: row.id, presetId: row.preset_id, presetName: row.preset_name, fromOperatorEmail: row.from_email, toOperatorEmail: row.to_email, transferredByOperatorEmail: row.transferred_by_email, transferredAt: row.transferred_at }));
+}
+
+export async function getTenantAdminNotificationPreferences(operatorId: number): Promise<TenantAdminNotificationPreferences> {
+  await ensureAccountLifecycleStore();
+  const { operator } = await getTenantAdminContext(operatorId);
+  const result = await getOperatorAuthPool().query<{ role_update_email: boolean; preset_ownership_transfer_email: boolean; updated_at: Date }>(
+    `SELECT role_update_email, preset_ownership_transfer_email, updated_at
+     FROM tenant_admin_notification_preferences WHERE tenant_id = $1 AND operator_id = $2`,
+    [operator.tenant_id, operator.id],
+  );
+  const preference = result.rows[0];
+  return { roleUpdateEmail: preference?.role_update_email ?? false, presetOwnershipTransferEmail: preference?.preset_ownership_transfer_email ?? false, updatedAt: preference?.updated_at ?? null };
+}
+
+export async function updateTenantAdminNotificationPreferences(input: { operatorId: number; roleUpdateEmail: boolean; presetOwnershipTransferEmail: boolean }): Promise<TenantAdminNotificationPreferences> {
+  await ensureAccountLifecycleStore();
+  const { operator } = await getTenantAdminContext(input.operatorId);
+  const result = await getOperatorAuthPool().query<{ role_update_email: boolean; preset_ownership_transfer_email: boolean; updated_at: Date }>(
+    `INSERT INTO tenant_admin_notification_preferences (tenant_id, operator_id, role_update_email, preset_ownership_transfer_email)
+     VALUES ($1,$2,$3,$4)
+     ON CONFLICT (tenant_id, operator_id) DO UPDATE SET role_update_email = EXCLUDED.role_update_email,
+       preset_ownership_transfer_email = EXCLUDED.preset_ownership_transfer_email, updated_at = NOW()
+     RETURNING role_update_email, preset_ownership_transfer_email, updated_at`,
+    [operator.tenant_id, operator.id, input.roleUpdateEmail, input.presetOwnershipTransferEmail],
+  );
+  const preference = result.rows[0];
+  return { roleUpdateEmail: preference.role_update_email, presetOwnershipTransferEmail: preference.preset_ownership_transfer_email, updatedAt: preference.updated_at };
 }
 
 export async function listOrganizationSharedBrandingPresets(operatorId: number): Promise<TenantBrandingPreset[]> {

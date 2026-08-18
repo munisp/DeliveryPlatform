@@ -92,4 +92,20 @@ describe("tenant admin action contracts", () => {
     expect(migration).toContain("tenant_branding_preset_ownership_audit_lookup");
     expect(rollback).toContain("DROP TABLE IF EXISTS tenant_branding_preset_ownership_audit");
   });
+
+  it("persists tenant-admin notification preferences and validates selected export columns", async () => {
+    const store = await readFile(resolve(root, "server/_core/accountLifecycleStore.ts"), "utf8");
+    const routes = await readFile(resolve(root, "server/_core/index.ts"), "utf8");
+    const migration = await readFile(resolve(root, "drizzle/0014_tenant_admin_notification_preferences.sql"), "utf8");
+    const rollback = await readFile(resolve(root, "drizzle/rollback/0014_tenant_admin_notification_preferences.down.sql"), "utf8");
+
+    expect(store).toContain("normalizeInvitationActivityColumns");
+    expect(store).toContain("invalid_invitation_activity_columns");
+    expect(store).toContain("tenant_admin_notification_preferences");
+    expect(store).toContain("getTenantAdminNotificationPreferences");
+    expect(routes).toContain('"/api/auth/tenant/notification-preferences"');
+    expect(routes).toContain("req.query.columns");
+    expect(migration).toContain("preset_ownership_transfer_email");
+    expect(rollback).toContain("DROP TABLE IF EXISTS tenant_admin_notification_preferences");
+  });
 });
