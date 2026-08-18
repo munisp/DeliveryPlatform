@@ -64,6 +64,7 @@ export type InvitationStatus = {
 const supportedRoles = new Set<LifecycleRole>(["admin", "operator", "viewer"]);
 const requiredTables = ["organizations", "platform_tenants", "organization_memberships", "account_lifecycle_tokens", "tenant_branding_presets"];
 const maxBulkInvitationActions = 10;
+const maxBulkMemberRoleChanges = 10;
 let schemaReady: Promise<void> | null = null;
 
 function normalizeEmail(value: string) {
@@ -119,6 +120,18 @@ function normalizeInvitationIds(values: string[]) {
     throw new Error("invalid_invitation_selection");
   }
   return ids;
+}
+
+function normalizeMemberIds(values: number[]) {
+  const ids = [...new Set(values.filter((value) => Number.isInteger(value) && value > 0))];
+  if (!ids.length || ids.length > maxBulkMemberRoleChanges) throw new Error("invalid_member_selection");
+  return ids;
+}
+
+function csvCell(value: string | null | undefined) {
+  const normalized = `${value ?? ""}`.replace(/\r?\n/g, " ");
+  const formulaSafe = /^[=+\-@]/.test(normalized) ? `'${normalized}` : normalized;
+  return `"${formulaSafe.replace(/"/g, '""')}"`;
 }
 
 function toLifecycleOperator(row: OperatorRecord & { email_verified_at?: Date | null; onboarding_completed_at?: Date | null }): LifecycleOperator {
@@ -190,9 +203,9 @@ async function assertProductionSchema() {
     `SELECT column_name FROM information_schema.columns
      WHERE table_schema = 'public' AND table_name = 'tenant_branding_presets'
        AND column_name = ANY($1::text[])`,
-    [["organization_id", "organization_shared", "shared_by_operator_id", "shared_at"]],
+    [["organization_id", "organization_shared", "shared_by_operator_id", "shared_at", "ownership_transferred_by_operator_id", "ownership_transferred_at"]],
   );
-  if (sharingColumns.rows.length !== 4) throw new Error("organization_branding_preset_sharing_migration_not_applied");
+  if (sharingColumns.rows.length !== 6) throw new Error("organization_branding_preset_sharing_migration_not_applied");
 }
 
 export async function ensureAccountLifecycleStore() {
@@ -245,9 +258,12 @@ export async function ensureAccountLifecycleStore() {
         await client.query("ALTER TABLE tenant_branding_presets ADD COLUMN IF NOT EXISTS organization_shared BOOLEAN NOT NULL DEFAULT FALSE");
         await client.query("ALTER TABLE tenant_branding_presets ADD COLUMN IF NOT EXISTS shared_by_operator_id INTEGER REFERENCES operator_credentials(id) ON DELETE SET NULL");
         await client.query("ALTER TABLE tenant_branding_presets ADD COLUMN IF NOT EXISTS shared_at TIMESTAMPTZ");
+        await client.query("ALTER TABLE tenant_branding_presets ADD COLUMN IF NOT EXISTS ownership_transferred_by_operator_id INTEGER REFERENCES operator_credentials(id) ON DELETE SET NULL");
+        await client.query("ALTER TABLE tenant_branding_presets ADD COLUMN IF NOT EXISTS ownership_transferred_at TIMESTAMPTZ");
         await client.query(`UPDATE tenant_branding_presets preset SET organization_id = tenant.organization_id
           FROM platform_tenants tenant WHERE preset.tenant_id = tenant.id AND preset.organization_id IS NULL`);
         await client.query("CREATE INDEX IF NOT EXISTS tenant_branding_presets_organization_sharing_lookup ON tenant_branding_presets (organization_id, shared_at DESC) WHERE organization_shared = TRUE");
+        await client.query("CREATE INDEX IF NOT EXISTS tenant_branding_presets_owner_lookup ON tenant_branding_presets (tenant_id, created_by_operator_id, updated_at DESC)");
         await client.query("CREATE INDEX IF NOT EXISTS account_lifecycle_tokens_active_lookup ON account_lifecycle_tokens (purpose, email, expires_at) WHERE consumed_at IS NULL");
         await client.query("COMMIT");
       } catch (error) {
@@ -607,6 +623,61 @@ export async function bulkRevokeInvitations(input: { inviterId: number; invitati
   return { requested: invitationIds.length, succeeded, failed };
 }
 
+export type BulkRoleChangeResult = { requested: number; changed: number; role: LifecycleRole };
+
+export type TenantMember = { id: number; email: string; name: string; role: LifecycleRole; updatedAt: Date };
+
+export async function listTenantMembers(operatorId: number): Promise<TenantMember[]> {
+  await ensureAccountLifecycleStore();
+  const { operator, organizationId } = await getTenantAdminContext(operatorId);
+  const result = await getOperatorAuthPool().query<{ id: number; email: string; name: string; role: LifecycleRole; updated_at: Date }>(
+    `SELECT o.id, o.email, o.name, o.role, o.updated_at FROM operator_credentials o
+     JOIN organization_memberships m ON m.operator_id = o.id AND m.organization_id = $1
+     WHERE o.tenant_id = $2 AND o.is_active = TRUE ORDER BY o.name ASC, o.email ASC LIMIT 200`,
+    [organizationId, operator.tenant_id],
+  );
+  return result.rows.map((row) => ({ id: row.id, email: row.email, name: row.name, role: row.role, updatedAt: row.updated_at }));
+}
+
+export async function bulkChangeMemberRoles(input: { operatorId: number; memberIds: number[]; role: LifecycleRole }): Promise<BulkRoleChangeResult> {
+  await ensureAccountLifecycleStore();
+  const memberIds = normalizeMemberIds(input.memberIds);
+  if (!supportedRoles.has(input.role)) throw new Error("invalid_invitation_role");
+  const { operator, organizationId } = await getTenantAdminContext(input.operatorId);
+  if (memberIds.includes(operator.id)) throw new Error("self_role_change_not_allowed");
+  const client = await getOperatorAuthPool().connect();
+  try {
+    await client.query("BEGIN");
+    const members = await client.query<{ id: number; role: LifecycleRole }>(
+      `SELECT o.id, o.role FROM operator_credentials o
+       JOIN organization_memberships m ON m.operator_id = o.id AND m.organization_id = $1
+       WHERE o.id = ANY($2::integer[]) AND o.tenant_id = $3 AND o.is_active = TRUE FOR UPDATE`,
+      [organizationId, memberIds, operator.tenant_id],
+    );
+    if (members.rows.length !== memberIds.length) throw new Error("member_not_found");
+    if (input.role !== "admin" && members.rows.some((member) => member.role === "admin")) {
+      const admins = await client.query<{ count: string }>(`SELECT COUNT(*)::text AS count FROM operator_credentials WHERE tenant_id = $1 AND is_active = TRUE AND role = 'admin'`, [operator.tenant_id]);
+      if (Number(admins.rows[0]?.count ?? "0") <= members.rows.filter((member) => member.role === "admin").length) throw new Error("last_tenant_admin_role_change_not_allowed");
+    }
+    await client.query(`UPDATE operator_credentials SET role = $2, updated_at = NOW() WHERE id = ANY($1::integer[])`, [memberIds, input.role]);
+    await client.query(`UPDATE organization_memberships SET role = $3 WHERE organization_id = $1 AND operator_id = ANY($2::integer[])`, [organizationId, memberIds, input.role]);
+    await client.query("COMMIT");
+    return { requested: memberIds.length, changed: memberIds.length, role: input.role };
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function exportInvitationActivityCsv(operatorId: number) {
+  const invitations = await listInvitationStatuses(operatorId);
+  const header = ["invitation_id", "recipient_email", "role", "status", "sent_at", "expires_at", "accepted_at", "revoked_at"];
+  const rows = invitations.map((invitation) => [invitation.id, invitation.email, invitation.role ?? "", invitation.status, invitation.createdAt.toISOString(), invitation.expiresAt.toISOString(), invitation.acceptedAt?.toISOString() ?? "", invitation.revokedAt?.toISOString() ?? ""]);
+  return [header, ...rows].map((row) => row.map((value) => csvCell(value)).join(",")).join("\r\n");
+}
+
 export async function getTenantBranding(operatorId: number): Promise<TenantBranding> {
   await ensureAccountLifecycleStore();
   const result = await getOperatorAuthPool().query<{
@@ -667,10 +738,12 @@ export async function saveTenantBrandingPreset(input: { operatorId: number; name
     `INSERT INTO tenant_branding_presets (id, tenant_id, organization_id, name, logo_data_url, primary_color, accent_color, created_by_operator_id)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
      ON CONFLICT (tenant_id, name) DO UPDATE SET logo_data_url = EXCLUDED.logo_data_url, primary_color = EXCLUDED.primary_color, accent_color = EXCLUDED.accent_color, updated_at = NOW()
+       WHERE tenant_branding_presets.created_by_operator_id = $8
      RETURNING id, name, logo_data_url, primary_color, accent_color, created_at, updated_at, organization_shared`,
     [randomUUID(), operator.tenant_id, organizationId, normalizePresetName(input.name), normalizeLogoDataUrl(input.logoDataUrl), normalizeColor(input.primaryColor, "brand_primary_color"), normalizeColor(input.accentColor, "brand_accent_color"), operator.id],
   );
   const preset = result.rows[0];
+  if (!preset) throw new Error("branding_preset_owner_required");
   return { id: preset.id, name: preset.name, logoDataUrl: preset.logo_data_url, primaryColor: preset.primary_color, accentColor: preset.accent_color, createdAt: preset.created_at, updatedAt: preset.updated_at, organizationShared: preset.organization_shared };
 }
 
@@ -688,7 +761,7 @@ export async function applyTenantBrandingPreset(input: { operatorId: number; pre
 export async function deleteTenantBrandingPreset(input: { operatorId: number; presetId: string }) {
   await ensureAccountLifecycleStore();
   const { operator } = await getTenantAdminContext(input.operatorId);
-  const result = await getOperatorAuthPool().query(`DELETE FROM tenant_branding_presets WHERE id = $1 AND tenant_id = $2`, [input.presetId, operator.tenant_id]);
+  const result = await getOperatorAuthPool().query(`DELETE FROM tenant_branding_presets WHERE id = $1 AND tenant_id = $2 AND created_by_operator_id = $3`, [input.presetId, operator.tenant_id, operator.id]);
   if (result.rowCount !== 1) throw new Error("branding_preset_not_found");
   return { deleted: true };
 }
@@ -700,12 +773,33 @@ export async function setTenantBrandingPresetOrganizationSharing(input: { operat
     `UPDATE tenant_branding_presets
      SET organization_shared = $4::boolean, shared_by_operator_id = CASE WHEN $4::boolean THEN $5::integer ELSE NULL::integer END,
          shared_at = CASE WHEN $4::boolean THEN NOW() ELSE NULL END, updated_at = NOW()
-     WHERE id = $1 AND tenant_id = $2 AND organization_id = $3
+     WHERE id = $1 AND tenant_id = $2 AND organization_id = $3 AND created_by_operator_id = $5
      RETURNING id, organization_shared`,
     [input.presetId, operator.tenant_id, organizationId, input.shared, operator.id],
   );
   if (!result.rows[0]) throw new Error("branding_preset_not_found");
   return { id: result.rows[0].id, organizationShared: result.rows[0].organization_shared };
+}
+
+export async function transferTenantBrandingPresetOwnership(input: { operatorId: number; presetId: string; recipientEmail: string }) {
+  await ensureAccountLifecycleStore();
+  const { operator, organizationId } = await getTenantAdminContext(input.operatorId);
+  const recipient = await getOperatorAuthPool().query<{ id: number }>(
+    `SELECT o.id FROM operator_credentials o
+     JOIN organization_memberships m ON m.operator_id = o.id AND m.organization_id = $1
+     WHERE LOWER(o.email) = $2 AND o.tenant_id = $3 AND o.role = 'admin' AND o.is_active = TRUE AND o.id <> $4`,
+    [organizationId, assertEmail(input.recipientEmail), operator.tenant_id, operator.id],
+  );
+  if (!recipient.rows[0]) throw new Error("preset_transfer_recipient_invalid");
+  const result = await getOperatorAuthPool().query<{ id: string; created_by_operator_id: number }>(
+    `UPDATE tenant_branding_presets
+     SET created_by_operator_id = $4, ownership_transferred_by_operator_id = $5, ownership_transferred_at = NOW(), updated_at = NOW()
+     WHERE id = $1 AND tenant_id = $2 AND organization_id = $3 AND created_by_operator_id = $5
+     RETURNING id, created_by_operator_id`,
+    [input.presetId, operator.tenant_id, organizationId, recipient.rows[0].id, operator.id],
+  );
+  if (!result.rows[0]) throw new Error("branding_preset_not_found");
+  return { id: result.rows[0].id, ownerOperatorId: result.rows[0].created_by_operator_id };
 }
 
 export async function listOrganizationSharedBrandingPresets(operatorId: number): Promise<TenantBrandingPreset[]> {

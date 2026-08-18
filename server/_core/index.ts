@@ -21,6 +21,7 @@ import {
   applyOrganizationSharedBrandingPreset,
   applyTenantBrandingPreset,
   beginSignup,
+  bulkChangeMemberRoles,
   bulkResendInvitations,
   bulkRevokeInvitations,
   confirmEmailVerification,
@@ -29,10 +30,12 @@ import {
   createOrganizationAndTenant,
   deleteTenantBrandingPreset,
   ensureAccountLifecycleStore,
+  exportInvitationActivityCsv,
   getTenantBranding,
   getOnboardingState,
   listInvitationStatuses,
   listOrganizationSharedBrandingPresets,
+  listTenantMembers,
   listTenantBrandingPresets,
   requestPasswordReset,
   resendInvitation,
@@ -40,6 +43,7 @@ import {
   revokeInvitation,
   saveTenantBrandingPreset,
   setTenantBrandingPresetOrganizationSharing,
+  transferTenantBrandingPresetOwnership,
   updateTenantBranding,
 } from "./accountLifecycleStore";
 import { authenticateOperator, ensureExternalOperator, ensureOperatorAuthStore } from "./operatorAuthStore";
@@ -582,6 +586,21 @@ app.get("/api/auth/invitations/status", async (req, res) => {
   }
 });
 
+app.get("/api/auth/invitations/activity.csv", rateLimit(10), async (req, res) => {
+  const user = requireAuthenticatedOperator(req, res);
+  if (!user) return;
+  try {
+    const csv = await exportInvitationActivityCsv(Number(user.id));
+    await recordOperationalEvent({ eventType: "auth.invitation_activity_exported", actorId: `${user.id}`, actorRole: user.role, tenantId: user.tenantId, route: req.path, outcome: "success" });
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", 'attachment; filename="invitation-activity.csv"');
+    res.status(200).send(csv);
+  } catch (error) {
+    const mapped = lifecycleErrorStatus(error);
+    res.status(mapped.code === "tenant_admin_required" ? 403 : mapped.status).json({ error: mapped.code });
+  }
+});
+
 app.post("/api/auth/invitations/:id/resend", rateLimit(10), async (req, res) => {
   const user = requireAuthenticatedOperator(req, res);
   if (!user) return;
@@ -628,6 +647,31 @@ app.post("/api/auth/invitations/actions/bulk/revoke", rateLimit(3), async (req, 
     const result = await bulkRevokeInvitations({ inviterId: Number(user.id), invitationIds: Array.isArray(req.body?.invitationIds) ? req.body.invitationIds.filter((id: unknown): id is string => typeof id === "string") : [] });
     await recordOperationalEvent({ eventType: "auth.invitations_bulk_revoked", actorId: `${user.id}`, actorRole: user.role, tenantId: user.tenantId, route: req.path, outcome: result.failed.length ? "failure" : "success", payload: { requested: result.requested, succeeded: result.succeeded.length, failed: result.failed.length } });
     res.status(200).json(result);
+  } catch (error) {
+    const mapped = lifecycleErrorStatus(error);
+    res.status(mapped.code === "tenant_admin_required" ? 403 : mapped.status).json({ error: mapped.code });
+  }
+});
+
+app.post("/api/auth/members/actions/bulk/role", rateLimit(3), async (req, res) => {
+  const user = requireAuthenticatedOperator(req, res);
+  if (!user) return;
+  try {
+    const memberIds = Array.isArray(req.body?.memberIds) ? req.body.memberIds.filter((id: unknown): id is number => typeof id === "number") : [];
+    const result = await bulkChangeMemberRoles({ operatorId: Number(user.id), memberIds, role: `${req.body?.role ?? ""}` as "admin" | "operator" | "viewer" });
+    await recordOperationalEvent({ eventType: "auth.members_bulk_role_changed", actorId: `${user.id}`, actorRole: user.role, tenantId: user.tenantId, route: req.path, outcome: "success", payload: result });
+    res.status(200).json(result);
+  } catch (error) {
+    const mapped = lifecycleErrorStatus(error);
+    res.status(mapped.code === "tenant_admin_required" ? 403 : mapped.status).json({ error: mapped.code });
+  }
+});
+
+app.get("/api/auth/members", async (req, res) => {
+  const user = requireAuthenticatedOperator(req, res);
+  if (!user) return;
+  try {
+    res.status(200).json({ members: await listTenantMembers(Number(user.id)) });
   } catch (error) {
     const mapped = lifecycleErrorStatus(error);
     res.status(mapped.code === "tenant_admin_required" ? 403 : mapped.status).json({ error: mapped.code });
@@ -707,6 +751,19 @@ app.post("/api/auth/tenant-branding/presets/:id/share", rateLimit(20), async (re
   try {
     const result = await setTenantBrandingPresetOrganizationSharing({ operatorId: Number(user.id), presetId: `${req.params.id ?? ""}`, shared: Boolean(req.body?.shared) });
     await recordOperationalEvent({ eventType: result.organizationShared ? "auth.tenant_branding_preset_shared" : "auth.tenant_branding_preset_unshared", actorId: `${user.id}`, actorRole: user.role, tenantId: user.tenantId, route: req.path, outcome: "success" });
+    res.status(200).json(result);
+  } catch (error) {
+    const mapped = lifecycleErrorStatus(error);
+    res.status(mapped.code === "tenant_admin_required" ? 403 : mapped.status).json({ error: mapped.code });
+  }
+});
+
+app.post("/api/auth/tenant-branding/presets/:id/transfer-ownership", rateLimit(10), async (req, res) => {
+  const user = requireAuthenticatedOperator(req, res);
+  if (!user) return;
+  try {
+    const result = await transferTenantBrandingPresetOwnership({ operatorId: Number(user.id), presetId: `${req.params.id ?? ""}`, recipientEmail: `${req.body?.recipientEmail ?? ""}` });
+    await recordOperationalEvent({ eventType: "auth.tenant_branding_preset_ownership_transferred", actorId: `${user.id}`, actorRole: user.role, tenantId: user.tenantId, route: req.path, outcome: "success", payload: { presetId: result.id, ownerOperatorId: result.ownerOperatorId } });
     res.status(200).json(result);
   } catch (error) {
     const mapped = lifecycleErrorStatus(error);

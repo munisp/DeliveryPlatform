@@ -87,6 +87,18 @@ function ActionButton({ pending, children, onClick, disabled }: { pending?: bool
 type TenantBranding = { logoDataUrl: string | null; primaryColor: string; accentColor: string; updatedAt: string | null };
 type TenantBrandingPreset = TenantBranding & { id: string; name: string; createdAt: string; updatedAt: string; organizationShared: boolean; sourceTenantName?: string };
 type InvitationStatus = { id: string; email: string; role: string | null; createdAt: string; expiresAt: string; acceptedAt: string | null; revokedAt: string | null; status: "pending" | "accepted" | "expired" | "revoked" };
+type TenantMember = { id: number; email: string; name: string; role: "admin" | "operator" | "viewer"; updatedAt: string };
+
+async function downloadInvitationActivityCsv() {
+  const response = await fetch("/api/auth/invitations/activity.csv", { credentials: "include" });
+  if (!response.ok) throw new Error("invitation_activity_export_failed");
+  const url = URL.createObjectURL(await response.blob());
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = "invitation-activity.csv";
+  link.click();
+  URL.revokeObjectURL(url);
+}
 
 function TenantBrandingPanel({ onSaved }: { onSaved?: () => void }) {
   const branding = useQuery({ queryKey: ["tenant-branding"], queryFn: () => request<TenantBranding>("/api/auth/tenant-branding") });
@@ -97,6 +109,7 @@ function TenantBrandingPanel({ onSaved }: { onSaved?: () => void }) {
   const [accentColor, setAccentColor] = useState("");
   const [previewMode, setPreviewMode] = useState<"light" | "dark">("light");
   const [presetName, setPresetName] = useState("");
+  const [transferRecipientEmail, setTransferRecipientEmail] = useState("");
   const currentLogo = logoDataUrl ?? branding.data?.logoDataUrl ?? null;
   const currentPrimary = primaryColor || branding.data?.primaryColor || "#0ea5e9";
   const currentAccent = accentColor || branding.data?.accentColor || "#0f172a";
@@ -124,6 +137,10 @@ function TenantBrandingPanel({ onSaved }: { onSaved?: () => void }) {
     mutationFn: (presetId: string) => request<TenantBranding>(`/api/auth/tenant-branding/presets/${presetId}/apply-shared`, {}),
     onSuccess: (saved) => { setLogoDataUrl(saved.logoDataUrl); setPrimaryColor(saved.primaryColor); setAccentColor(saved.accentColor); branding.refetch(); onSaved?.(); },
   });
+  const transferOwnership = useMutation({
+    mutationFn: (presetId: string) => request<{ id: string }>(`/api/auth/tenant-branding/presets/${presetId}/transfer-ownership`, { recipientEmail: transferRecipientEmail }),
+    onSuccess: () => { presets.refetch(); setTransferRecipientEmail(""); },
+  });
   const selectLogo = (file: File | undefined) => {
     if (!file) return;
     if (!["image/png", "image/jpeg", "image/webp"].includes(file.type) || file.size > 250_000) return;
@@ -146,7 +163,7 @@ function TenantBrandingPanel({ onSaved }: { onSaved?: () => void }) {
       <div className="tenant-brand-live-preview-bar"><span style={{ background: currentPrimary }}>{currentLogo ? <img src={currentLogo} alt="" /> : "T"}</span><strong>Tenant workspace</strong><small>{previewMode} preview</small></div>
       <div className="tenant-brand-live-preview-content"><p>Operations overview</p><h3>Today’s work, clearly yours.</h3><span>These colors and your logo update immediately as you make changes.</span><button type="button" style={{ background: currentPrimary }}>Review activity</button></div>
     </section>
-    <section className="tenant-brand-presets" aria-labelledby="tenant-brand-presets-title"><div><h3 id="tenant-brand-presets-title">Branding presets</h3><p>Save this tenant’s current colors and logo for fast reuse, or share a preset with administrators in this organization.</p></div><div className="tenant-preset-save"><Field id="branding-preset-name" label="Preset name" value={presetName} onChange={setPresetName} placeholder="Night operations" /><ActionButton pending={savePreset.isPending} disabled={!presetName.trim()} onClick={() => savePreset.mutate()}>Save preset</ActionButton></div>{savePreset.isError ? <p className="text-sm text-rose-300">{readableError(savePreset.error)}</p> : null}{presets.isLoading ? <p className="text-sm text-slate-400">Loading presets…</p> : presets.data?.presets.length ? <ul className="tenant-preset-list">{presets.data.presets.map((preset) => <li key={preset.id}><span className="tenant-preset-swatch" style={{ background: preset.primaryColor }} aria-hidden="true" /><div><strong>{preset.name}</strong><small>{preset.primaryColor} · {preset.accentColor}{preset.organizationShared ? " · shared with organization" : ""}</small></div><button type="button" onClick={() => applyPreset.mutate(preset.id)} disabled={applyPreset.isPending}>Apply</button><button type="button" className="tenant-preset-share" onClick={() => sharePreset.mutate({ presetId: preset.id, shared: !preset.organizationShared })} disabled={sharePreset.isPending}>{preset.organizationShared ? "Stop sharing" : "Share"}</button><button type="button" className="tenant-preset-delete" onClick={() => removePreset.mutate(preset.id)} disabled={removePreset.isPending}>Delete</button></li>)}</ul> : <p className="text-sm text-slate-400">No saved presets yet.</p>}</section>
+    <section className="tenant-brand-presets" aria-labelledby="tenant-brand-presets-title"><div><h3 id="tenant-brand-presets-title">Branding presets</h3><p>Save this tenant’s current colors and logo for fast reuse, share a preset, or transfer its ownership to another tenant administrator.</p></div><div className="tenant-preset-save"><Field id="branding-preset-name" label="Preset name" value={presetName} onChange={setPresetName} placeholder="Night operations" /><ActionButton pending={savePreset.isPending} disabled={!presetName.trim()} onClick={() => savePreset.mutate()}>Save preset</ActionButton></div><div className="tenant-preset-save"><Field id="branding-preset-transfer-recipient" label="Transfer recipient administrator" type="email" value={transferRecipientEmail} onChange={setTransferRecipientEmail} placeholder="admin@example.com" hint="The recipient must be an active administrator in this tenant." /></div>{savePreset.isError || transferOwnership.isError ? <p className="text-sm text-rose-300">{readableError(savePreset.error ?? transferOwnership.error)}</p> : null}{presets.isLoading ? <p className="text-sm text-slate-400">Loading presets…</p> : presets.data?.presets.length ? <ul className="tenant-preset-list">{presets.data.presets.map((preset) => <li key={preset.id}><span className="tenant-preset-swatch" style={{ background: preset.primaryColor }} aria-hidden="true" /><div><strong>{preset.name}</strong><small>{preset.primaryColor} · {preset.accentColor}{preset.organizationShared ? " · shared with organization" : ""}</small></div><button type="button" onClick={() => applyPreset.mutate(preset.id)} disabled={applyPreset.isPending}>Apply</button><button type="button" className="tenant-preset-share" onClick={() => sharePreset.mutate({ presetId: preset.id, shared: !preset.organizationShared })} disabled={sharePreset.isPending}>{preset.organizationShared ? "Stop sharing" : "Share"}</button><button type="button" onClick={() => transferOwnership.mutate(preset.id)} disabled={!transferRecipientEmail || transferOwnership.isPending}>Transfer ownership</button><button type="button" className="tenant-preset-delete" onClick={() => removePreset.mutate(preset.id)} disabled={removePreset.isPending}>Delete</button></li>)}</ul> : <p className="text-sm text-slate-400">No saved presets yet.</p>}</section>
     <section className="tenant-brand-shared-presets" aria-labelledby="organization-branding-library-title"><div><h3 id="organization-branding-library-title">Organization branding library</h3><p>Shared presets from other tenant administrators. Applying one copies its branding into this tenant.</p></div>{sharedPresets.isLoading ? <p className="text-sm text-slate-400">Loading shared presets…</p> : sharedPresets.data?.presets.length ? <ul className="tenant-preset-list">{sharedPresets.data.presets.map((preset) => <li key={preset.id}><span className="tenant-preset-swatch" style={{ background: preset.primaryColor }} aria-hidden="true" /><div><strong>{preset.name}</strong><small>{preset.sourceTenantName ?? "Organization"} · {preset.primaryColor} · {preset.accentColor}</small></div><button type="button" onClick={() => applySharedPreset.mutate(preset.id)} disabled={applySharedPreset.isPending}>Apply to this tenant</button></li>)}</ul> : <p className="text-sm text-slate-400">No organization-shared presets are available yet.</p>}</section>
     {save.isError ? <p className="text-sm text-rose-300">{readableError(save.error)}</p> : null}
     {save.isSuccess ? <p className="text-sm text-emerald-300" role="status">Branding saved. Your workspace setup is complete.</p> : null}

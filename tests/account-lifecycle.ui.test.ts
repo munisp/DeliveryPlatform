@@ -71,4 +71,15 @@ describe("account lifecycle onboarding UI", () => {
     expect(page).toContain("Organization branding library");
     expect(page).toContain("Apply to this tenant");
   });
+
+  it("provides preset ownership transfer and a focused tenant-admin role and CSV export interface", async () => {
+    const page = await readFile(resolve(root, "client/src/pages/AccountLifecycle.tsx"), "utf8");
+    const actions = await readFile(resolve(root, "client/src/pages/TenantAdminActions.tsx"), "utf8");
+
+    expect(page).toContain("transfer-ownership");
+    expect(page).toContain("Transfer recipient administrator");
+    expect(actions).toContain('"/api/auth/members/actions/bulk/role"');
+    expect(actions).toContain('"/api/auth/invitations/activity.csv"');
+    expect(actions).toContain("Update {selected.length} selected");
+  });
 });

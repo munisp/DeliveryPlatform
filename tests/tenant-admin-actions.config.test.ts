@@ -52,4 +52,31 @@ describe("tenant admin action contracts", () => {
     expect(routes).toContain('"/api/auth/tenant-branding/presets/shared"');
     expect(routes).toContain('"/api/auth/tenant-branding/presets/:id/share"');
   });
+
+  it("bounds tenant member role changes and records reversible preset ownership transfers", async () => {
+    const store = await readFile(resolve(root, "server/_core/accountLifecycleStore.ts"), "utf8");
+    const migration = await readFile(resolve(root, "drizzle/0012_tenant_admin_role_and_reporting.sql"), "utf8");
+    const rollback = await readFile(resolve(root, "drizzle/rollback/0012_tenant_admin_role_and_reporting.down.sql"), "utf8");
+
+    expect(store).toContain("maxBulkMemberRoleChanges = 10");
+    expect(store).toContain("last_tenant_admin_role_change_not_allowed");
+    expect(store).toContain("transferTenantBrandingPresetOwnership");
+    expect(store).toContain("preset_transfer_recipient_invalid");
+    expect(store).toContain("branding_preset_owner_required");
+    expect(store).toContain("created_by_operator_id = $5");
+    expect(migration).toContain("ownership_transferred_by_operator_id");
+    expect(rollback).toContain("ownership_transferred_at");
+  });
+
+  it("exposes tenant-admin role, ownership, and safe CSV reporting routes", async () => {
+    const routes = await readFile(resolve(root, "server/_core/index.ts"), "utf8");
+    const store = await readFile(resolve(root, "server/_core/accountLifecycleStore.ts"), "utf8");
+
+    expect(routes).toContain('"/api/auth/members/actions/bulk/role"');
+    expect(routes).toContain('"/api/auth/invitations/activity.csv"');
+    expect(routes).toContain('"/api/auth/tenant-branding/presets/:id/transfer-ownership"');
+    expect(routes).toContain("Content-Disposition");
+    expect(store).toContain("formulaSafe");
+    expect(store).toContain("exportInvitationActivityCsv");
+  });
 });

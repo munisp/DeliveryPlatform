@@ -11,6 +11,7 @@ import WhiteLabelApps from "@/pages/WhiteLabelApps";
 import MerchantChannels from "@/pages/MerchantChannels";
 import ServiceRecovery from "@/pages/ServiceRecovery";
 import PhoneOrderingStudio from "@/pages/PhoneOrderingStudio";
+import TenantAdminActions from "@/pages/TenantAdminActions";
 import { InvitationAcceptancePage, InviteTeamPage, OnboardingPage, PasswordResetPage, SignupPage, VerifyEmailPage } from "@/pages/AccountLifecycle";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
@@ -380,6 +381,7 @@ export default function App() {
       <Route path="/accept-invitation" component={InvitationAcceptancePage} />
       <Route path="/onboarding" component={OnboardingPage} />
       <Route path="/team/invite" component={InviteTeamPage} />
+      <Route path="/tenant-admin" component={TenantAdminActions} />
       <Route path="/dashboard" component={DashboardPage} />
       <Route path="/analytics" component={Analytics} />
       <Route path="/driver-mobility" component={DriverMobility} />

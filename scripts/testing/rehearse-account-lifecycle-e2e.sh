@@ -184,4 +184,25 @@ psql "$TEST_DATABASE_URL" -Atqc "
     AND consumed_at IS NOT NULL
 " | grep -qx '1'
 
+invitee_operator_id="$(psql "$TEST_DATABASE_URL" -Atqc "SELECT id FROM operator_credentials WHERE email = '${LIFECYCLE_TEST_INVITEE_EMAIL}'")"
+test -n "$invitee_operator_id"
+bulk_role_status="$(curl --silent --show-error --output /tmp/lifecycle-members-role.json --write-out '%{http_code}' \
+  -b "$cookie_file" -H 'Content-Type: application/json' \
+  --data "{\"memberIds\":[${invitee_operator_id}],\"role\":\"admin\"}" \
+  "${LIFECYCLE_TEST_BASE_URL%/}/api/auth/members/actions/bulk/role")"
+test "$bulk_role_status" = '200'
+grep -q '"changed":1' /tmp/lifecycle-members-role.json
+
+transfer_status="$(curl --silent --show-error --output /tmp/lifecycle-preset-transfer.json --write-out '%{http_code}' \
+  -b "$cookie_file" -H 'Content-Type: application/json' \
+  --data "{\"recipientEmail\":\"${LIFECYCLE_TEST_INVITEE_EMAIL}\"}" \
+  "${LIFECYCLE_TEST_BASE_URL%/}/api/auth/tenant-branding/presets/${preset_id}/transfer-ownership")"
+test "$transfer_status" = '200'
+psql "$TEST_DATABASE_URL" -Atqc "SELECT count(*) FROM tenant_branding_presets WHERE id = '${preset_id}' AND created_by_operator_id = ${invitee_operator_id} AND ownership_transferred_at IS NOT NULL" | grep -qx '1'
+
+csv_status="$(curl --silent --show-error --output /tmp/lifecycle-invitation-activity.csv --write-out '%{http_code}' -b "$cookie_file" "${LIFECYCLE_TEST_BASE_URL%/}/api/auth/invitations/activity.csv")"
+test "$csv_status" = '200'
+grep -q '"invitation_id","recipient_email","role","status"' /tmp/lifecycle-invitation-activity.csv
+grep -q "${LIFECYCLE_TEST_INVITEE_EMAIL}" /tmp/lifecycle-invitation-activity.csv
+
 echo "isolated account lifecycle rehearsal passed"
