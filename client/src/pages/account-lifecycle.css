@@ -160,13 +160,15 @@
 .tenant-brand-live-preview:not(.is-dark) .tenant-brand-live-preview-content span { color: #475569; }
 .tenant-brand-live-preview:not(.is-dark) .tenant-brand-live-preview-content p { color: #0369a1; }
 .tenant-preview-mode { display: flex; align-items: center; gap: 8px; color: #cbd5e1; font-size: 12px; font-weight: 700; }
-.tenant-preview-mode button, .tenant-preset-list button, .invitation-row-actions button { border: 1px solid #475569; border-radius: 8px; background: #0f172a; color: #dbeafe; cursor: pointer; padding: 7px 9px; font: inherit; font-size: 12px; font-weight: 800; }
+.tenant-preview-mode button, .tenant-preset-list button, .invitation-row-actions button, .invitation-bulk-toolbar button, .lifecycle-modal button { border: 1px solid #475569; border-radius: 8px; background: #0f172a; color: #dbeafe; cursor: pointer; padding: 7px 9px; font: inherit; font-size: 12px; font-weight: 800; }
 .tenant-preview-mode button[aria-pressed="true"] { border-color: #22d3ee; background: #164e63; color: #cffafe; }
-.tenant-preview-mode button:focus-visible, .tenant-preset-list button:focus-visible, .invitation-row-actions button:focus-visible { outline: 2px solid #a5f3fc; outline-offset: 2px; }
-.tenant-preview-mode button:disabled, .tenant-preset-list button:disabled, .invitation-row-actions button:disabled { cursor: not-allowed; opacity: .55; }
+.tenant-preview-mode button:focus-visible, .tenant-preset-list button:focus-visible, .invitation-row-actions button:focus-visible, .invitation-bulk-toolbar button:focus-visible, .lifecycle-modal button:focus-visible { outline: 2px solid #a5f3fc; outline-offset: 2px; }
+.tenant-preview-mode button:disabled, .tenant-preset-list button:disabled, .invitation-row-actions button:disabled, .invitation-bulk-toolbar button:disabled { cursor: not-allowed; opacity: .55; }
 .tenant-brand-presets { display: grid; gap: 12px; border-top: 1px solid #1e293b; padding-top: 18px; }
+.tenant-brand-shared-presets { display: grid; gap: 12px; border-top: 1px solid #1e293b; padding-top: 18px; }
 .tenant-brand-presets h3 { margin: 0; color: #f8fafc; font-size: 16px; }
-.tenant-brand-presets p { margin: 5px 0 0; color: #94a3b8; font-size: 13px; }
+.tenant-brand-shared-presets h3 { margin: 0; color: #f8fafc; font-size: 16px; }
+.tenant-brand-presets p, .tenant-brand-shared-presets p { margin: 5px 0 0; color: #94a3b8; font-size: 13px; }
 .tenant-preset-save { display: flex; align-items: end; gap: 12px; }
 .tenant-preset-save .lifecycle-field { flex: 1; }
 .tenant-preset-list { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
@@ -200,6 +202,17 @@
 .invitation-toolbar .lifecycle-field { gap: 8px; }
 .invitation-toolbar input, .invitation-toolbar select { min-height: 42px; }
 .invitation-result-count { margin: 0 0 12px; color: #94a3b8; font-size: 12px; }
+.invitation-select { display: grid; width: 18px; min-height: 20px; place-items: center; }
+.invitation-select input, .invitation-bulk-toolbar input { accent-color: #22d3ee; }
+.invitation-bulk-toolbar { display: flex; align-items: center; gap: 10px; margin: 0 0 14px; border: 1px solid #334155; border-radius: 10px; padding: 10px; background: rgba(15, 23, 42, .52); color: #cbd5e1; font-size: 12px; }
+.invitation-bulk-toolbar label { display: flex; align-items: center; gap: 7px; font-weight: 700; }
+.invitation-bulk-toolbar span { margin-right: auto; color: #94a3b8; }
+.lifecycle-modal-backdrop { position: fixed; z-index: 50; inset: 0; display: grid; place-items: center; padding: 20px; background: rgba(2, 6, 23, .78); }
+.lifecycle-modal { width: min(100%, 430px); border: 1px solid rgba(251, 113, 133, .48); border-radius: 16px; padding: 22px; background: #0f172a; box-shadow: 0 24px 56px rgba(0,0,0,.38); }
+.lifecycle-modal h2 { margin: 0; color: #f8fafc; font-size: 19px; }
+.lifecycle-modal p { margin: 10px 0 18px; color: #cbd5e1; font-size: 14px; line-height: 1.55; }
+.lifecycle-modal div { display: flex; justify-content: end; gap: 9px; }
+.lifecycle-modal .invitation-revoke, .invitation-bulk-toolbar .invitation-revoke { border-color: rgba(251,113,133,.55); color: #fecdd3; }
 
 @media (max-width: 700px) {
   .tenant-branding-heading { align-items: stretch; flex-direction: column; }
@@ -212,6 +225,9 @@
   .invitation-row-actions { justify-content: flex-start; flex-wrap: wrap; }
   .invitation-toolbar { grid-template-columns: 1fr 1fr; }
   .invitation-toolbar .lifecycle-field { grid-column: 1 / -1; }
+  .invitation-bulk-toolbar { align-items: stretch; flex-direction: column; }
+  .invitation-bulk-toolbar span { margin-right: 0; }
+  .invitation-bulk-toolbar button { width: 100%; }
 }
 
 @media (min-width: 900px) {

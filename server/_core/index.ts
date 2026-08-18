@@ -18,8 +18,11 @@ import {
 } from "./auth";
 import {
   acceptInvitation,
+  applyOrganizationSharedBrandingPreset,
   applyTenantBrandingPreset,
   beginSignup,
+  bulkResendInvitations,
+  bulkRevokeInvitations,
   confirmEmailVerification,
   confirmPasswordReset,
   createInvitation,
@@ -29,12 +32,14 @@ import {
   getTenantBranding,
   getOnboardingState,
   listInvitationStatuses,
+  listOrganizationSharedBrandingPresets,
   listTenantBrandingPresets,
   requestPasswordReset,
   resendInvitation,
   resendVerification,
   revokeInvitation,
   saveTenantBrandingPreset,
+  setTenantBrandingPresetOrganizationSharing,
   updateTenantBranding,
 } from "./accountLifecycleStore";
 import { authenticateOperator, ensureExternalOperator, ensureOperatorAuthStore } from "./operatorAuthStore";
@@ -603,6 +608,32 @@ app.post("/api/auth/invitations/:id/revoke", rateLimit(10), async (req, res) => 
   }
 });
 
+app.post("/api/auth/invitations/actions/bulk/resend", rateLimit(3), async (req, res) => {
+  const user = requireAuthenticatedOperator(req, res);
+  if (!user) return;
+  try {
+    const result = await bulkResendInvitations({ inviterId: Number(user.id), invitationIds: Array.isArray(req.body?.invitationIds) ? req.body.invitationIds.filter((id: unknown): id is string => typeof id === "string") : [] });
+    await recordOperationalEvent({ eventType: "auth.invitations_bulk_resent", actorId: `${user.id}`, actorRole: user.role, tenantId: user.tenantId, route: req.path, outcome: result.failed.length ? "failure" : "success", payload: { requested: result.requested, succeeded: result.succeeded.length, failed: result.failed.length } });
+    res.status(202).json(result);
+  } catch (error) {
+    const mapped = lifecycleErrorStatus(error);
+    res.status(mapped.code === "tenant_admin_required" ? 403 : mapped.status).json({ error: mapped.code });
+  }
+});
+
+app.post("/api/auth/invitations/actions/bulk/revoke", rateLimit(3), async (req, res) => {
+  const user = requireAuthenticatedOperator(req, res);
+  if (!user) return;
+  try {
+    const result = await bulkRevokeInvitations({ inviterId: Number(user.id), invitationIds: Array.isArray(req.body?.invitationIds) ? req.body.invitationIds.filter((id: unknown): id is string => typeof id === "string") : [] });
+    await recordOperationalEvent({ eventType: "auth.invitations_bulk_revoked", actorId: `${user.id}`, actorRole: user.role, tenantId: user.tenantId, route: req.path, outcome: result.failed.length ? "failure" : "success", payload: { requested: result.requested, succeeded: result.succeeded.length, failed: result.failed.length } });
+    res.status(200).json(result);
+  } catch (error) {
+    const mapped = lifecycleErrorStatus(error);
+    res.status(mapped.code === "tenant_admin_required" ? 403 : mapped.status).json({ error: mapped.code });
+  }
+});
+
 app.get("/api/auth/tenant-branding", async (req, res) => {
   const user = requireAuthenticatedOperator(req, res);
   if (!user) return;
@@ -619,6 +650,17 @@ app.get("/api/auth/tenant-branding/presets", async (req, res) => {
   if (!user) return;
   try {
     res.status(200).json({ presets: await listTenantBrandingPresets(Number(user.id)) });
+  } catch (error) {
+    const mapped = lifecycleErrorStatus(error);
+    res.status(mapped.code === "tenant_admin_required" ? 403 : mapped.status).json({ error: mapped.code });
+  }
+});
+
+app.get("/api/auth/tenant-branding/presets/shared", async (req, res) => {
+  const user = requireAuthenticatedOperator(req, res);
+  if (!user) return;
+  try {
+    res.status(200).json({ presets: await listOrganizationSharedBrandingPresets(Number(user.id)) });
   } catch (error) {
     const mapped = lifecycleErrorStatus(error);
     res.status(mapped.code === "tenant_admin_required" ? 403 : mapped.status).json({ error: mapped.code });
@@ -642,6 +684,30 @@ app.post("/api/auth/tenant-branding/presets/:id/apply", rateLimit(20), async (re
   if (!user) return;
   try {
     res.status(200).json(await applyTenantBrandingPreset({ operatorId: Number(user.id), presetId: `${req.params.id ?? ""}` }));
+  } catch (error) {
+    const mapped = lifecycleErrorStatus(error);
+    res.status(mapped.code === "tenant_admin_required" ? 403 : mapped.status).json({ error: mapped.code });
+  }
+});
+
+app.post("/api/auth/tenant-branding/presets/:id/apply-shared", rateLimit(20), async (req, res) => {
+  const user = requireAuthenticatedOperator(req, res);
+  if (!user) return;
+  try {
+    res.status(200).json(await applyOrganizationSharedBrandingPreset({ operatorId: Number(user.id), presetId: `${req.params.id ?? ""}` }));
+  } catch (error) {
+    const mapped = lifecycleErrorStatus(error);
+    res.status(mapped.code === "tenant_admin_required" ? 403 : mapped.status).json({ error: mapped.code });
+  }
+});
+
+app.post("/api/auth/tenant-branding/presets/:id/share", rateLimit(20), async (req, res) => {
+  const user = requireAuthenticatedOperator(req, res);
+  if (!user) return;
+  try {
+    const result = await setTenantBrandingPresetOrganizationSharing({ operatorId: Number(user.id), presetId: `${req.params.id ?? ""}`, shared: Boolean(req.body?.shared) });
+    await recordOperationalEvent({ eventType: result.organizationShared ? "auth.tenant_branding_preset_shared" : "auth.tenant_branding_preset_unshared", actorId: `${user.id}`, actorRole: user.role, tenantId: user.tenantId, route: req.path, outcome: "success" });
+    res.status(200).json(result);
   } catch (error) {
     const mapped = lifecycleErrorStatus(error);
     res.status(mapped.code === "tenant_admin_required" ? 403 : mapped.status).json({ error: mapped.code });

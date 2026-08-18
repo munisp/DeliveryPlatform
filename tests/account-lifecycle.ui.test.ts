@@ -50,4 +50,25 @@ describe("account lifecycle onboarding UI", () => {
     expect(page).toContain('aria-pressed={previewMode === "dark"}');
     expect(page).toContain('className={`tenant-brand-live-preview ${previewMode === "dark" ? "is-dark" : ""}`}');
   });
+
+  it("supports bulk pending-invitation actions with an explicit accessible revoke confirmation", async () => {
+    const page = await readFile(resolve(root, "client/src/pages/AccountLifecycle.tsx"), "utf8");
+    const css = await readFile(resolve(root, "client/src/pages/account-lifecycle.css"), "utf8");
+
+    expect(page).toContain("selectedInvitationIds");
+    expect(page).toContain('"/api/auth/invitations/actions/bulk/resend"');
+    expect(page).toContain('"/api/auth/invitations/actions/bulk/revoke"');
+    expect(page).toContain('role="dialog"');
+    expect(page).toContain("Revoke selected");
+    expect(css).toContain(".lifecycle-modal-backdrop");
+  });
+
+  it("lets administrators share and apply organization branding presets", async () => {
+    const page = await readFile(resolve(root, "client/src/pages/AccountLifecycle.tsx"), "utf8");
+
+    expect(page).toContain('"/api/auth/tenant-branding/presets/shared"');
+    expect(page).toContain("/api/auth/tenant-branding/presets/${presetId}/share");
+    expect(page).toContain("Organization branding library");
+    expect(page).toContain("Apply to this tenant");
+  });
 });

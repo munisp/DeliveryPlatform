@@ -73,6 +73,12 @@ apply_preset_status="$(curl --silent --show-error --output /tmp/lifecycle-brandi
   "${LIFECYCLE_TEST_BASE_URL%/}/api/auth/tenant-branding/presets/${preset_id}/apply")"
 test "$apply_preset_status" = '200'
 grep -q '"primaryColor":"#2563eb"' /tmp/lifecycle-branding-preset-applied.json
+share_preset_status="$(curl --silent --show-error --output /tmp/lifecycle-branding-preset-shared.json --write-out '%{http_code}' \
+  -b "$cookie_file" -H 'Content-Type: application/json' --data '{"shared":true}' \
+  "${LIFECYCLE_TEST_BASE_URL%/}/api/auth/tenant-branding/presets/${preset_id}/share")"
+test "$share_preset_status" = '200'
+grep -q '"organizationShared":true' /tmp/lifecycle-branding-preset-shared.json
+psql "$TEST_DATABASE_URL" -Atqc "SELECT count(*) FROM tenant_branding_presets WHERE id = '${preset_id}' AND organization_shared = TRUE" | grep -qx '1'
 
 invitation_status="$(curl --silent --show-error --output /tmp/lifecycle-invitation.json --write-out '%{http_code}' \
   -b "$cookie_file" -H 'Content-Type: application/json' \
@@ -130,6 +136,37 @@ accepted_status="$(curl --silent --show-error -b "$cookie_file" "${LIFECYCLE_TES
 printf '%s' "$accepted_status" > /tmp/lifecycle-invitations-accepted.json
 grep -q "${LIFECYCLE_TEST_INVITEE_EMAIL}" /tmp/lifecycle-invitations-accepted.json
 grep -q '"status":"accepted"' /tmp/lifecycle-invitations-accepted.json
+
+bulk_invitee_one="bulk-one-${LIFECYCLE_TEST_INVITEE_EMAIL}"
+bulk_invitee_two="bulk-two-${LIFECYCLE_TEST_INVITEE_EMAIL}"
+for bulk_email in "$bulk_invitee_one" "$bulk_invitee_two"; do
+  bulk_invitation_status="$(curl --silent --show-error --output /tmp/lifecycle-bulk-invitation.json --write-out '%{http_code}' \
+    -b "$cookie_file" -H 'Content-Type: application/json' \
+    --data "{\"email\":\"${bulk_email}\",\"role\":\"viewer\"}" \
+    "${LIFECYCLE_TEST_BASE_URL%/}/api/auth/invitations")"
+  test "$bulk_invitation_status" = '202'
+done
+bulk_pending_status="$(curl --silent --show-error -b "$cookie_file" "${LIFECYCLE_TEST_BASE_URL%/}/api/auth/invitations/status")"
+printf '%s' "$bulk_pending_status" >/tmp/lifecycle-invitations-bulk-pending.json
+bulk_invitation_ids="$(grep -oE '"id":"[^"]+"' /tmp/lifecycle-invitations-bulk-pending.json | head -2 | cut -d'"' -f4 | paste -sd ',' -)"
+test -n "$bulk_invitation_ids"
+bulk_resend_status="$(curl --silent --show-error --output /tmp/lifecycle-invitations-bulk-resent.json --write-out '%{http_code}' \
+  -b "$cookie_file" -H 'Content-Type: application/json' \
+  --data "{\"invitationIds\":[\"${bulk_invitation_ids/,/\",\"}\"]}" \
+  "${LIFECYCLE_TEST_BASE_URL%/}/api/auth/invitations/actions/bulk/resend")"
+test "$bulk_resend_status" = '202'
+grep -q '"failed":\[\]' /tmp/lifecycle-invitations-bulk-resent.json
+bulk_refreshed_status="$(curl --silent --show-error -b "$cookie_file" "${LIFECYCLE_TEST_BASE_URL%/}/api/auth/invitations/status")"
+printf '%s' "$bulk_refreshed_status" >/tmp/lifecycle-invitations-bulk-refreshed.json
+bulk_refreshed_ids="$(grep -oE '"id":"[^"]+"' /tmp/lifecycle-invitations-bulk-refreshed.json | head -2 | cut -d'"' -f4 | paste -sd ',' -)"
+test -n "$bulk_refreshed_ids"
+bulk_revoke_status="$(curl --silent --show-error --output /tmp/lifecycle-invitations-bulk-revoked.json --write-out '%{http_code}' \
+  -b "$cookie_file" -H 'Content-Type: application/json' \
+  --data "{\"invitationIds\":[\"${bulk_refreshed_ids/,/\",\"}\"]}" \
+  "${LIFECYCLE_TEST_BASE_URL%/}/api/auth/invitations/actions/bulk/revoke")"
+test "$bulk_revoke_status" = '200'
+grep -q '"failed":\[\]' /tmp/lifecycle-invitations-bulk-revoked.json
+psql "$TEST_DATABASE_URL" -Atqc "SELECT count(*) FROM account_lifecycle_tokens WHERE purpose = 'invitation' AND email IN ('${bulk_invitee_one}', '${bulk_invitee_two}') AND revoked_at IS NOT NULL" | grep -qx '4'
 
 psql "$TEST_DATABASE_URL" -Atqc "
   SELECT count(*)

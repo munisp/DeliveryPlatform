@@ -29,4 +29,27 @@ describe("tenant admin action contracts", () => {
     expect(routes).toContain('"/api/auth/tenant-branding/presets"');
     expect(routes).not.toContain("token: issued.token");
   });
+
+  it("bounds bulk invitation actions and persists reversible organization preset sharing", async () => {
+    const store = await readFile(resolve(root, "server/_core/accountLifecycleStore.ts"), "utf8");
+    const migration = await readFile(resolve(root, "drizzle/0011_organization_branding_preset_sharing.sql"), "utf8");
+    const rollback = await readFile(resolve(root, "drizzle/rollback/0011_organization_branding_preset_sharing.down.sql"), "utf8");
+
+    expect(store).toContain("maxBulkInvitationActions = 10");
+    expect(store).toContain("bulkResendInvitations");
+    expect(store).toContain("bulkRevokeInvitations");
+    expect(store).toContain("listOrganizationSharedBrandingPresets");
+    expect(migration).toContain("organization_shared");
+    expect(migration).toContain("organization_id");
+    expect(rollback).toContain("DROP COLUMN IF EXISTS organization_shared");
+  });
+
+  it("exposes rate-limited bulk and organization-sharing routes", async () => {
+    const routes = await readFile(resolve(root, "server/_core/index.ts"), "utf8");
+
+    expect(routes).toContain('"/api/auth/invitations/actions/bulk/resend"');
+    expect(routes).toContain('"/api/auth/invitations/actions/bulk/revoke"');
+    expect(routes).toContain('"/api/auth/tenant-branding/presets/shared"');
+    expect(routes).toContain('"/api/auth/tenant-branding/presets/:id/share"');
+  });
 });
