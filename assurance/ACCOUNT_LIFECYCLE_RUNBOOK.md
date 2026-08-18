@@ -42,7 +42,15 @@ Apply `drizzle/0008_account_lifecycle.sql` through the controlled database migra
 
 `scripts/testing/lifecycle-email-sink.mjs` is a **test-only** local dispatcher. It requires `NODE_ENV=test` and a strong `TEST_INTERNAL_TOKEN`, verifies the same internal token header used by the application, and retains messages only in memory at its local `/messages` endpoint. It is not included in the production application path.
 
-After starting that sink and an application instance pointed at an isolated database, run `scripts/testing/rehearse-account-lifecycle-e2e.sh`. The script rejects production-looking URLs, follows the emitted verification link from the local sink, creates an organization and tenant using the issued session, and checks the verified/onboarded operator state in PostgreSQL.
+After starting that sink and an application instance pointed at an isolated database, run `scripts/testing/rehearse-account-lifecycle-e2e.sh`. The script rejects production-looking URLs, follows the emitted verification link from the local sink, creates an organization and tenant using the issued session, saves validated tenant branding, accepts a tenant-scoped invitation, confirms pending-to-accepted invitation tracking, and checks durable verified/onboarded state in PostgreSQL.
+
+## Staging mailbox rehearsal
+
+`deploy/testing/docker-compose.staging-mailbox.yml` defines a **staging-only** Mailpit v1.30.5 capture service. Its web/API interface binds to loopback and its SMTP listener is not published to the host. Configure the staging notification dispatcher to send its email channel into that private Mailpit SMTP listener; do not point this service to a public relay or a customer mailbox.
+
+Once the staging lifecycle application and private Mailpit API URL are available, run `scripts/testing/rehearse-staging-mailbox.sh`. The rehearsal refuses URLs that do not identify a staging environment and creates a unique recipient in a non-routable `.test` domain. It checks the raw captured email for the secure verification link, calls the staged verification endpoint, and deletes the locally retained raw message at exit. Mailpit’s REST API and optional Basic Authentication are documented by the project itself.[1]
+
+[1]: https://mailpit.axllent.org/docs/api-v1/ "Mailpit API v1 documentation"
 
 ## Evidence and limitations
 

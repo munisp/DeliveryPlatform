@@ -27,3 +27,13 @@ GitHub’s service-container guidance requires an Ubuntu runner for containerize
 [5] [GitHub-hosted runners reference](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)
 
 [6] [GitHub Actions service-container guidance](https://docs.github.com/actions/tutorials/communicating-with-docker-service-containers)
+
+## Staging mailbox rehearsal controls
+
+The staging-only mailbox compose model pins `axllent/mailpit:v1.30.5`. Mailpit documents stable versioned Docker tags and the default web and SMTP ports; the compose model binds its web/API surface only to loopback and does not publish SMTP to the host.[7]
+
+The staging rehearsal uses Mailpit’s documented v1 message API to retrieve only the newest captured message, verify a lifecycle link, and exercise the application’s verification endpoint using an isolated `.test` recipient. Optional Mailpit Basic Authentication is supported by the rehearsal without persisting its credential.[8]
+
+[7] [Mailpit v1.30.5 release](https://github.com/axllent/mailpit/releases/tag/v1.30.5)
+
+[8] [Mailpit API v1 documentation](https://mailpit.axllent.org/docs/api-v1/)

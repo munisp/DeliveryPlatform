@@ -79,6 +79,42 @@ function ActionButton({ pending, children, onClick }: { pending?: boolean; child
   return <button type={onClick ? "button" : "submit"} onClick={onClick} disabled={pending} className="lifecycle-button">{children}</button>;
 }
 
+type TenantBranding = { logoDataUrl: string | null; primaryColor: string; accentColor: string; updatedAt: string | null };
+type InvitationStatus = { id: string; email: string; role: string | null; createdAt: string; expiresAt: string; acceptedAt: string | null; status: "pending" | "accepted" | "expired" };
+
+function TenantBrandingPanel({ onSaved }: { onSaved?: () => void }) {
+  const branding = useQuery({ queryKey: ["tenant-branding"], queryFn: () => request<TenantBranding>("/api/auth/tenant-branding") });
+  const [logoDataUrl, setLogoDataUrl] = useState<string | null>(null);
+  const [primaryColor, setPrimaryColor] = useState("");
+  const [accentColor, setAccentColor] = useState("");
+  const currentLogo = logoDataUrl ?? branding.data?.logoDataUrl ?? null;
+  const currentPrimary = primaryColor || branding.data?.primaryColor || "#0ea5e9";
+  const currentAccent = accentColor || branding.data?.accentColor || "#0f172a";
+  const save = useMutation({
+    mutationFn: () => request<TenantBranding>("/api/auth/tenant-branding", { logoDataUrl: currentLogo, primaryColor: currentPrimary, accentColor: currentAccent }),
+    onSuccess: () => { branding.refetch(); onSaved?.(); },
+  });
+  const selectLogo = (file: File | undefined) => {
+    if (!file) return;
+    if (!["image/png", "image/jpeg", "image/webp"].includes(file.type) || file.size > 250_000) return;
+    const reader = new FileReader();
+    reader.onload = () => setLogoDataUrl(typeof reader.result === "string" ? reader.result : null);
+    reader.readAsDataURL(file);
+  };
+
+  return <section className="tenant-branding" aria-labelledby="tenant-branding-title">
+    <div className="tenant-branding-heading"><div><p className="lifecycle-eyebrow">Tenant branding</p><h2 id="tenant-branding-title">Make this workspace recognizable</h2><p>Upload a small logo and select colors for this tenant. Only tenant administrators can save these settings.</p></div><div className="tenant-brand-preview" style={{ background: currentAccent, borderColor: currentPrimary }} aria-label="Tenant branding preview"><span style={{ background: currentPrimary }}>{currentLogo ? <img src={currentLogo} alt="Selected tenant logo" /> : "T"}</span><strong>Tenant workspace</strong></div></div>
+    <div className="tenant-brand-controls">
+      <label className="tenant-logo-picker"><span>Logo (PNG, JPEG, or WebP; 250 KB max)</span><input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => selectLogo(event.target.files?.[0])} /><small>Image data remains tenant-scoped and is validated before saving.</small></label>
+      <label className="tenant-color-field"><span>Primary color</span><input aria-label="Primary brand color" type="color" value={currentPrimary} onChange={(event) => setPrimaryColor(event.target.value)} /><code>{currentPrimary}</code></label>
+      <label className="tenant-color-field"><span>Accent color</span><input aria-label="Accent brand color" type="color" value={currentAccent} onChange={(event) => setAccentColor(event.target.value)} /><code>{currentAccent}</code></label>
+    </div>
+    {save.isError ? <p className="text-sm text-rose-300">{readableError(save.error)}</p> : null}
+    {save.isSuccess ? <p className="text-sm text-emerald-300" role="status">Branding saved. Your workspace setup is complete.</p> : null}
+    <ActionButton pending={save.isPending} onClick={() => save.mutate()}>{branding.isLoading ? "Loading branding…" : "Save workspace branding"}</ActionButton>
+  </section>;
+}
+
 export function SignupPage() {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -199,7 +235,7 @@ export function OnboardingPage() {
         <Field id="tenant-name" label="Primary tenant name" value={tenantName} onChange={setTenantName} placeholder="Operations" />
         {createOrganization.isError ? <p className="text-sm text-rose-300">{readableError(createOrganization.error)}</p> : null}
         <ActionButton pending={createOrganization.isPending}>Create organization and workspace</ActionButton>
-        </form> : <div className="space-y-4"><p className="rounded-xl border border-emerald-400/30 bg-emerald-400/10 p-4 text-sm text-emerald-100">Your workspace is ready. Invite teammates from the dashboard whenever you are ready.</p><Link href="/dashboard" className="inline-flex rounded-xl bg-cyan-400 px-5 py-3 text-sm font-semibold text-slate-950">Open dashboard</Link></div>}
+        </form> : state.data.needsCompletion ? <TenantBrandingPanel onSaved={() => state.refetch()} /> : <div className="space-y-4"><p className="rounded-xl border border-emerald-400/30 bg-emerald-400/10 p-4 text-sm text-emerald-100">Your workspace is ready. Invite teammates from the dashboard whenever you are ready.</p><Link href="/dashboard" className="inline-flex rounded-xl bg-cyan-400 px-5 py-3 text-sm font-semibold text-slate-950">Open dashboard</Link></div>}
       </> : null}
     </CardContent></Card>
   </PublicShell>;
@@ -208,6 +244,7 @@ export function OnboardingPage() {
 export function InviteTeamPage() {
   const [email, setEmail] = useState("");
   const [role, setRole] = useState("operator");
-  const invite = useMutation({ mutationFn: () => request<{ invited: boolean }>("/api/auth/invitations", { email, role }) });
-  return <DashboardLayout><div className="mx-auto max-w-2xl space-y-6"><div><p className="text-xs font-semibold uppercase tracking-[0.2em] text-cyan-300">Team access</p><h1 className="mt-2 text-3xl font-semibold text-white">Invite a teammate</h1><p className="mt-2 text-slate-400">Tenant administrators can send role-specific, single-use invitations.</p></div><Card><CardHeader><CardTitle>New invitation</CardTitle><CardDescription>Only invite colleagues who should have access to this tenant.</CardDescription></CardHeader><CardContent>{invite.isSuccess ? <p className="rounded-xl border border-emerald-400/30 bg-emerald-400/10 p-4 text-sm text-emerald-100">Invitation sent. The recipient will receive a secure acceptance link.</p> : <form className="space-y-4" onSubmit={(event) => { event.preventDefault(); invite.mutate(); }}><Field id="invite-email" label="Work email" type="email" value={email} onChange={setEmail} autoComplete="email" /><label className="block space-y-2"><span className="text-sm font-medium text-slate-200">Role</span><select value={role} onChange={(event) => setRole(event.target.value)} className="w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-slate-100 outline-none focus:border-cyan-400"><option value="operator">Operator</option><option value="viewer">Viewer</option><option value="admin">Administrator</option></select></label>{invite.isError ? <p className="text-sm text-rose-300">{readableError(invite.error)}</p> : null}<ActionButton pending={invite.isPending}>Send invitation</ActionButton></form>}</CardContent></Card></div></DashboardLayout>;
+  const invitations = useQuery({ queryKey: ["invitation-status"], queryFn: () => request<{ invitations: InvitationStatus[] }>("/api/auth/invitations/status") });
+  const invite = useMutation({ mutationFn: () => request<{ invited: boolean }>("/api/auth/invitations", { email, role }), onSuccess: () => { invitations.refetch(); setEmail(""); } });
+  return <DashboardLayout><div className="mx-auto max-w-3xl space-y-6"><div><p className="text-xs font-semibold uppercase tracking-[0.2em] text-cyan-300">Team access</p><h1 className="mt-2 text-3xl font-semibold text-white">Invite and monitor your team</h1><p className="mt-2 text-slate-400">Tenant administrators can issue role-specific invitations and see whether each link is still pending, accepted, or expired.</p></div><Card><CardHeader><CardTitle>New invitation</CardTitle><CardDescription>Only invite colleagues who should have access to this tenant.</CardDescription></CardHeader><CardContent><form className="space-y-4" onSubmit={(event) => { event.preventDefault(); invite.mutate(); }}><Field id="invite-email" label="Work email" type="email" value={email} onChange={setEmail} autoComplete="email" /><label className="block space-y-2"><span className="text-sm font-medium text-slate-200">Role</span><select value={role} onChange={(event) => setRole(event.target.value)} className="w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-slate-100 outline-none focus:border-cyan-400"><option value="operator">Operator</option><option value="viewer">Viewer</option><option value="admin">Administrator</option></select></label>{invite.isError ? <p className="text-sm text-rose-300">{readableError(invite.error)}</p> : null}{invite.isSuccess ? <p className="text-sm text-emerald-300" role="status">Invitation sent. The recipient will receive a secure acceptance link.</p> : null}<ActionButton pending={invite.isPending}>Send invitation</ActionButton></form></CardContent></Card><Card><CardHeader><CardTitle>Invitation status</CardTitle><CardDescription>Invitation tokens are never shown. Status is calculated from tenant-scoped token state.</CardDescription></CardHeader><CardContent>{invitations.isLoading ? <p className="text-sm text-slate-400">Loading invitations…</p> : invitations.isError ? <p className="text-sm text-rose-300">Invitation status is unavailable.</p> : invitations.data?.invitations.length ? <ul className="invitation-status-list">{invitations.data.invitations.map((entry) => <li key={entry.id}><div><strong>{entry.email}</strong><span>{entry.role ?? "operator"} · sent {new Date(entry.createdAt).toLocaleDateString()}</span></div><span className={`invitation-status invitation-status-${entry.status}`}>{entry.status}</span></li>)}</ul> : <p className="text-sm text-slate-400">No invitations have been sent from this tenant yet.</p>}</CardContent></Card></div></DashboardLayout>;
 }

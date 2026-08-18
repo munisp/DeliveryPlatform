@@ -8,13 +8,16 @@ set -euo pipefail
 : "${TEST_DATABASE_URL:?Set an isolated PostgreSQL database URL}"
 : "${LIFECYCLE_TEST_EMAIL:?Set a unique test email address}"
 : "${LIFECYCLE_TEST_PASSWORD:?Set a strong test password}"
+: "${LIFECYCLE_TEST_INVITEE_EMAIL:?Set a unique isolated invitee email address}"
+: "${LIFECYCLE_TEST_INVITEE_PASSWORD:?Set a strong isolated invitee password}"
 
 case "$LIFECYCLE_TEST_BASE_URL $LIFECYCLE_TEST_EMAIL_SINK_URL $TEST_DATABASE_URL" in
   *production*|*prod*) echo "Refusing a production-looking lifecycle test target" >&2; exit 2 ;;
 esac
 
 cookie_file="$(mktemp)"
-trap 'rm -f "$cookie_file"' EXIT
+invitee_cookie_file="$(mktemp)"
+trap 'rm -f "$cookie_file" "$invitee_cookie_file"' EXIT
 
 signup_status="$(curl --silent --show-error --output /tmp/lifecycle-signup.json --write-out '%{http_code}' \
   -H 'Content-Type: application/json' \
@@ -44,7 +47,45 @@ organization_status="$(curl --silent --show-error --output /tmp/lifecycle-organi
   --data "{\"organizationName\":\"Lifecycle Test Organization\",\"organizationSlug\":\"${slug}\",\"tenantName\":\"Lifecycle Test Tenant\"}" \
   "${LIFECYCLE_TEST_BASE_URL%/}/api/auth/onboarding/organization")"
 test "$organization_status" = '201'
-grep -q '"redirect":"/dashboard"' /tmp/lifecycle-organization.json
+grep -q '"redirect":"/onboarding?step=branding"' /tmp/lifecycle-organization.json
+
+onboarding_branding_status="$(curl --silent --show-error --output /tmp/lifecycle-onboarding-branding.json --write-out '%{http_code}' \
+  -b "$cookie_file" "${LIFECYCLE_TEST_BASE_URL%/}/api/auth/onboarding")"
+test "$onboarding_branding_status" = '200'
+grep -q '"needsCompletion":true' /tmp/lifecycle-onboarding-branding.json
+
+branding_status="$(curl --silent --show-error --output /tmp/lifecycle-branding.json --write-out '%{http_code}' \
+  -b "$cookie_file" -H 'Content-Type: application/json' \
+  --data '{"logoDataUrl":null,"primaryColor":"#2563eb","accentColor":"#172554"}' \
+  "${LIFECYCLE_TEST_BASE_URL%/}/api/auth/tenant-branding")"
+test "$branding_status" = '200'
+grep -q '"primaryColor":"#2563eb"' /tmp/lifecycle-branding.json
+
+invitation_status="$(curl --silent --show-error --output /tmp/lifecycle-invitation.json --write-out '%{http_code}' \
+  -b "$cookie_file" -H 'Content-Type: application/json' \
+  --data "{\"email\":\"${LIFECYCLE_TEST_INVITEE_EMAIL}\",\"role\":\"viewer\"}" \
+  "${LIFECYCLE_TEST_BASE_URL%/}/api/auth/invitations")"
+test "$invitation_status" = '202'
+
+pending_status="$(curl --silent --show-error -b "$cookie_file" "${LIFECYCLE_TEST_BASE_URL%/}/api/auth/invitations/status")"
+printf '%s' "$pending_status" > /tmp/lifecycle-invitations-pending.json
+grep -q "${LIFECYCLE_TEST_INVITEE_EMAIL}" /tmp/lifecycle-invitations-pending.json
+grep -q '"status":"pending"' /tmp/lifecycle-invitations-pending.json
+
+curl --fail --silent --show-error "${LIFECYCLE_TEST_EMAIL_SINK_URL%/}/messages" >/tmp/lifecycle-messages-after-invite.json
+invitation_token="$(grep -oE '/accept-invitation\?token=[A-Za-z0-9_-]+' /tmp/lifecycle-messages-after-invite.json | tail -1 | cut -d= -f2)"
+test -n "$invitation_token"
+
+accept_status="$(curl --silent --show-error --output /tmp/lifecycle-invitation-accept.json --write-out '%{http_code}' \
+  -c "$invitee_cookie_file" -H 'Content-Type: application/json' \
+  --data "{\"token\":\"${invitation_token}\",\"name\":\"Lifecycle Test Invitee\",\"password\":\"${LIFECYCLE_TEST_INVITEE_PASSWORD}\"}" \
+  "${LIFECYCLE_TEST_BASE_URL%/}/api/auth/invitations/accept")"
+test "$accept_status" = '200'
+
+accepted_status="$(curl --silent --show-error -b "$cookie_file" "${LIFECYCLE_TEST_BASE_URL%/}/api/auth/invitations/status")"
+printf '%s' "$accepted_status" > /tmp/lifecycle-invitations-accepted.json
+grep -q "${LIFECYCLE_TEST_INVITEE_EMAIL}" /tmp/lifecycle-invitations-accepted.json
+grep -q '"status":"accepted"' /tmp/lifecycle-invitations-accepted.json
 
 psql "$TEST_DATABASE_URL" -Atqc "
   SELECT count(*)
@@ -52,6 +93,14 @@ psql "$TEST_DATABASE_URL" -Atqc "
   WHERE email = '${LIFECYCLE_TEST_EMAIL}'
     AND email_verified_at IS NOT NULL
     AND onboarding_completed_at IS NOT NULL
+" | grep -qx '1'
+
+psql "$TEST_DATABASE_URL" -Atqc "
+  SELECT count(*)
+  FROM account_lifecycle_tokens
+  WHERE purpose = 'invitation'
+    AND email = '${LIFECYCLE_TEST_INVITEE_EMAIL}'
+    AND consumed_at IS NOT NULL
 " | grep -qx '1'
 
 echo "isolated account lifecycle rehearsal passed"
