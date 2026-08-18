@@ -20,4 +20,24 @@ describe("account lifecycle onboarding UI", () => {
     expect(css).toContain("@media (prefers-reduced-motion: reduce)");
     expect(css).toContain(".onboarding-welcome { transition: none; animation: none; }");
   });
+
+  it("provides an immediate tenant branding preview and accessible live form guidance", async () => {
+    const page = await readFile(resolve(root, "client/src/pages/AccountLifecycle.tsx"), "utf8");
+
+    expect(page).toContain('className="tenant-brand-live-preview"');
+    expect(page).toContain("Live preview");
+    expect(page).toContain('role="tooltip"');
+    expect(page).toContain('aria-invalid={Boolean(error)}');
+    expect(page).toContain('role="alert"');
+  });
+
+  it("supports invitation status and role filtering plus deterministic sorting", async () => {
+    const page = await readFile(resolve(root, "client/src/pages/AccountLifecycle.tsx"), "utf8");
+
+    expect(page).toContain("statusFilter");
+    expect(page).toContain("roleFilter");
+    expect(page).toContain("sortBy");
+    expect(page).toContain("Expiring soon");
+    expect(page).toContain("invitations shown");
+  });
 });

@@ -91,6 +91,14 @@
 
 .lifecycle-field input:focus,
 .lifecycle-panel select:focus { outline: 2px solid #22d3ee; outline-offset: 2px; border-color: #22d3ee; }
+.lifecycle-field input[aria-invalid="true"] { border-color: #fb7185; }
+.lifecycle-field-label { display: flex; align-items: center; gap: 7px; }
+.lifecycle-field-hint { color: #94a3b8; font-size: 12px; font-weight: 400; line-height: 1.4; }
+.lifecycle-field-error { color: #fda4af; font-size: 12px; font-weight: 700; line-height: 1.4; }
+.lifecycle-tooltip { position: relative; display: inline-grid; width: 17px; height: 17px; place-items: center; border: 1px solid #64748b; border-radius: 50%; color: #bae6fd; cursor: help; font-size: 11px; font-weight: 800; }
+.lifecycle-tooltip:focus-visible { outline: 2px solid #a5f3fc; outline-offset: 2px; }
+.lifecycle-tooltip-content { position: absolute; z-index: 5; bottom: calc(100% + 8px); left: 50%; width: 220px; transform: translateX(-50%); border: 1px solid #475569; border-radius: 10px; background: #020617; box-shadow: 0 12px 28px rgba(0,0,0,.35); color: #e2e8f0; opacity: 0; padding: 9px; pointer-events: none; font-size: 12px; font-weight: 400; line-height: 1.45; }
+.lifecycle-tooltip:hover .lifecycle-tooltip-content, .lifecycle-tooltip:focus .lifecycle-tooltip-content { opacity: 1; }
 
 .lifecycle-button {
   min-height: 48px;
@@ -135,6 +143,17 @@
 .tenant-brand-preview { display: flex; min-width: 136px; align-items: center; gap: 8px; border: 2px solid; border-radius: 12px; padding: 10px; color: #f8fafc; font-size: 12px; }
 .tenant-brand-preview span { display: grid; width: 30px; height: 30px; place-items: center; overflow: hidden; border-radius: 8px; color: #fff; font-weight: 800; }
 .tenant-brand-preview img { width: 100%; height: 100%; object-fit: cover; }
+.tenant-brand-live-preview { overflow: hidden; border: 2px solid; border-radius: 14px; color: #f8fafc; }
+.tenant-brand-live-preview-bar { display: flex; align-items: center; gap: 9px; border-bottom: 1px solid rgba(255,255,255,.16); padding: 10px 13px; }
+.tenant-brand-live-preview-bar span { display: grid; width: 28px; height: 28px; place-items: center; overflow: hidden; border-radius: 8px; color: #fff; font-size: 12px; font-weight: 900; }
+.tenant-brand-live-preview-bar img { width: 100%; height: 100%; object-fit: cover; }
+.tenant-brand-live-preview-bar strong { font-size: 13px; }
+.tenant-brand-live-preview-bar small { margin-left: auto; color: rgba(255,255,255,.72); font-size: 11px; }
+.tenant-brand-live-preview-content { padding: 18px; background: rgba(2,6,23,.72); }
+.tenant-brand-live-preview-content p { margin: 0; color: #bae6fd; font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: .08em; }
+.tenant-brand-live-preview-content h3 { margin: 7px 0; color: #fff; font-size: 19px; }
+.tenant-brand-live-preview-content span { display: block; color: #cbd5e1; font-size: 13px; }
+.tenant-brand-live-preview-content button { margin-top: 14px; border: 0; border-radius: 8px; color: #fff; padding: 9px 12px; font-size: 12px; font-weight: 800; }
 .tenant-brand-controls { display: grid; grid-template-columns: minmax(0, 1fr) repeat(2, minmax(120px, .5fr)); gap: 12px; }
 .tenant-logo-picker, .tenant-color-field { display: grid; gap: 7px; color: #e2e8f0; font-size: 13px; font-weight: 700; }
 .tenant-logo-picker input { color: #cbd5e1; font-size: 12px; }
@@ -151,11 +170,18 @@
 .invitation-status-pending { border-color: rgba(245, 158, 11, .45); color: #fde68a; }
 .invitation-status-accepted { border-color: rgba(52, 211, 153, .45); color: #a7f3d0; }
 .invitation-status-expired { border-color: rgba(148, 163, 184, .45); color: #cbd5e1; }
+.invitation-toolbar { display: grid; grid-template-columns: minmax(160px, 1.3fr) repeat(3, minmax(110px, .7fr)); gap: 12px; margin-bottom: 12px; }
+.invitation-toolbar > label { display: grid; gap: 8px; color: #e2e8f0; font-size: 12px; font-weight: 700; }
+.invitation-toolbar .lifecycle-field { gap: 8px; }
+.invitation-toolbar input, .invitation-toolbar select { min-height: 42px; }
+.invitation-result-count { margin: 0 0 12px; color: #94a3b8; font-size: 12px; }
 
 @media (max-width: 700px) {
   .tenant-branding-heading { align-items: stretch; flex-direction: column; }
   .tenant-brand-controls { grid-template-columns: 1fr 1fr; }
   .tenant-logo-picker { grid-column: 1 / -1; }
+  .invitation-toolbar { grid-template-columns: 1fr 1fr; }
+  .invitation-toolbar .lifecycle-field { grid-column: 1 / -1; }
 }
 
 @media (min-width: 900px) {

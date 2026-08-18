@@ -1,6 +1,6 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link } from "wouter";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import DashboardLayout from "@/components/DashboardLayout";
@@ -57,12 +57,13 @@ function PublicShell({ eyebrow, title, description, children }: { eyebrow: strin
   );
 }
 
-function Field({ id, label, type = "text", value, onChange, autoComplete, placeholder }: {
-  id: string; label: string; type?: string; value: string; onChange(value: string): void; autoComplete?: string; placeholder?: string;
+function Field({ id, label, type = "text", value, onChange, autoComplete, placeholder, hint, tooltip, error }: {
+  id: string; label: string; type?: string; value: string; onChange(value: string): void; autoComplete?: string; placeholder?: string; hint?: string; tooltip?: string; error?: string;
 }) {
+  const describedBy = [hint ? `${id}-hint` : "", error ? `${id}-error` : ""].filter(Boolean).join(" ") || undefined;
   return (
     <label className="lifecycle-field" htmlFor={id}>
-      <span>{label}</span>
+      <span className="lifecycle-field-label">{label}{tooltip ? <span className="lifecycle-tooltip" tabIndex={0} aria-label={`${label}: ${tooltip}`}><span aria-hidden="true">?</span><span className="lifecycle-tooltip-content" role="tooltip">{tooltip}</span></span> : null}</span>
       <input
         id={id}
         type={type}
@@ -70,13 +71,17 @@ function Field({ id, label, type = "text", value, onChange, autoComplete, placeh
         onChange={(event) => onChange(event.target.value)}
         autoComplete={autoComplete}
         placeholder={placeholder}
+        aria-invalid={Boolean(error)}
+        aria-describedby={describedBy}
       />
+      {hint ? <small id={`${id}-hint`} className="lifecycle-field-hint">{hint}</small> : null}
+      {error ? <small id={`${id}-error`} className="lifecycle-field-error" role="alert">{error}</small> : null}
     </label>
   );
 }
 
-function ActionButton({ pending, children, onClick }: { pending?: boolean; children: React.ReactNode; onClick?: () => void }) {
-  return <button type={onClick ? "button" : "submit"} onClick={onClick} disabled={pending} className="lifecycle-button">{children}</button>;
+function ActionButton({ pending, children, onClick, disabled }: { pending?: boolean; children: React.ReactNode; onClick?: () => void; disabled?: boolean }) {
+  return <button type={onClick ? "button" : "submit"} onClick={onClick} disabled={pending || disabled} className="lifecycle-button">{children}</button>;
 }
 
 type TenantBranding = { logoDataUrl: string | null; primaryColor: string; accentColor: string; updatedAt: string | null };
@@ -103,12 +108,16 @@ function TenantBrandingPanel({ onSaved }: { onSaved?: () => void }) {
   };
 
   return <section className="tenant-branding" aria-labelledby="tenant-branding-title">
-    <div className="tenant-branding-heading"><div><p className="lifecycle-eyebrow">Tenant branding</p><h2 id="tenant-branding-title">Make this workspace recognizable</h2><p>Upload a small logo and select colors for this tenant. Only tenant administrators can save these settings.</p></div><div className="tenant-brand-preview" style={{ background: currentAccent, borderColor: currentPrimary }} aria-label="Tenant branding preview"><span style={{ background: currentPrimary }}>{currentLogo ? <img src={currentLogo} alt="Selected tenant logo" /> : "T"}</span><strong>Tenant workspace</strong></div></div>
+    <div className="tenant-branding-heading"><div><p className="lifecycle-eyebrow">Tenant branding</p><h2 id="tenant-branding-title">Make this workspace recognizable</h2><p>Upload a small logo and select colors for this tenant. Only tenant administrators can save these settings.</p></div><div className="tenant-brand-preview" style={{ background: currentAccent, borderColor: currentPrimary }} aria-label="Tenant branding summary"><span style={{ background: currentPrimary }}>{currentLogo ? <img src={currentLogo} alt="Selected tenant logo" /> : "T"}</span><strong>Tenant workspace</strong></div></div>
     <div className="tenant-brand-controls">
       <label className="tenant-logo-picker"><span>Logo (PNG, JPEG, or WebP; 250 KB max)</span><input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => selectLogo(event.target.files?.[0])} /><small>Image data remains tenant-scoped and is validated before saving.</small></label>
       <label className="tenant-color-field"><span>Primary color</span><input aria-label="Primary brand color" type="color" value={currentPrimary} onChange={(event) => setPrimaryColor(event.target.value)} /><code>{currentPrimary}</code></label>
       <label className="tenant-color-field"><span>Accent color</span><input aria-label="Accent brand color" type="color" value={currentAccent} onChange={(event) => setAccentColor(event.target.value)} /><code>{currentAccent}</code></label>
     </div>
+    <section className="tenant-brand-live-preview" style={{ background: currentAccent, borderColor: currentPrimary }} aria-label="Live tenant workspace preview">
+      <div className="tenant-brand-live-preview-bar"><span style={{ background: currentPrimary }}>{currentLogo ? <img src={currentLogo} alt="" /> : "T"}</span><strong>Tenant workspace</strong><small>Live preview</small></div>
+      <div className="tenant-brand-live-preview-content"><p>Operations overview</p><h3>Today’s work, clearly yours.</h3><span>These colors and your logo update immediately as you make changes.</span><button type="button" style={{ background: currentPrimary }}>Review activity</button></div>
+    </section>
     {save.isError ? <p className="text-sm text-rose-300">{readableError(save.error)}</p> : null}
     {save.isSuccess ? <p className="text-sm text-emerald-300" role="status">Branding saved. Your workspace setup is complete.</p> : null}
     <ActionButton pending={save.isPending} onClick={() => save.mutate()}>{branding.isLoading ? "Loading branding…" : "Save workspace branding"}</ActionButton>
@@ -121,20 +130,23 @@ export function SignupPage() {
   const [password, setPassword] = useState("");
   const [confirmation, setConfirmation] = useState("");
   const signup = useMutation({ mutationFn: () => request<{ accepted: boolean }>("/api/auth/signup", { name, email, password }) });
+  const emailError = email && !/^\S+@\S+\.\S+$/.test(email) ? "Enter a valid work email address." : "";
+  const passwordError = password && !/^(?=.*[A-Za-z])(?=.*\d).{12,}$/.test(password) ? "Use at least 12 characters, including letters and numbers." : "";
+  const confirmationError = confirmation && password !== confirmation ? "Passwords do not match." : "";
+  const canSubmit = Boolean(name.trim() && email && password && confirmation) && !emailError && !passwordError && !confirmationError;
 
   return <PublicShell eyebrow="Create your workspace" title="Start with a verified account" description="Create the first administrator account for your organization. We will email a verification link before any workspace is activated.">
     <Card>
       <CardHeader><CardTitle>Create account</CardTitle><CardDescription>Use a work email you can access now.</CardDescription></CardHeader>
       <CardContent>
         {signup.isSuccess ? <div className="rounded-xl border border-emerald-400/30 bg-emerald-400/10 p-4 text-sm text-emerald-100">Check your inbox for a verification link. It expires automatically for your protection.</div> : (
-          <form className="space-y-4" onSubmit={(event) => { event.preventDefault(); if (password !== confirmation) return; signup.mutate(); }}>
-            <Field id="signup-name" label="Your name" value={name} onChange={setName} autoComplete="name" />
-            <Field id="signup-email" label="Work email" type="email" value={email} onChange={setEmail} autoComplete="email" />
-            <Field id="signup-password" label="Password" type="password" value={password} onChange={setPassword} autoComplete="new-password" placeholder="12+ characters, letters and numbers" />
-            <Field id="signup-confirmation" label="Confirm password" type="password" value={confirmation} onChange={setConfirmation} autoComplete="new-password" />
-            {password && confirmation && password !== confirmation ? <p className="text-sm text-rose-300">Passwords do not match.</p> : null}
+          <form className="space-y-4" onSubmit={(event) => { event.preventDefault(); if (!canSubmit) return; signup.mutate(); }}>
+            <Field id="signup-name" label="Your name" value={name} onChange={setName} autoComplete="name" hint="Use the name colleagues will recognize in workspace activity." />
+            <Field id="signup-email" label="Work email" type="email" value={email} onChange={setEmail} autoComplete="email" tooltip="We use this only for account verification and security notices." error={emailError} />
+            <Field id="signup-password" label="Password" type="password" value={password} onChange={setPassword} autoComplete="new-password" placeholder="12+ characters, letters and numbers" tooltip="Long, unique passwords protect your workspace." hint="At least 12 characters, with letters and numbers." error={passwordError} />
+            <Field id="signup-confirmation" label="Confirm password" type="password" value={confirmation} onChange={setConfirmation} autoComplete="new-password" error={confirmationError} />
             {signup.isError ? <p className="text-sm text-rose-300">{readableError(signup.error)}</p> : null}
-            <ActionButton pending={signup.isPending}>Create account and send verification</ActionButton>
+            <ActionButton pending={signup.isPending} disabled={!canSubmit}>Create account and send verification</ActionButton>
           </form>
         )}
         <p className="mt-5 text-sm text-slate-400">Already have an account? <Link href="/portal" className="font-medium text-cyan-300 hover:text-cyan-200">Sign in</Link></p>
@@ -163,15 +175,18 @@ export function PasswordResetPage() {
   const requestReset = useMutation({ mutationFn: () => request<{ accepted: boolean }>("/api/auth/password-reset/request", { email }) });
   const confirmReset = useMutation({ mutationFn: () => request<{ redirect: string }>("/api/auth/password-reset/confirm", { token, password }), onSuccess: (result) => { window.location.href = result.redirect; } });
   const isConfirming = Boolean(token);
+  const emailError = email && !/^\S+@\S+\.\S+$/.test(email) ? "Enter a valid work email address." : "";
+  const passwordError = password && !/^(?=.*[A-Za-z])(?=.*\d).{12,}$/.test(password) ? "Use at least 12 characters, including letters and numbers." : "";
+  const confirmationError = confirmation && password !== confirmation ? "Passwords do not match." : "";
+  const canConfirm = Boolean(password && confirmation) && !passwordError && !confirmationError;
   return <PublicShell eyebrow="Account recovery" title={isConfirming ? "Choose a new password" : "Reset your password"} description={isConfirming ? "Use a strong, unique password for your operator account." : "Enter your work email. If it matches an active verified account, we will send a recovery link."}>
     <Card><CardHeader><CardTitle>{isConfirming ? "Set new password" : "Request reset link"}</CardTitle></CardHeader><CardContent>
-      {isConfirming ? <form className="space-y-4" onSubmit={(event) => { event.preventDefault(); if (password === confirmation) confirmReset.mutate(); }}>
-        <Field id="reset-password" label="New password" type="password" value={password} onChange={setPassword} autoComplete="new-password" />
-        <Field id="reset-confirmation" label="Confirm new password" type="password" value={confirmation} onChange={setConfirmation} autoComplete="new-password" />
-        {password && confirmation && password !== confirmation ? <p className="text-sm text-rose-300">Passwords do not match.</p> : null}
+      {isConfirming ? <form className="space-y-4" onSubmit={(event) => { event.preventDefault(); if (!canConfirm) return; confirmReset.mutate(); }}>
+        <Field id="reset-password" label="New password" type="password" value={password} onChange={setPassword} autoComplete="new-password" tooltip="Choose a password you have not used for this account." hint="At least 12 characters, with letters and numbers." error={passwordError} />
+        <Field id="reset-confirmation" label="Confirm new password" type="password" value={confirmation} onChange={setConfirmation} autoComplete="new-password" error={confirmationError} />
         {confirmReset.isError ? <p className="text-sm text-rose-300">{readableError(confirmReset.error)}</p> : null}
-        <ActionButton pending={confirmReset.isPending}>Update password</ActionButton>
-      </form> : requestReset.isSuccess ? <p className="rounded-xl border border-emerald-400/30 bg-emerald-400/10 p-4 text-sm text-emerald-100">If an eligible account exists, a reset link has been sent.</p> : <form className="space-y-4" onSubmit={(event) => { event.preventDefault(); requestReset.mutate(); }}><Field id="reset-email" label="Work email" type="email" value={email} onChange={setEmail} autoComplete="email" /><ActionButton pending={requestReset.isPending}>Send recovery link</ActionButton></form>}
+        <ActionButton pending={confirmReset.isPending} disabled={!canConfirm}>Update password</ActionButton>
+      </form> : requestReset.isSuccess ? <p className="rounded-xl border border-emerald-400/30 bg-emerald-400/10 p-4 text-sm text-emerald-100">If an eligible account exists, a reset link has been sent.</p> : <form className="space-y-4" onSubmit={(event) => { event.preventDefault(); if (!emailError && email) requestReset.mutate(); }}><Field id="reset-email" label="Work email" type="email" value={email} onChange={setEmail} autoComplete="email" tooltip="For privacy, we show the same response whether or not this address has an account." error={emailError} /><ActionButton pending={requestReset.isPending} disabled={!email || Boolean(emailError)}>Send recovery link</ActionButton></form>}
       <p className="mt-5 text-center text-sm"><Link href="/portal" className="font-medium text-cyan-300 hover:text-cyan-200">Return to sign in</Link></p>
     </CardContent></Card>
   </PublicShell>;
@@ -244,7 +259,12 @@ export function OnboardingPage() {
 export function InviteTeamPage() {
   const [email, setEmail] = useState("");
   const [role, setRole] = useState("operator");
+  const [statusFilter, setStatusFilter] = useState<"all" | InvitationStatus["status"]>("all");
+  const [roleFilter, setRoleFilter] = useState("all");
+  const [search, setSearch] = useState("");
+  const [sortBy, setSortBy] = useState("newest");
   const invitations = useQuery({ queryKey: ["invitation-status"], queryFn: () => request<{ invitations: InvitationStatus[] }>("/api/auth/invitations/status") });
   const invite = useMutation({ mutationFn: () => request<{ invited: boolean }>("/api/auth/invitations", { email, role }), onSuccess: () => { invitations.refetch(); setEmail(""); } });
-  return <DashboardLayout><div className="mx-auto max-w-3xl space-y-6"><div><p className="text-xs font-semibold uppercase tracking-[0.2em] text-cyan-300">Team access</p><h1 className="mt-2 text-3xl font-semibold text-white">Invite and monitor your team</h1><p className="mt-2 text-slate-400">Tenant administrators can issue role-specific invitations and see whether each link is still pending, accepted, or expired.</p></div><Card><CardHeader><CardTitle>New invitation</CardTitle><CardDescription>Only invite colleagues who should have access to this tenant.</CardDescription></CardHeader><CardContent><form className="space-y-4" onSubmit={(event) => { event.preventDefault(); invite.mutate(); }}><Field id="invite-email" label="Work email" type="email" value={email} onChange={setEmail} autoComplete="email" /><label className="block space-y-2"><span className="text-sm font-medium text-slate-200">Role</span><select value={role} onChange={(event) => setRole(event.target.value)} className="w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-slate-100 outline-none focus:border-cyan-400"><option value="operator">Operator</option><option value="viewer">Viewer</option><option value="admin">Administrator</option></select></label>{invite.isError ? <p className="text-sm text-rose-300">{readableError(invite.error)}</p> : null}{invite.isSuccess ? <p className="text-sm text-emerald-300" role="status">Invitation sent. The recipient will receive a secure acceptance link.</p> : null}<ActionButton pending={invite.isPending}>Send invitation</ActionButton></form></CardContent></Card><Card><CardHeader><CardTitle>Invitation status</CardTitle><CardDescription>Invitation tokens are never shown. Status is calculated from tenant-scoped token state.</CardDescription></CardHeader><CardContent>{invitations.isLoading ? <p className="text-sm text-slate-400">Loading invitations…</p> : invitations.isError ? <p className="text-sm text-rose-300">Invitation status is unavailable.</p> : invitations.data?.invitations.length ? <ul className="invitation-status-list">{invitations.data.invitations.map((entry) => <li key={entry.id}><div><strong>{entry.email}</strong><span>{entry.role ?? "operator"} · sent {new Date(entry.createdAt).toLocaleDateString()}</span></div><span className={`invitation-status invitation-status-${entry.status}`}>{entry.status}</span></li>)}</ul> : <p className="text-sm text-slate-400">No invitations have been sent from this tenant yet.</p>}</CardContent></Card></div></DashboardLayout>;
+  const visibleInvitations = useMemo(() => (invitations.data?.invitations ?? []).filter((entry) => (statusFilter === "all" || entry.status === statusFilter) && (roleFilter === "all" || (entry.role ?? "operator") === roleFilter) && entry.email.toLowerCase().includes(search.trim().toLowerCase())).sort((left, right) => sortBy === "recipient" ? left.email.localeCompare(right.email) : sortBy === "expiry" ? new Date(left.expiresAt).getTime() - new Date(right.expiresAt).getTime() : sortBy === "oldest" ? new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime() : new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()), [invitations.data?.invitations, roleFilter, search, sortBy, statusFilter]);
+  return <DashboardLayout><div className="mx-auto max-w-3xl space-y-6"><div><p className="text-xs font-semibold uppercase tracking-[0.2em] text-cyan-300">Team access</p><h1 className="mt-2 text-3xl font-semibold text-white">Invite and monitor your team</h1><p className="mt-2 text-slate-400">Tenant administrators can issue role-specific invitations and see whether each link is still pending, accepted, or expired.</p></div><Card><CardHeader><CardTitle>New invitation</CardTitle><CardDescription>Only invite colleagues who should have access to this tenant.</CardDescription></CardHeader><CardContent><form className="space-y-4" onSubmit={(event) => { event.preventDefault(); invite.mutate(); }}><Field id="invite-email" label="Work email" type="email" value={email} onChange={setEmail} autoComplete="email" tooltip="Use a colleague’s work address; invitation links are single-use." /><label className="block space-y-2"><span className="text-sm font-medium text-slate-200">Role</span><select value={role} onChange={(event) => setRole(event.target.value)} className="w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-slate-100 outline-none focus:border-cyan-400"><option value="operator">Operator</option><option value="viewer">Viewer</option><option value="admin">Administrator</option></select></label>{invite.isError ? <p className="text-sm text-rose-300">{readableError(invite.error)}</p> : null}{invite.isSuccess ? <p className="text-sm text-emerald-300" role="status">Invitation sent. The recipient will receive a secure acceptance link.</p> : null}<ActionButton pending={invite.isPending}>Send invitation</ActionButton></form></CardContent></Card><Card><CardHeader><CardTitle>Invitation status</CardTitle><CardDescription>Invitation tokens are never shown. Status is calculated from tenant-scoped token state.</CardDescription></CardHeader><CardContent>{invitations.isLoading ? <p className="text-sm text-slate-400">Loading invitations…</p> : invitations.isError ? <p className="text-sm text-rose-300">Invitation status is unavailable.</p> : invitations.data?.invitations.length ? <><div className="invitation-toolbar" aria-label="Invitation filters and sorting"><Field id="invitation-search" label="Find invite" value={search} onChange={setSearch} placeholder="Search email" /><label><span>Status</span><select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as typeof statusFilter)}><option value="all">All statuses</option><option value="pending">Pending</option><option value="accepted">Accepted</option><option value="expired">Expired</option></select></label><label><span>Role</span><select value={roleFilter} onChange={(event) => setRoleFilter(event.target.value)}><option value="all">All roles</option><option value="operator">Operator</option><option value="viewer">Viewer</option><option value="admin">Administrator</option></select></label><label><span>Sort by</span><select value={sortBy} onChange={(event) => setSortBy(event.target.value)}><option value="newest">Newest sent</option><option value="oldest">Oldest sent</option><option value="expiry">Expiring soon</option><option value="recipient">Recipient A–Z</option></select></label></div><p className="invitation-result-count" role="status">{visibleInvitations.length} of {invitations.data.invitations.length} invitations shown</p>{visibleInvitations.length ? <ul className="invitation-status-list">{visibleInvitations.map((entry) => <li key={entry.id}><div><strong>{entry.email}</strong><span>{entry.role ?? "operator"} · sent {new Date(entry.createdAt).toLocaleDateString()} · expires {new Date(entry.expiresAt).toLocaleDateString()}</span></div><span className={`invitation-status invitation-status-${entry.status}`}>{entry.status}</span></li>)}</ul> : <p className="text-sm text-slate-400">No invitations match these filters.</p>}</> : <p className="text-sm text-slate-400">No invitations have been sent from this tenant yet.</p>}</CardContent></Card></div></DashboardLayout>;
 }
