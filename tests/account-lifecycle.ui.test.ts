@@ -79,7 +79,20 @@ describe("account lifecycle onboarding UI", () => {
     expect(page).toContain("transfer-ownership");
     expect(page).toContain("Transfer recipient administrator");
     expect(actions).toContain('"/api/auth/members/actions/bulk/role"');
-    expect(actions).toContain('"/api/auth/invitations/activity.csv"');
-    expect(actions).toContain("Update {selected.length} selected");
+    expect(actions).toContain("/api/auth/invitations/activity.csv?");
+    expect(actions).toContain("Review {selected.length} selected");
+  });
+
+  it("requires role-change confirmation and exposes bounded CSV filters with preset audit history", async () => {
+    const page = await readFile(resolve(root, "client/src/pages/AccountLifecycle.tsx"), "utf8");
+    const actions = await readFile(resolve(root, "client/src/pages/TenantAdminActions.tsx"), "utf8");
+
+    expect(actions).toContain("roleConfirmationOpen");
+    expect(actions).toContain("Confirm role change");
+    expect(actions).toContain("activityStartDate");
+    expect(actions).toContain("activityEndDate");
+    expect(actions).toContain("activityStatus");
+    expect(page).toContain("Preset ownership history");
+    expect(page).toContain("tenant-branding-preset-ownership-history");
   });
 });

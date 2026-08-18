@@ -200,9 +200,17 @@ transfer_status="$(curl --silent --show-error --output /tmp/lifecycle-preset-tra
 test "$transfer_status" = '200'
 psql "$TEST_DATABASE_URL" -Atqc "SELECT count(*) FROM tenant_branding_presets WHERE id = '${preset_id}' AND created_by_operator_id = ${invitee_operator_id} AND ownership_transferred_at IS NOT NULL" | grep -qx '1'
 
-csv_status="$(curl --silent --show-error --output /tmp/lifecycle-invitation-activity.csv --write-out '%{http_code}' -b "$cookie_file" "${LIFECYCLE_TEST_BASE_URL%/}/api/auth/invitations/activity.csv")"
+audit_status="$(curl --silent --show-error --output /tmp/lifecycle-preset-ownership-history.json --write-out '%{http_code}' \
+  -b "$cookie_file" "${LIFECYCLE_TEST_BASE_URL%/}/api/auth/tenant-branding/presets/audit-history")"
+test "$audit_status" = '200'
+grep -q "\"presetId\":\"${preset_id}\"" /tmp/lifecycle-preset-ownership-history.json
+grep -q "\"toOperatorEmail\":\"${LIFECYCLE_TEST_INVITEE_EMAIL}\"" /tmp/lifecycle-preset-ownership-history.json
+
+activity_date="$(date +%F)"
+csv_status="$(curl --silent --show-error --output /tmp/lifecycle-invitation-activity.csv --write-out '%{http_code}' -b "$cookie_file" "${LIFECYCLE_TEST_BASE_URL%/}/api/auth/invitations/activity.csv?status=accepted&startDate=${activity_date}&endDate=${activity_date}")"
 test "$csv_status" = '200'
 grep -q '"invitation_id","recipient_email","role","status"' /tmp/lifecycle-invitation-activity.csv
 grep -q "${LIFECYCLE_TEST_INVITEE_EMAIL}" /tmp/lifecycle-invitation-activity.csv
+grep -q '"accepted"' /tmp/lifecycle-invitation-activity.csv
 
 echo "isolated account lifecycle rehearsal passed"

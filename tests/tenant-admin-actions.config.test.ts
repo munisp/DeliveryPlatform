@@ -79,4 +79,17 @@ describe("tenant admin action contracts", () => {
     expect(store).toContain("formulaSafe");
     expect(store).toContain("exportInvitationActivityCsv");
   });
+
+  it("bounds invitation export filters and records tenant-scoped ownership audit history", async () => {
+    const store = await readFile(resolve(root, "server/_core/accountLifecycleStore.ts"), "utf8");
+    const migration = await readFile(resolve(root, "drizzle/0013_tenant_branding_preset_ownership_audit.sql"), "utf8");
+    const rollback = await readFile(resolve(root, "drizzle/rollback/0013_tenant_branding_preset_ownership_audit.down.sql"), "utf8");
+
+    expect(store).toContain("normalizeActivityFilters");
+    expect(store).toContain("invitation_activity_range_too_large");
+    expect(store).toContain("listTenantBrandingPresetOwnershipAudit");
+    expect(store).toContain("tenant_branding_preset_ownership_audit");
+    expect(migration).toContain("tenant_branding_preset_ownership_audit_lookup");
+    expect(rollback).toContain("DROP TABLE IF EXISTS tenant_branding_preset_ownership_audit");
+  });
 });

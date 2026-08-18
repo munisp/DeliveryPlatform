@@ -50,6 +50,16 @@ export type TenantBrandingPreset = TenantBranding & {
   sourceTenantName?: string;
 };
 
+export type TenantBrandingPresetOwnershipAudit = {
+  id: string;
+  presetId: string;
+  presetName: string;
+  fromOperatorEmail: string | null;
+  toOperatorEmail: string | null;
+  transferredByOperatorEmail: string | null;
+  transferredAt: Date;
+};
+
 export type InvitationStatus = {
   id: string;
   email: string;
@@ -62,7 +72,7 @@ export type InvitationStatus = {
 };
 
 const supportedRoles = new Set<LifecycleRole>(["admin", "operator", "viewer"]);
-const requiredTables = ["organizations", "platform_tenants", "organization_memberships", "account_lifecycle_tokens", "tenant_branding_presets"];
+const requiredTables = ["organizations", "platform_tenants", "organization_memberships", "account_lifecycle_tokens", "tenant_branding_presets", "tenant_branding_preset_ownership_audit"];
 const maxBulkInvitationActions = 10;
 const maxBulkMemberRoleChanges = 10;
 let schemaReady: Promise<void> | null = null;
@@ -126,6 +136,24 @@ function normalizeMemberIds(values: number[]) {
   const ids = [...new Set(values.filter((value) => Number.isInteger(value) && value > 0))];
   if (!ids.length || ids.length > maxBulkMemberRoleChanges) throw new Error("invalid_member_selection");
   return ids;
+}
+
+function normalizeActivityFilters(input: { status?: string | null; startDate?: string | null; endDate?: string | null }) {
+  const statuses = new Set<InvitationStatus["status"]>(["pending", "accepted", "expired", "revoked"]);
+  const parseDate = (value: string | null | undefined, boundary: "start" | "end") => {
+    if (!value) return null;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) throw new Error("invalid_invitation_activity_date");
+    const parsed = new Date(`${value}T${boundary === "start" ? "00:00:00.000" : "23:59:59.999"}Z`);
+    if (Number.isNaN(parsed.getTime())) throw new Error("invalid_invitation_activity_date");
+    return parsed;
+  };
+  const status = input.status && input.status !== "all" ? input.status as InvitationStatus["status"] : null;
+  if (status && !statuses.has(status)) throw new Error("invalid_invitation_activity_status");
+  const startDate = parseDate(input.startDate, "start");
+  const endDate = parseDate(input.endDate, "end");
+  if (startDate && endDate && startDate > endDate) throw new Error("invalid_invitation_activity_date_range");
+  if (startDate && endDate && endDate.getTime() - startDate.getTime() > 366 * 24 * 60 * 60 * 1000) throw new Error("invitation_activity_range_too_large");
+  return { status, startDate, endDate };
 }
 
 function csvCell(value: string | null | undefined) {
@@ -260,6 +288,15 @@ export async function ensureAccountLifecycleStore() {
         await client.query("ALTER TABLE tenant_branding_presets ADD COLUMN IF NOT EXISTS shared_at TIMESTAMPTZ");
         await client.query("ALTER TABLE tenant_branding_presets ADD COLUMN IF NOT EXISTS ownership_transferred_by_operator_id INTEGER REFERENCES operator_credentials(id) ON DELETE SET NULL");
         await client.query("ALTER TABLE tenant_branding_presets ADD COLUMN IF NOT EXISTS ownership_transferred_at TIMESTAMPTZ");
+        await client.query(`CREATE TABLE IF NOT EXISTS tenant_branding_preset_ownership_audit (
+          id UUID PRIMARY KEY, preset_id UUID NOT NULL, preset_name VARCHAR(80) NOT NULL,
+          tenant_id VARCHAR(128) NOT NULL REFERENCES platform_tenants(id) ON DELETE CASCADE,
+          organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+          from_operator_id INTEGER REFERENCES operator_credentials(id) ON DELETE SET NULL,
+          to_operator_id INTEGER REFERENCES operator_credentials(id) ON DELETE SET NULL,
+          transferred_by_operator_id INTEGER REFERENCES operator_credentials(id) ON DELETE SET NULL,
+          transferred_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
+        await client.query("CREATE INDEX IF NOT EXISTS tenant_branding_preset_ownership_audit_lookup ON tenant_branding_preset_ownership_audit (tenant_id, transferred_at DESC)");
         await client.query(`UPDATE tenant_branding_presets preset SET organization_id = tenant.organization_id
           FROM platform_tenants tenant WHERE preset.tenant_id = tenant.id AND preset.organization_id IS NULL`);
         await client.query("CREATE INDEX IF NOT EXISTS tenant_branding_presets_organization_sharing_lookup ON tenant_branding_presets (organization_id, shared_at DESC) WHERE organization_shared = TRUE");
@@ -671,10 +708,31 @@ export async function bulkChangeMemberRoles(input: { operatorId: number; memberI
   }
 }
 
-export async function exportInvitationActivityCsv(operatorId: number) {
-  const invitations = await listInvitationStatuses(operatorId);
+export async function exportInvitationActivityCsv(input: { operatorId: number; status?: string | null; startDate?: string | null; endDate?: string | null }) {
+  await ensureAccountLifecycleStore();
+  const { operator } = await getTenantAdminContext(input.operatorId);
+  const filters = normalizeActivityFilters(input);
+  const result = await getOperatorAuthPool().query<{
+    id: string; email: string; role: LifecycleRole | null; created_at: Date; expires_at: Date; consumed_at: Date | null; revoked_at: Date | null; status: InvitationStatus["status"];
+  }>(
+    `WITH invitation_activity AS (
+       SELECT id, email, role, created_at, expires_at, consumed_at, revoked_at,
+         CASE WHEN consumed_at IS NOT NULL THEN 'accepted'
+              WHEN revoked_at IS NOT NULL THEN 'revoked'
+              WHEN expires_at <= NOW() THEN 'expired'
+              ELSE 'pending' END AS status
+       FROM account_lifecycle_tokens
+       WHERE tenant_id = $1 AND purpose = 'invitation'
+     )
+     SELECT * FROM invitation_activity
+     WHERE ($2::text IS NULL OR status = $2)
+       AND ($3::timestamptz IS NULL OR created_at >= $3)
+       AND ($4::timestamptz IS NULL OR created_at <= $4)
+     ORDER BY created_at DESC LIMIT 5000`,
+    [operator.tenant_id, filters.status, filters.startDate, filters.endDate],
+  );
   const header = ["invitation_id", "recipient_email", "role", "status", "sent_at", "expires_at", "accepted_at", "revoked_at"];
-  const rows = invitations.map((invitation) => [invitation.id, invitation.email, invitation.role ?? "", invitation.status, invitation.createdAt.toISOString(), invitation.expiresAt.toISOString(), invitation.acceptedAt?.toISOString() ?? "", invitation.revokedAt?.toISOString() ?? ""]);
+  const rows = result.rows.map((invitation) => [invitation.id, invitation.email, invitation.role ?? "", invitation.status, invitation.created_at.toISOString(), invitation.expires_at.toISOString(), invitation.consumed_at?.toISOString() ?? "", invitation.revoked_at?.toISOString() ?? ""]);
   return [header, ...rows].map((row) => row.map((value) => csvCell(value)).join(",")).join("\r\n");
 }
 
@@ -791,15 +849,50 @@ export async function transferTenantBrandingPresetOwnership(input: { operatorId:
     [organizationId, assertEmail(input.recipientEmail), operator.tenant_id, operator.id],
   );
   if (!recipient.rows[0]) throw new Error("preset_transfer_recipient_invalid");
-  const result = await getOperatorAuthPool().query<{ id: string; created_by_operator_id: number }>(
-    `UPDATE tenant_branding_presets
-     SET created_by_operator_id = $4, ownership_transferred_by_operator_id = $5, ownership_transferred_at = NOW(), updated_at = NOW()
-     WHERE id = $1 AND tenant_id = $2 AND organization_id = $3 AND created_by_operator_id = $5
-     RETURNING id, created_by_operator_id`,
-    [input.presetId, operator.tenant_id, organizationId, recipient.rows[0].id, operator.id],
+  const client = await getOperatorAuthPool().connect();
+  try {
+    await client.query("BEGIN");
+    const result = await client.query<{ id: string; name: string; created_by_operator_id: number }>(
+      `UPDATE tenant_branding_presets
+       SET created_by_operator_id = $4, ownership_transferred_by_operator_id = $5, ownership_transferred_at = NOW(), updated_at = NOW()
+       WHERE id = $1 AND tenant_id = $2 AND organization_id = $3 AND created_by_operator_id = $5
+       RETURNING id, name, created_by_operator_id`,
+      [input.presetId, operator.tenant_id, organizationId, recipient.rows[0].id, operator.id],
+    );
+    const preset = result.rows[0];
+    if (!preset) throw new Error("branding_preset_not_found");
+    await client.query(
+      `INSERT INTO tenant_branding_preset_ownership_audit
+       (id, preset_id, preset_name, tenant_id, organization_id, from_operator_id, to_operator_id, transferred_by_operator_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+      [randomUUID(), preset.id, preset.name, operator.tenant_id, organizationId, operator.id, recipient.rows[0].id, operator.id],
+    );
+    await client.query("COMMIT");
+    return { id: preset.id, ownerOperatorId: preset.created_by_operator_id };
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function listTenantBrandingPresetOwnershipAudit(operatorId: number): Promise<TenantBrandingPresetOwnershipAudit[]> {
+  await ensureAccountLifecycleStore();
+  const { operator } = await getTenantAdminContext(operatorId);
+  const result = await getOperatorAuthPool().query<{
+    id: string; preset_id: string; preset_name: string; from_email: string | null; to_email: string | null; transferred_by_email: string | null; transferred_at: Date;
+  }>(
+    `SELECT audit.id, audit.preset_id, audit.preset_name, source.email AS from_email, recipient.email AS to_email,
+            actor.email AS transferred_by_email, audit.transferred_at
+     FROM tenant_branding_preset_ownership_audit audit
+     LEFT JOIN operator_credentials source ON source.id = audit.from_operator_id
+     LEFT JOIN operator_credentials recipient ON recipient.id = audit.to_operator_id
+     LEFT JOIN operator_credentials actor ON actor.id = audit.transferred_by_operator_id
+     WHERE audit.tenant_id = $1 ORDER BY audit.transferred_at DESC LIMIT 100`,
+    [operator.tenant_id],
   );
-  if (!result.rows[0]) throw new Error("branding_preset_not_found");
-  return { id: result.rows[0].id, ownerOperatorId: result.rows[0].created_by_operator_id };
+  return result.rows.map((row) => ({ id: row.id, presetId: row.preset_id, presetName: row.preset_name, fromOperatorEmail: row.from_email, toOperatorEmail: row.to_email, transferredByOperatorEmail: row.transferred_by_email, transferredAt: row.transferred_at }));
 }
 
 export async function listOrganizationSharedBrandingPresets(operatorId: number): Promise<TenantBrandingPreset[]> {

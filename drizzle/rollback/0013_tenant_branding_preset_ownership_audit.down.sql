@@ -1,0 +1,2 @@
+DROP INDEX IF EXISTS tenant_branding_preset_ownership_audit_lookup;
+DROP TABLE IF EXISTS tenant_branding_preset_ownership_audit;

@@ -36,6 +36,7 @@ import {
   listInvitationStatuses,
   listOrganizationSharedBrandingPresets,
   listTenantMembers,
+  listTenantBrandingPresetOwnershipAudit,
   listTenantBrandingPresets,
   requestPasswordReset,
   resendInvitation,
@@ -590,8 +591,11 @@ app.get("/api/auth/invitations/activity.csv", rateLimit(10), async (req, res) =>
   const user = requireAuthenticatedOperator(req, res);
   if (!user) return;
   try {
-    const csv = await exportInvitationActivityCsv(Number(user.id));
-    await recordOperationalEvent({ eventType: "auth.invitation_activity_exported", actorId: `${user.id}`, actorRole: user.role, tenantId: user.tenantId, route: req.path, outcome: "success" });
+    const status = typeof req.query.status === "string" ? req.query.status : null;
+    const startDate = typeof req.query.startDate === "string" ? req.query.startDate : null;
+    const endDate = typeof req.query.endDate === "string" ? req.query.endDate : null;
+    const csv = await exportInvitationActivityCsv({ operatorId: Number(user.id), status, startDate, endDate });
+    await recordOperationalEvent({ eventType: "auth.invitation_activity_exported", actorId: `${user.id}`, actorRole: user.role, tenantId: user.tenantId, route: req.path, outcome: "success", payload: { status, startDate, endDate } });
     res.setHeader("Content-Type", "text/csv; charset=utf-8");
     res.setHeader("Content-Disposition", 'attachment; filename="invitation-activity.csv"');
     res.status(200).send(csv);
@@ -705,6 +709,17 @@ app.get("/api/auth/tenant-branding/presets/shared", async (req, res) => {
   if (!user) return;
   try {
     res.status(200).json({ presets: await listOrganizationSharedBrandingPresets(Number(user.id)) });
+  } catch (error) {
+    const mapped = lifecycleErrorStatus(error);
+    res.status(mapped.code === "tenant_admin_required" ? 403 : mapped.status).json({ error: mapped.code });
+  }
+});
+
+app.get("/api/auth/tenant-branding/presets/audit-history", async (req, res) => {
+  const user = requireAuthenticatedOperator(req, res);
+  if (!user) return;
+  try {
+    res.status(200).json({ history: await listTenantBrandingPresetOwnershipAudit(Number(user.id)) });
   } catch (error) {
     const mapped = lifecycleErrorStatus(error);
     res.status(mapped.code === "tenant_admin_required" ? 403 : mapped.status).json({ error: mapped.code });
