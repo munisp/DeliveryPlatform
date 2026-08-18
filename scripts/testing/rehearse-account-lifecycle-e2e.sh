@@ -61,6 +61,19 @@ branding_status="$(curl --silent --show-error --output /tmp/lifecycle-branding.j
 test "$branding_status" = '200'
 grep -q '"primaryColor":"#2563eb"' /tmp/lifecycle-branding.json
 
+preset_status="$(curl --silent --show-error --output /tmp/lifecycle-branding-preset.json --write-out '%{http_code}' \
+  -b "$cookie_file" -H 'Content-Type: application/json' \
+  --data '{"name":"Lifecycle rehearsal","logoDataUrl":null,"primaryColor":"#2563eb","accentColor":"#172554"}' \
+  "${LIFECYCLE_TEST_BASE_URL%/}/api/auth/tenant-branding/presets")"
+test "$preset_status" = '201'
+preset_id="$(grep -oE '"id":"[^"]+"' /tmp/lifecycle-branding-preset.json | head -1 | cut -d'"' -f4)"
+test -n "$preset_id"
+apply_preset_status="$(curl --silent --show-error --output /tmp/lifecycle-branding-preset-applied.json --write-out '%{http_code}' \
+  -b "$cookie_file" -H 'Content-Type: application/json' --data '{}' \
+  "${LIFECYCLE_TEST_BASE_URL%/}/api/auth/tenant-branding/presets/${preset_id}/apply")"
+test "$apply_preset_status" = '200'
+grep -q '"primaryColor":"#2563eb"' /tmp/lifecycle-branding-preset-applied.json
+
 invitation_status="$(curl --silent --show-error --output /tmp/lifecycle-invitation.json --write-out '%{http_code}' \
   -b "$cookie_file" -H 'Content-Type: application/json' \
   --data "{\"email\":\"${LIFECYCLE_TEST_INVITEE_EMAIL}\",\"role\":\"viewer\"}" \
@@ -71,9 +84,40 @@ pending_status="$(curl --silent --show-error -b "$cookie_file" "${LIFECYCLE_TEST
 printf '%s' "$pending_status" > /tmp/lifecycle-invitations-pending.json
 grep -q "${LIFECYCLE_TEST_INVITEE_EMAIL}" /tmp/lifecycle-invitations-pending.json
 grep -q '"status":"pending"' /tmp/lifecycle-invitations-pending.json
+invitation_id="$(grep -oE '"id":"[^"]+"' /tmp/lifecycle-invitations-pending.json | head -1 | cut -d'"' -f4)"
+test -n "$invitation_id"
 
 curl --fail --silent --show-error "${LIFECYCLE_TEST_EMAIL_SINK_URL%/}/messages" >/tmp/lifecycle-messages-after-invite.json
 invitation_token="$(grep -oE '/accept-invitation\?token=[A-Za-z0-9_-]+' /tmp/lifecycle-messages-after-invite.json | tail -1 | cut -d= -f2)"
+test -n "$invitation_token"
+
+resend_status="$(curl --silent --show-error --output /tmp/lifecycle-invitation-resent.json --write-out '%{http_code}' \
+  -b "$cookie_file" -H 'Content-Type: application/json' --data '{}' \
+  "${LIFECYCLE_TEST_BASE_URL%/}/api/auth/invitations/${invitation_id}/resend")"
+test "$resend_status" = '202'
+stale_accept_status="$(curl --silent --show-error --output /tmp/lifecycle-stale-invitation.json --write-out '%{http_code}' \
+  -H 'Content-Type: application/json' \
+  --data "{\"token\":\"${invitation_token}\",\"name\":\"Lifecycle Test Invitee\",\"password\":\"${LIFECYCLE_TEST_INVITEE_PASSWORD}\"}" \
+  "${LIFECYCLE_TEST_BASE_URL%/}/api/auth/invitations/accept")"
+test "$stale_accept_status" = '400'
+
+pending_after_resend="$(curl --silent --show-error -b "$cookie_file" "${LIFECYCLE_TEST_BASE_URL%/}/api/auth/invitations/status")"
+printf '%s' "$pending_after_resend" >/tmp/lifecycle-invitations-after-resend.json
+grep -q '"status":"revoked"' /tmp/lifecycle-invitations-after-resend.json
+refreshed_invitation_id="$(grep -oE '"id":"[^"]+"' /tmp/lifecycle-invitations-after-resend.json | head -1 | cut -d'"' -f4)"
+test -n "$refreshed_invitation_id"
+revoke_status="$(curl --silent --show-error --output /tmp/lifecycle-invitation-revoked.json --write-out '%{http_code}' \
+  -b "$cookie_file" -H 'Content-Type: application/json' --data '{}' \
+  "${LIFECYCLE_TEST_BASE_URL%/}/api/auth/invitations/${refreshed_invitation_id}/revoke")"
+test "$revoke_status" = '200'
+
+final_invitation_status="$(curl --silent --show-error --output /tmp/lifecycle-invitation-final.json --write-out '%{http_code}' \
+  -b "$cookie_file" -H 'Content-Type: application/json' \
+  --data "{\"email\":\"${LIFECYCLE_TEST_INVITEE_EMAIL}\",\"role\":\"viewer\"}" \
+  "${LIFECYCLE_TEST_BASE_URL%/}/api/auth/invitations")"
+test "$final_invitation_status" = '202'
+curl --fail --silent --show-error "${LIFECYCLE_TEST_EMAIL_SINK_URL%/}/messages" >/tmp/lifecycle-messages-after-resend.json
+invitation_token="$(grep -oE '/accept-invitation\?token=[A-Za-z0-9_-]+' /tmp/lifecycle-messages-after-resend.json | tail -1 | cut -d= -f2)"
 test -n "$invitation_token"
 
 accept_status="$(curl --silent --show-error --output /tmp/lifecycle-invitation-accept.json --write-out '%{http_code}' \

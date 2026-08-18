@@ -41,6 +41,13 @@ export type TenantBranding = {
   updatedAt: Date | null;
 };
 
+export type TenantBrandingPreset = TenantBranding & {
+  id: string;
+  name: string;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
 export type InvitationStatus = {
   id: string;
   email: string;
@@ -48,11 +55,12 @@ export type InvitationStatus = {
   createdAt: Date;
   expiresAt: Date;
   acceptedAt: Date | null;
-  status: "pending" | "accepted" | "expired";
+  revokedAt: Date | null;
+  status: "pending" | "accepted" | "expired" | "revoked";
 };
 
 const supportedRoles = new Set<LifecycleRole>(["admin", "operator", "viewer"]);
-const requiredTables = ["organizations", "platform_tenants", "organization_memberships", "account_lifecycle_tokens"];
+const requiredTables = ["organizations", "platform_tenants", "organization_memberships", "account_lifecycle_tokens", "tenant_branding_presets"];
 let schemaReady: Promise<void> | null = null;
 
 function normalizeEmail(value: string) {
@@ -96,6 +104,10 @@ function normalizeLogoDataUrl(value: string | null | undefined) {
   if (value.length > 350_000) throw new Error("branding_logo_too_large");
   if (!/^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/]+={0,2}$/.test(value)) throw new Error("invalid_branding_logo");
   return value;
+}
+
+function normalizePresetName(value: string) {
+  return normalizeName(value, "branding_preset_name").slice(0, 80);
 }
 
 function toLifecycleOperator(row: OperatorRecord & { email_verified_at?: Date | null; onboarding_completed_at?: Date | null }): LifecycleOperator {
@@ -157,6 +169,12 @@ async function assertProductionSchema() {
     [["brand_logo_data_url", "brand_primary_color", "brand_accent_color", "branding_updated_at"]],
   );
   if (brandingColumns.rows.length !== 4) throw new Error("tenant_branding_migration_not_applied");
+  const revocationColumns = await getOperatorAuthPool().query<{ column_name: string }>(
+    `SELECT column_name FROM information_schema.columns
+     WHERE table_schema = 'public' AND table_name = 'account_lifecycle_tokens'
+       AND column_name = 'revoked_at'`,
+  );
+  if (revocationColumns.rows.length !== 1) throw new Error("tenant_admin_actions_migration_not_applied");
 }
 
 export async function ensureAccountLifecycleStore() {
@@ -199,6 +217,12 @@ export async function ensureAccountLifecycleStore() {
           role VARCHAR(64), expires_at TIMESTAMPTZ NOT NULL, consumed_at TIMESTAMPTZ,
           created_by_operator_id INTEGER REFERENCES operator_credentials(id) ON DELETE SET NULL,
           created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
+        await client.query("ALTER TABLE account_lifecycle_tokens ADD COLUMN IF NOT EXISTS revoked_at TIMESTAMPTZ");
+        await client.query(`CREATE TABLE IF NOT EXISTS tenant_branding_presets (
+          id UUID PRIMARY KEY, tenant_id VARCHAR(128) NOT NULL REFERENCES platform_tenants(id) ON DELETE CASCADE,
+          name VARCHAR(80) NOT NULL, logo_data_url TEXT, primary_color CHAR(7) NOT NULL,
+          accent_color CHAR(7) NOT NULL, created_by_operator_id INTEGER NOT NULL REFERENCES operator_credentials(id) ON DELETE RESTRICT,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), UNIQUE (tenant_id, name))`);
         await client.query("CREATE INDEX IF NOT EXISTS account_lifecycle_tokens_active_lookup ON account_lifecycle_tokens (purpose, email, expires_at) WHERE consumed_at IS NULL");
         await client.query("COMMIT");
       } catch (error) {
@@ -228,8 +252,8 @@ async function issueToken(input: {
   try {
     await client.query("BEGIN");
     await client.query(
-      `UPDATE account_lifecycle_tokens SET consumed_at = NOW()
-       WHERE purpose = $1 AND email = $2 AND consumed_at IS NULL`,
+      `UPDATE account_lifecycle_tokens SET revoked_at = NOW()
+       WHERE purpose = $1 AND email = $2 AND consumed_at IS NULL AND revoked_at IS NULL`,
       [input.purpose, input.email],
     );
     await client.query(
@@ -252,7 +276,7 @@ async function consumeToken(client: PoolClient, purpose: LifecyclePurpose, token
   const result = await client.query<LifecycleTokenRow>(
     `UPDATE account_lifecycle_tokens
      SET consumed_at = NOW()
-     WHERE token_hash = $1 AND purpose = $2 AND consumed_at IS NULL AND expires_at > NOW()
+     WHERE token_hash = $1 AND purpose = $2 AND consumed_at IS NULL AND revoked_at IS NULL AND expires_at > NOW()
      RETURNING id, purpose, email, operator_id, organization_id, tenant_id, role, expires_at`,
     [hashToken(token), purpose],
   );
@@ -479,10 +503,11 @@ export async function listInvitationStatuses(inviterId: number) {
   await ensureAccountLifecycleStore();
   const { operator } = await getTenantAdminContext(inviterId);
   const result = await getOperatorAuthPool().query<{
-    id: string; email: string; role: LifecycleRole | null; created_at: Date; expires_at: Date; consumed_at: Date | null; status: InvitationStatus["status"];
+    id: string; email: string; role: LifecycleRole | null; created_at: Date; expires_at: Date; consumed_at: Date | null; revoked_at: Date | null; status: InvitationStatus["status"];
   }>(
-    `SELECT id, email, role, created_at, expires_at, consumed_at,
+    `SELECT id, email, role, created_at, expires_at, consumed_at, revoked_at,
       CASE WHEN consumed_at IS NOT NULL THEN 'accepted'
+           WHEN revoked_at IS NOT NULL THEN 'revoked'
            WHEN expires_at <= NOW() THEN 'expired'
            ELSE 'pending' END AS status
      FROM account_lifecycle_tokens
@@ -490,7 +515,35 @@ export async function listInvitationStatuses(inviterId: number) {
      ORDER BY created_at DESC LIMIT 200`,
     [operator.tenant_id],
   );
-  return result.rows.map((row) => ({ id: row.id, email: row.email, role: row.role, createdAt: row.created_at, expiresAt: row.expires_at, acceptedAt: row.consumed_at, status: row.status }));
+  return result.rows.map((row) => ({ id: row.id, email: row.email, role: row.role, createdAt: row.created_at, expiresAt: row.expires_at, acceptedAt: row.consumed_at, revokedAt: row.revoked_at, status: row.status }));
+}
+
+export async function resendInvitation(input: { inviterId: number; invitationId: string }) {
+  await ensureAccountLifecycleStore();
+  const { operator, organizationId } = await getTenantAdminContext(input.inviterId);
+  const existing = await getOperatorAuthPool().query<{ email: string; role: LifecycleRole | null; expires_at: Date; consumed_at: Date | null; revoked_at: Date | null }>(
+    `SELECT email, role, expires_at, consumed_at, revoked_at FROM account_lifecycle_tokens
+     WHERE id = $1 AND tenant_id = $2 AND organization_id = $3 AND purpose = 'invitation'`,
+    [input.invitationId, operator.tenant_id, organizationId],
+  );
+  const invitation = existing.rows[0];
+  if (!invitation || invitation.consumed_at || invitation.revoked_at || invitation.expires_at <= new Date() || !invitation.role) throw new Error("invitation_not_pending");
+  const issued = await issueToken({ purpose: "invitation", email: invitation.email, organizationId, tenantId: operator.tenant_id, role: invitation.role, createdByOperatorId: operator.id });
+  await sendLifecycleEmail(invitation.email, "invitation", "You are invited to SwitchOS", `Accept your refreshed invitation: ${publicLink("/accept-invitation", issued.token)}`);
+  return { resent: true };
+}
+
+export async function revokeInvitation(input: { inviterId: number; invitationId: string }) {
+  await ensureAccountLifecycleStore();
+  const { operator, organizationId } = await getTenantAdminContext(input.inviterId);
+  const result = await getOperatorAuthPool().query(
+    `UPDATE account_lifecycle_tokens SET revoked_at = NOW()
+     WHERE id = $1 AND tenant_id = $2 AND organization_id = $3 AND purpose = 'invitation'
+       AND consumed_at IS NULL AND revoked_at IS NULL AND expires_at > NOW()`,
+    [input.invitationId, operator.tenant_id, organizationId],
+  );
+  if (result.rowCount !== 1) throw new Error("invitation_not_pending");
+  return { revoked: true };
 }
 
 export async function getTenantBranding(operatorId: number): Promise<TenantBranding> {
@@ -533,6 +586,50 @@ export async function updateTenantBranding(input: { operatorId: number; logoData
   } finally {
     client.release();
   }
+}
+
+export async function listTenantBrandingPresets(operatorId: number): Promise<TenantBrandingPreset[]> {
+  await ensureAccountLifecycleStore();
+  const { operator } = await getTenantAdminContext(operatorId);
+  const result = await getOperatorAuthPool().query<{ id: string; name: string; logo_data_url: string | null; primary_color: string; accent_color: string; created_at: Date; updated_at: Date }>(
+    `SELECT id, name, logo_data_url, primary_color, accent_color, created_at, updated_at
+     FROM tenant_branding_presets WHERE tenant_id = $1 ORDER BY updated_at DESC LIMIT 12`,
+    [operator.tenant_id],
+  );
+  return result.rows.map((row) => ({ id: row.id, name: row.name, logoDataUrl: row.logo_data_url, primaryColor: row.primary_color, accentColor: row.accent_color, createdAt: row.created_at, updatedAt: row.updated_at }));
+}
+
+export async function saveTenantBrandingPreset(input: { operatorId: number; name: string; logoDataUrl?: string | null; primaryColor: string; accentColor: string }) {
+  await ensureAccountLifecycleStore();
+  const { operator } = await getTenantAdminContext(input.operatorId);
+  const result = await getOperatorAuthPool().query<{ id: string; name: string; logo_data_url: string | null; primary_color: string; accent_color: string; created_at: Date; updated_at: Date }>(
+    `INSERT INTO tenant_branding_presets (id, tenant_id, name, logo_data_url, primary_color, accent_color, created_by_operator_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7)
+     ON CONFLICT (tenant_id, name) DO UPDATE SET logo_data_url = EXCLUDED.logo_data_url, primary_color = EXCLUDED.primary_color, accent_color = EXCLUDED.accent_color, updated_at = NOW()
+     RETURNING id, name, logo_data_url, primary_color, accent_color, created_at, updated_at`,
+    [randomUUID(), operator.tenant_id, normalizePresetName(input.name), normalizeLogoDataUrl(input.logoDataUrl), normalizeColor(input.primaryColor, "brand_primary_color"), normalizeColor(input.accentColor, "brand_accent_color"), operator.id],
+  );
+  const preset = result.rows[0];
+  return { id: preset.id, name: preset.name, logoDataUrl: preset.logo_data_url, primaryColor: preset.primary_color, accentColor: preset.accent_color, createdAt: preset.created_at, updatedAt: preset.updated_at };
+}
+
+export async function applyTenantBrandingPreset(input: { operatorId: number; presetId: string }) {
+  await ensureAccountLifecycleStore();
+  const { operator } = await getTenantAdminContext(input.operatorId);
+  const preset = await getOperatorAuthPool().query<{ logo_data_url: string | null; primary_color: string; accent_color: string }>(
+    `SELECT logo_data_url, primary_color, accent_color FROM tenant_branding_presets WHERE id = $1 AND tenant_id = $2`,
+    [input.presetId, operator.tenant_id],
+  );
+  if (!preset.rows[0]) throw new Error("branding_preset_not_found");
+  return updateTenantBranding({ operatorId: operator.id, logoDataUrl: preset.rows[0].logo_data_url, primaryColor: preset.rows[0].primary_color, accentColor: preset.rows[0].accent_color });
+}
+
+export async function deleteTenantBrandingPreset(input: { operatorId: number; presetId: string }) {
+  await ensureAccountLifecycleStore();
+  const { operator } = await getTenantAdminContext(input.operatorId);
+  const result = await getOperatorAuthPool().query(`DELETE FROM tenant_branding_presets WHERE id = $1 AND tenant_id = $2`, [input.presetId, operator.tenant_id]);
+  if (result.rowCount !== 1) throw new Error("branding_preset_not_found");
+  return { deleted: true };
 }
 
 export async function acceptInvitation(input: { token: string; name: string; password: string }) {

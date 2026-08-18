@@ -24,7 +24,7 @@ describe("account lifecycle onboarding UI", () => {
   it("provides an immediate tenant branding preview and accessible live form guidance", async () => {
     const page = await readFile(resolve(root, "client/src/pages/AccountLifecycle.tsx"), "utf8");
 
-    expect(page).toContain('className="tenant-brand-live-preview"');
+    expect(page).toContain("tenant-brand-live-preview");
     expect(page).toContain("Live preview");
     expect(page).toContain('role="tooltip"');
     expect(page).toContain('aria-invalid={Boolean(error)}');
@@ -39,5 +39,15 @@ describe("account lifecycle onboarding UI", () => {
     expect(page).toContain("sortBy");
     expect(page).toContain("Expiring soon");
     expect(page).toContain("invitations shown");
+  });
+
+  it("renders pending invitation actions plus tenant-scoped presets and a dual-theme live preview", async () => {
+    const page = await readFile(resolve(root, "client/src/pages/AccountLifecycle.tsx"), "utf8");
+
+    expect(page).toContain("/api/auth/invitations/${id}/resend");
+    expect(page).toContain("/api/auth/invitations/${id}/revoke");
+    expect(page).toContain("Branding presets");
+    expect(page).toContain('aria-pressed={previewMode === "dark"}');
+    expect(page).toContain('className={`tenant-brand-live-preview ${previewMode === "dark" ? "is-dark" : ""}`}');
   });
 });

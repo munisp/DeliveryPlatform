@@ -154,6 +154,29 @@
 .tenant-brand-live-preview-content h3 { margin: 7px 0; color: #fff; font-size: 19px; }
 .tenant-brand-live-preview-content span { display: block; color: #cbd5e1; font-size: 13px; }
 .tenant-brand-live-preview-content button { margin-top: 14px; border: 0; border-radius: 8px; color: #fff; padding: 9px 12px; font-size: 12px; font-weight: 800; }
+.tenant-brand-live-preview.is-dark .tenant-brand-live-preview-content { background: #020617; }
+.tenant-brand-live-preview:not(.is-dark) .tenant-brand-live-preview-content { background: #f8fafc; }
+.tenant-brand-live-preview:not(.is-dark) .tenant-brand-live-preview-content h3 { color: #0f172a; }
+.tenant-brand-live-preview:not(.is-dark) .tenant-brand-live-preview-content span { color: #475569; }
+.tenant-brand-live-preview:not(.is-dark) .tenant-brand-live-preview-content p { color: #0369a1; }
+.tenant-preview-mode { display: flex; align-items: center; gap: 8px; color: #cbd5e1; font-size: 12px; font-weight: 700; }
+.tenant-preview-mode button, .tenant-preset-list button, .invitation-row-actions button { border: 1px solid #475569; border-radius: 8px; background: #0f172a; color: #dbeafe; cursor: pointer; padding: 7px 9px; font: inherit; font-size: 12px; font-weight: 800; }
+.tenant-preview-mode button[aria-pressed="true"] { border-color: #22d3ee; background: #164e63; color: #cffafe; }
+.tenant-preview-mode button:focus-visible, .tenant-preset-list button:focus-visible, .invitation-row-actions button:focus-visible { outline: 2px solid #a5f3fc; outline-offset: 2px; }
+.tenant-preview-mode button:disabled, .tenant-preset-list button:disabled, .invitation-row-actions button:disabled { cursor: not-allowed; opacity: .55; }
+.tenant-brand-presets { display: grid; gap: 12px; border-top: 1px solid #1e293b; padding-top: 18px; }
+.tenant-brand-presets h3 { margin: 0; color: #f8fafc; font-size: 16px; }
+.tenant-brand-presets p { margin: 5px 0 0; color: #94a3b8; font-size: 13px; }
+.tenant-preset-save { display: flex; align-items: end; gap: 12px; }
+.tenant-preset-save .lifecycle-field { flex: 1; }
+.tenant-preset-list { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.tenant-preset-list li { display: flex; align-items: center; gap: 10px; border: 1px solid #1e293b; border-radius: 10px; padding: 10px; }
+.tenant-preset-swatch { width: 26px; height: 26px; border-radius: 8px; box-shadow: inset 0 0 0 1px rgba(255,255,255,.26); }
+.tenant-preset-list li div { min-width: 0; flex: 1; }
+.tenant-preset-list strong, .tenant-preset-list small { display: block; }
+.tenant-preset-list strong { color: #e2e8f0; font-size: 13px; }
+.tenant-preset-list small { margin-top: 3px; color: #64748b; font-size: 11px; }
+.tenant-preset-delete, .invitation-row-actions .invitation-revoke { border-color: rgba(251,113,133,.55); color: #fecdd3; }
 .tenant-brand-controls { display: grid; grid-template-columns: minmax(0, 1fr) repeat(2, minmax(120px, .5fr)); gap: 12px; }
 .tenant-logo-picker, .tenant-color-field { display: grid; gap: 7px; color: #e2e8f0; font-size: 13px; font-weight: 700; }
 .tenant-logo-picker input { color: #cbd5e1; font-size: 12px; }
@@ -170,6 +193,8 @@
 .invitation-status-pending { border-color: rgba(245, 158, 11, .45); color: #fde68a; }
 .invitation-status-accepted { border-color: rgba(52, 211, 153, .45); color: #a7f3d0; }
 .invitation-status-expired { border-color: rgba(148, 163, 184, .45); color: #cbd5e1; }
+.invitation-status-revoked { border-color: rgba(244, 114, 182, .48); color: #fbcfe8; }
+.invitation-row-actions { display: flex; align-items: center; justify-content: end; gap: 7px; }
 .invitation-toolbar { display: grid; grid-template-columns: minmax(160px, 1.3fr) repeat(3, minmax(110px, .7fr)); gap: 12px; margin-bottom: 12px; }
 .invitation-toolbar > label { display: grid; gap: 8px; color: #e2e8f0; font-size: 12px; font-weight: 700; }
 .invitation-toolbar .lifecycle-field { gap: 8px; }
@@ -180,6 +205,11 @@
   .tenant-branding-heading { align-items: stretch; flex-direction: column; }
   .tenant-brand-controls { grid-template-columns: 1fr 1fr; }
   .tenant-logo-picker { grid-column: 1 / -1; }
+  .tenant-preset-save, .tenant-preset-list li { align-items: stretch; flex-direction: column; }
+  .tenant-preset-list li { gap: 8px; }
+  .tenant-preset-list li button { width: 100%; }
+  .invitation-status-list li { align-items: flex-start; flex-direction: column; }
+  .invitation-row-actions { justify-content: flex-start; flex-wrap: wrap; }
   .invitation-toolbar { grid-template-columns: 1fr 1fr; }
   .invitation-toolbar .lifecycle-field { grid-column: 1 / -1; }
 }

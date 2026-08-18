@@ -18,17 +18,23 @@ import {
 } from "./auth";
 import {
   acceptInvitation,
+  applyTenantBrandingPreset,
   beginSignup,
   confirmEmailVerification,
   confirmPasswordReset,
   createInvitation,
   createOrganizationAndTenant,
+  deleteTenantBrandingPreset,
   ensureAccountLifecycleStore,
   getTenantBranding,
   getOnboardingState,
   listInvitationStatuses,
+  listTenantBrandingPresets,
   requestPasswordReset,
+  resendInvitation,
   resendVerification,
+  revokeInvitation,
+  saveTenantBrandingPreset,
   updateTenantBranding,
 } from "./accountLifecycleStore";
 import { authenticateOperator, ensureExternalOperator, ensureOperatorAuthStore } from "./operatorAuthStore";
@@ -571,6 +577,32 @@ app.get("/api/auth/invitations/status", async (req, res) => {
   }
 });
 
+app.post("/api/auth/invitations/:id/resend", rateLimit(10), async (req, res) => {
+  const user = requireAuthenticatedOperator(req, res);
+  if (!user) return;
+  try {
+    const result = await resendInvitation({ inviterId: Number(user.id), invitationId: `${req.params.id ?? ""}` });
+    await recordOperationalEvent({ eventType: "auth.invitation_resent", actorId: `${user.id}`, actorRole: user.role, tenantId: user.tenantId, route: req.path, outcome: "success" });
+    res.status(202).json(result);
+  } catch (error) {
+    const mapped = lifecycleErrorStatus(error);
+    res.status(mapped.code === "tenant_admin_required" ? 403 : mapped.status).json({ error: mapped.code });
+  }
+});
+
+app.post("/api/auth/invitations/:id/revoke", rateLimit(10), async (req, res) => {
+  const user = requireAuthenticatedOperator(req, res);
+  if (!user) return;
+  try {
+    const result = await revokeInvitation({ inviterId: Number(user.id), invitationId: `${req.params.id ?? ""}` });
+    await recordOperationalEvent({ eventType: "auth.invitation_revoked", actorId: `${user.id}`, actorRole: user.role, tenantId: user.tenantId, route: req.path, outcome: "success" });
+    res.status(200).json(result);
+  } catch (error) {
+    const mapped = lifecycleErrorStatus(error);
+    res.status(mapped.code === "tenant_admin_required" ? 403 : mapped.status).json({ error: mapped.code });
+  }
+});
+
 app.get("/api/auth/tenant-branding", async (req, res) => {
   const user = requireAuthenticatedOperator(req, res);
   if (!user) return;
@@ -579,6 +611,51 @@ app.get("/api/auth/tenant-branding", async (req, res) => {
   } catch (error) {
     const mapped = lifecycleErrorStatus(error);
     res.status(mapped.status).json({ error: mapped.code });
+  }
+});
+
+app.get("/api/auth/tenant-branding/presets", async (req, res) => {
+  const user = requireAuthenticatedOperator(req, res);
+  if (!user) return;
+  try {
+    res.status(200).json({ presets: await listTenantBrandingPresets(Number(user.id)) });
+  } catch (error) {
+    const mapped = lifecycleErrorStatus(error);
+    res.status(mapped.code === "tenant_admin_required" ? 403 : mapped.status).json({ error: mapped.code });
+  }
+});
+
+app.post("/api/auth/tenant-branding/presets", rateLimit(20), async (req, res) => {
+  const user = requireAuthenticatedOperator(req, res);
+  if (!user) return;
+  try {
+    const preset = await saveTenantBrandingPreset({ operatorId: Number(user.id), name: `${req.body?.name ?? ""}`, logoDataUrl: typeof req.body?.logoDataUrl === "string" ? req.body.logoDataUrl : null, primaryColor: `${req.body?.primaryColor ?? ""}`, accentColor: `${req.body?.accentColor ?? ""}` });
+    res.status(201).json(preset);
+  } catch (error) {
+    const mapped = lifecycleErrorStatus(error);
+    res.status(mapped.code === "tenant_admin_required" ? 403 : mapped.status).json({ error: mapped.code });
+  }
+});
+
+app.post("/api/auth/tenant-branding/presets/:id/apply", rateLimit(20), async (req, res) => {
+  const user = requireAuthenticatedOperator(req, res);
+  if (!user) return;
+  try {
+    res.status(200).json(await applyTenantBrandingPreset({ operatorId: Number(user.id), presetId: `${req.params.id ?? ""}` }));
+  } catch (error) {
+    const mapped = lifecycleErrorStatus(error);
+    res.status(mapped.code === "tenant_admin_required" ? 403 : mapped.status).json({ error: mapped.code });
+  }
+});
+
+app.delete("/api/auth/tenant-branding/presets/:id", rateLimit(20), async (req, res) => {
+  const user = requireAuthenticatedOperator(req, res);
+  if (!user) return;
+  try {
+    res.status(200).json(await deleteTenantBrandingPreset({ operatorId: Number(user.id), presetId: `${req.params.id ?? ""}` }));
+  } catch (error) {
+    const mapped = lifecycleErrorStatus(error);
+    res.status(mapped.code === "tenant_admin_required" ? 403 : mapped.status).json({ error: mapped.code });
   }
 });
 

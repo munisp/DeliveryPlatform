@@ -21,8 +21,9 @@ describe("account lifecycle migration and token safety contracts", () => {
     const store = await readFile(resolve(root, "server/_core/accountLifecycleStore.ts"), "utf8");
 
     expect(store).toContain('createHash("sha256").update(token).digest("hex")');
-    expect(store).toContain("WHERE token_hash = $1 AND purpose = $2 AND consumed_at IS NULL AND expires_at > NOW()");
-    expect(store).toContain("UPDATE account_lifecycle_tokens SET consumed_at = NOW()");
+    expect(store).toContain("WHERE token_hash = $1 AND purpose = $2 AND consumed_at IS NULL AND revoked_at IS NULL AND expires_at > NOW()");
+    expect(store).toContain("SET consumed_at = NOW()");
+    expect(store).toContain("UPDATE account_lifecycle_tokens SET revoked_at = NOW()");
     expect(store).toContain("async function issueToken");
     expect(store).not.toContain("export async function issueToken");
   });
