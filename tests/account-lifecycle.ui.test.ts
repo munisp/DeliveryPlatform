@@ -132,4 +132,24 @@ describe("account lifecycle onboarding UI", () => {
     expect(actions).toContain('aria-live="polite"');
     expect(actions).toContain("Invitation activity CSV downloaded.");
   });
+
+  it("provides an explicit custom ownership-audit range alongside quick ranges", async () => {
+    const page = await readFile(resolve(root, "client/src/pages/AccountLifecycle.tsx"), "utf8");
+
+    expect(page).toContain('"all" | "last-seven-days" | "last-thirty-days" | "custom"');
+    expect(page).toContain("Custom range");
+    expect(page).toContain('setOwnershipRangePreset("custom")');
+    expect(page).toContain('aria-pressed={ownershipRangePreset === "custom"}');
+  });
+
+  it("shows exact exported row counts and an authorized tenant-admin alert history", async () => {
+    const actions = await readFile(resolve(root, "client/src/pages/TenantAdminActions.tsx"), "utf8");
+
+    expect(actions).toContain('response.headers.get("X-Exported-Row-Count")');
+    expect(actions).toContain("exportRowCount");
+    expect(actions).toContain("downloaded with {exportRowCount}");
+    expect(actions).toContain('"/api/auth/tenant/notification-delivery-history"');
+    expect(actions).toContain("Email alert delivery history");
+    expect(actions).toContain("Message bodies and invitation tokens are never retained here.");
+  });
 });

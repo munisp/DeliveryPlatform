@@ -31,6 +31,7 @@ import {
   deleteTenantBrandingPreset,
   ensureAccountLifecycleStore,
   exportInvitationActivityCsv,
+  listTenantAdminNotificationDeliveryHistory,
   getTenantAdminNotificationPreferences,
   getTenantBranding,
   getOnboardingState,
@@ -597,11 +598,12 @@ app.get("/api/auth/invitations/activity.csv", rateLimit(10), async (req, res) =>
     const startDate = typeof req.query.startDate === "string" ? req.query.startDate : null;
     const endDate = typeof req.query.endDate === "string" ? req.query.endDate : null;
     const columns = typeof req.query.columns === "string" ? req.query.columns.split(",") : [];
-    const csv = await exportInvitationActivityCsv({ operatorId: Number(user.id), status, startDate, endDate, columns });
-    await recordOperationalEvent({ eventType: "auth.invitation_activity_exported", actorId: `${user.id}`, actorRole: user.role, tenantId: user.tenantId, route: req.path, outcome: "success", payload: { status, startDate, endDate, columns } });
+    const exported = await exportInvitationActivityCsv({ operatorId: Number(user.id), status, startDate, endDate, columns });
+    await recordOperationalEvent({ eventType: "auth.invitation_activity_exported", actorId: `${user.id}`, actorRole: user.role, tenantId: user.tenantId, route: req.path, outcome: "success", payload: { status, startDate, endDate, columns, rowCount: exported.rowCount } });
     res.setHeader("Content-Type", "text/csv; charset=utf-8");
     res.setHeader("Content-Disposition", 'attachment; filename="invitation-activity.csv"');
-    res.status(200).send(csv);
+    res.setHeader("X-Exported-Row-Count", `${exported.rowCount}`);
+    res.status(200).send(exported.csv);
   } catch (error) {
     const mapped = lifecycleErrorStatus(error);
     res.status(mapped.code === "tenant_admin_required" ? 403 : mapped.status).json({ error: mapped.code });
@@ -736,6 +738,17 @@ app.get("/api/auth/tenant/notification-preferences", async (req, res) => {
   if (!user) return;
   try {
     res.status(200).json(await getTenantAdminNotificationPreferences(Number(user.id)));
+  } catch (error) {
+    const mapped = lifecycleErrorStatus(error);
+    res.status(mapped.code === "tenant_admin_required" ? 403 : mapped.status).json({ error: mapped.code });
+  }
+});
+
+app.get("/api/auth/tenant/notification-delivery-history", async (req, res) => {
+  const user = requireAuthenticatedOperator(req, res);
+  if (!user) return;
+  try {
+    res.status(200).json({ history: await listTenantAdminNotificationDeliveryHistory(Number(user.id)) });
   } catch (error) {
     const mapped = lifecycleErrorStatus(error);
     res.status(mapped.code === "tenant_admin_required" ? 403 : mapped.status).json({ error: mapped.code });

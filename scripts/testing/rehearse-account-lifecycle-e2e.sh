@@ -227,6 +227,15 @@ test "$transfer_status" = '200'
 psql "$TEST_DATABASE_URL" -Atqc "SELECT count(*) FROM tenant_branding_presets WHERE id = '${preset_id}' AND created_by_operator_id = ${invitee_operator_id} AND ownership_transferred_at IS NOT NULL" | grep -qx '1'
 grep -q '"notificationDelivery":"delivered"' /tmp/lifecycle-preset-transfer.json
 
+delivery_history_status="$(curl --silent --show-error --output /tmp/lifecycle-notification-delivery-history.json --write-out '%{http_code}' \
+  -b "$cookie_file" "${LIFECYCLE_TEST_BASE_URL%/}/api/auth/tenant/notification-delivery-history")"
+test "$delivery_history_status" = '200'
+grep -q "\"recipientEmail\":\"${LIFECYCLE_TEST_INVITEE_EMAIL}\"" /tmp/lifecycle-notification-delivery-history.json
+grep -q '"notificationType":"role_update"' /tmp/lifecycle-notification-delivery-history.json
+grep -q '"notificationType":"preset_ownership_transfer"' /tmp/lifecycle-notification-delivery-history.json
+grep -q '"deliveryStatus":"delivered"' /tmp/lifecycle-notification-delivery-history.json
+psql "$TEST_DATABASE_URL" -Atqc "SELECT count(*) FROM tenant_admin_notification_delivery_history WHERE tenant_id = (SELECT tenant_id FROM operator_credentials WHERE id = ${invitee_operator_id}) AND delivery_status = 'delivered'" | grep -qx '2'
+
 activity_date="$(date +%F)"
 audit_status="$(curl --silent --show-error --output /tmp/lifecycle-preset-ownership-history.json --write-out '%{http_code}' \
   -b "$cookie_file" "${LIFECYCLE_TEST_BASE_URL%/}/api/auth/tenant-branding/presets/audit-history?startDate=${activity_date}&endDate=${activity_date}")"
@@ -234,8 +243,9 @@ test "$audit_status" = '200'
 grep -q "\"presetId\":\"${preset_id}\"" /tmp/lifecycle-preset-ownership-history.json
 grep -q "\"toOperatorEmail\":\"${LIFECYCLE_TEST_INVITEE_EMAIL}\"" /tmp/lifecycle-preset-ownership-history.json
 
-csv_status="$(curl --silent --show-error --output /tmp/lifecycle-invitation-activity.csv --write-out '%{http_code}' -b "$cookie_file" "${LIFECYCLE_TEST_BASE_URL%/}/api/auth/invitations/activity.csv?status=accepted&startDate=${activity_date}&endDate=${activity_date}&columns=recipient_email,status")"
+csv_status="$(curl --silent --show-error --dump-header /tmp/lifecycle-invitation-activity.headers --output /tmp/lifecycle-invitation-activity.csv --write-out '%{http_code}' -b "$cookie_file" "${LIFECYCLE_TEST_BASE_URL%/}/api/auth/invitations/activity.csv?status=accepted&startDate=${activity_date}&endDate=${activity_date}&columns=recipient_email,status")"
 test "$csv_status" = '200'
+tr -d '\r' </tmp/lifecycle-invitation-activity.headers | grep -Eiq '^x-exported-row-count: [1-9][0-9]*$'
 grep -q '^"recipient_email","status"' /tmp/lifecycle-invitation-activity.csv
 if grep -q '"invitation_id"' /tmp/lifecycle-invitation-activity.csv; then echo "Unexpected invitation ID CSV column" >&2; exit 1; fi
 grep -q "${LIFECYCLE_TEST_INVITEE_EMAIL}" /tmp/lifecycle-invitation-activity.csv

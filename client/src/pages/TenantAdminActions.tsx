@@ -7,6 +7,7 @@ import "./account-lifecycle.css";
 
 type Member = { id: number; email: string; name: string; role: "admin" | "operator" | "viewer"; updatedAt: string };
 type NotificationPreferences = { roleUpdateEmail: boolean; presetOwnershipTransferEmail: boolean; updatedAt: string | null };
+type NotificationDeliveryHistory = { id: string; recipientEmail: string | null; notificationType: "role_update" | "preset_ownership_transfer"; subject: string; deliveryStatus: "delivered" | "failed"; provider: string | null; providerMessageId: string | null; failureCode: string | null; sentAt: string };
 type ApiError = { error?: string };
 type ExportStage = "idle" | "preparing" | "downloading" | "complete";
 
@@ -47,6 +48,8 @@ async function downloadInvitationActivity(
 
   const response = await fetch(`/api/auth/invitations/activity.csv?${query.toString()}`, { credentials: "include" });
   if (!response.ok) throw new Error("invitation_activity_export_failed");
+  const rowCount = Number(response.headers.get("X-Exported-Row-Count"));
+  if (!Number.isSafeInteger(rowCount) || rowCount < 0) throw new Error("invitation_activity_export_count_unavailable");
   onDownloadReady();
 
   const url = URL.createObjectURL(await response.blob());
@@ -55,6 +58,7 @@ async function downloadInvitationActivity(
   anchor.download = "invitation-activity.csv";
   anchor.click();
   window.setTimeout(() => URL.revokeObjectURL(url), 0);
+  return rowCount;
 }
 
 function EmailAlertPreview({ preferences, onClose }: { preferences: NotificationPreferences; onClose: () => void }) {
@@ -99,9 +103,11 @@ export default function TenantAdminActions() {
   const [notificationPreviewOpen, setNotificationPreviewOpen] = useState(false);
   const [exportStage, setExportStage] = useState<ExportStage>("idle");
   const [exportToastVisible, setExportToastVisible] = useState(false);
+  const [exportRowCount, setExportRowCount] = useState<number | null>(null);
 
   const members = useQuery({ queryKey: ["tenant-members"], queryFn: () => request<{ members: Member[] }>("/api/auth/members") });
   const preferences = useQuery({ queryKey: ["tenant-admin-notification-preferences"], queryFn: () => request<NotificationPreferences>("/api/auth/tenant/notification-preferences") });
+  const deliveryHistory = useQuery({ queryKey: ["tenant-admin-notification-delivery-history"], queryFn: () => request<{ history: NotificationDeliveryHistory[] }>("/api/auth/tenant/notification-delivery-history") });
   const selectedMembers = useMemo(() => members.data?.members.filter((member) => selected.includes(member.id)) ?? [], [members.data?.members, selected]);
   const activePreferences = preferences.data ?? { roleUpdateEmail: false, presetOwnershipTransferEmail: false, updatedAt: null };
   const currentPreferences = notificationDraft ?? activePreferences;
@@ -117,16 +123,18 @@ export default function TenantAdminActions() {
   const exportCsv = useMutation({
     mutationFn: async () => {
       setExportStage("preparing");
-      await downloadInvitationActivity(
+      return downloadInvitationActivity(
         { status: activityStatus, startDate: activityStartDate, endDate: activityEndDate, columns: activityColumns },
         () => setExportStage("downloading"),
       );
     },
-    onSuccess: () => {
+    onSuccess: (rowCount) => {
       setExportStage("complete");
+      setExportRowCount(rowCount);
       setExportToastVisible(true);
       window.setTimeout(() => setExportToastVisible(false), 6000);
     },
+    onMutate: () => { setExportRowCount(null); setExportToastVisible(false); },
     onError: () => setExportStage("idle"),
   });
   const updatePreferences = useMutation({
@@ -196,9 +204,16 @@ export default function TenantAdminActions() {
         </CardContent>
       </Card>
 
+      <Card>
+        <CardHeader><CardTitle>Email alert delivery history</CardTitle><CardDescription>Review the latest 100 tenant-scoped committed alert delivery attempts. Message bodies and invitation tokens are never retained here.</CardDescription></CardHeader>
+        <CardContent className="space-y-3">
+          {deliveryHistory.isLoading ? <p className="text-sm text-slate-400">Loading delivery history…</p> : deliveryHistory.isError ? <p role="alert" className="text-sm text-rose-300">Delivery history is unavailable. Refresh and try again.</p> : deliveryHistory.data?.history.length ? <ul className="tenant-preset-list">{deliveryHistory.data.history.map((entry) => <li key={entry.id}><div><strong>{entry.subject}</strong><small>{entry.recipientEmail ?? "Former tenant administrator"} · {entry.notificationType === "role_update" ? "Role update" : "Preset ownership transfer"} · {new Date(entry.sentAt).toLocaleString()}</small>{entry.deliveryStatus === "failed" ? <small className="text-rose-300">Delivery failed: {entry.failureCode ?? "notification_dispatch_failed"}</small> : <small className="text-emerald-300">Delivered{entry.provider ? ` via ${entry.provider}` : ""}</small>}</div><span className={`invitation-status invitation-status-${entry.deliveryStatus === "delivered" ? "accepted" : "revoked"}`}>{entry.deliveryStatus}</span></li>)}</ul> : <p className="text-sm text-slate-400">No tenant-admin alerts have been delivered yet.</p>}<button type="button" onClick={() => deliveryHistory.refetch()} disabled={deliveryHistory.isFetching} className="rounded-xl border border-slate-600 px-3 py-2 text-sm font-semibold text-slate-100 disabled:opacity-50">{deliveryHistory.isFetching ? "Refreshing history…" : "Refresh delivery history"}</button>
+        </CardContent>
+      </Card>
+
       {roleConfirmationOpen ? <div className="lifecycle-modal-backdrop" role="presentation"><section className="lifecycle-modal" role="dialog" aria-modal="true" aria-labelledby="role-confirmation-title"><h2 id="role-confirmation-title">Update {selected.length} member role{selected.length === 1 ? "" : "s"}?</h2><p>The selected members will become <strong>{role}</strong>. This may change what they can access in the tenant. Your own role and the final tenant administrator remain protected.</p>{selectedMembers.length ? <ul className="mt-3 list-disc pl-5 text-sm text-slate-300">{selectedMembers.map((member) => <li key={member.id}>{member.email}</li>)}</ul> : null}<div><button type="button" onClick={() => setRoleConfirmationOpen(false)}>Cancel</button><button type="button" className="invitation-revoke" onClick={() => { setRoleConfirmationOpen(false); changeRoles.mutate(); }}>Confirm role change</button></div></section></div> : null}
       {notificationPreviewOpen ? <EmailAlertPreview preferences={currentPreferences} onClose={() => setNotificationPreviewOpen(false)} /> : null}
-      {exportToastVisible ? <div className="fixed bottom-6 right-6 z-50 flex max-w-sm items-start gap-3 rounded-xl border border-emerald-400/40 bg-slate-950 px-4 py-3 text-sm text-emerald-100 shadow-2xl" role="status" aria-live="polite"><span className="font-semibold">Invitation activity CSV downloaded.</span><button type="button" onClick={() => setExportToastVisible(false)} className="text-emerald-200 underline underline-offset-2">Dismiss</button></div> : null}
+      {exportToastVisible && exportRowCount !== null ? <div className="fixed bottom-6 right-6 z-50 flex max-w-sm items-start gap-3 rounded-xl border border-emerald-400/40 bg-slate-950 px-4 py-3 text-sm text-emerald-100 shadow-2xl" role="status" aria-live="polite"><span className="font-semibold">Invitation activity CSV downloaded with {exportRowCount} {exportRowCount === 1 ? "row" : "rows"}.</span><button type="button" onClick={() => setExportToastVisible(false)} className="text-emerald-200 underline underline-offset-2">Dismiss</button></div> : null}
     </div>
   </DashboardLayout>;
 }

@@ -66,6 +66,18 @@ export type TenantAdminNotificationPreferences = {
   updatedAt: Date | null;
 };
 
+export type TenantAdminNotificationDeliveryHistory = {
+  id: string;
+  recipientEmail: string | null;
+  notificationType: "role_update" | "preset_ownership_transfer";
+  subject: string;
+  deliveryStatus: "delivered" | "failed";
+  provider: string | null;
+  providerMessageId: string | null;
+  failureCode: string | null;
+  sentAt: Date;
+};
+
 export type InvitationActivityColumn =
   | "invitation_id"
   | "recipient_email"
@@ -88,7 +100,7 @@ export type InvitationStatus = {
 };
 
 const supportedRoles = new Set<LifecycleRole>(["admin", "operator", "viewer"]);
-const requiredTables = ["organizations", "platform_tenants", "organization_memberships", "account_lifecycle_tokens", "tenant_branding_presets", "tenant_branding_preset_ownership_audit", "tenant_admin_notification_preferences"];
+const requiredTables = ["organizations", "platform_tenants", "organization_memberships", "account_lifecycle_tokens", "tenant_branding_presets", "tenant_branding_preset_ownership_audit", "tenant_admin_notification_preferences", "tenant_admin_notification_delivery_history"];
 const maxBulkInvitationActions = 10;
 const maxBulkMemberRoleChanges = 10;
 const invitationActivityColumns: InvitationActivityColumn[] = ["invitation_id", "recipient_email", "role", "status", "sent_at", "expires_at", "accepted_at", "revoked_at"];
@@ -331,6 +343,15 @@ export async function ensureAccountLifecycleStore() {
           preset_ownership_transfer_email BOOLEAN NOT NULL DEFAULT FALSE,
           updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), PRIMARY KEY (tenant_id, operator_id))`);
         await client.query("CREATE INDEX IF NOT EXISTS tenant_admin_notification_preferences_lookup ON tenant_admin_notification_preferences (tenant_id, operator_id)");
+        await client.query(`CREATE TABLE IF NOT EXISTS tenant_admin_notification_delivery_history (
+          id UUID PRIMARY KEY, tenant_id VARCHAR(128) NOT NULL REFERENCES platform_tenants(id) ON DELETE CASCADE,
+          recipient_operator_id INTEGER REFERENCES operator_credentials(id) ON DELETE SET NULL,
+          notification_type VARCHAR(64) NOT NULL CHECK (notification_type IN ('role_update', 'preset_ownership_transfer')),
+          subject VARCHAR(180) NOT NULL,
+          delivery_status VARCHAR(16) NOT NULL CHECK (delivery_status IN ('delivered', 'failed')),
+          dispatch_request_id VARCHAR(128), provider VARCHAR(128), provider_message_id VARCHAR(255), failure_code VARCHAR(128),
+          sent_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
+        await client.query("CREATE INDEX IF NOT EXISTS tenant_admin_notification_delivery_history_lookup ON tenant_admin_notification_delivery_history (tenant_id, sent_at DESC)");
         await client.query(`UPDATE tenant_branding_presets preset SET organization_id = tenant.organization_id
           FROM platform_tenants tenant WHERE preset.tenant_id = tenant.id AND preset.organization_id IS NULL`);
         await client.query("CREATE INDEX IF NOT EXISTS tenant_branding_presets_organization_sharing_lookup ON tenant_branding_presets (organization_id, shared_at DESC) WHERE organization_shared = TRUE");
@@ -400,11 +421,12 @@ async function sendLifecycleEmail(email: string, type: string, subject: string, 
   if (!delivery.accepted || delivery.results.some((result) => result.channel === "email" && !result.success)) {
     throw new Error("lifecycle_email_delivery_failed");
   }
+  return delivery;
 }
 
 async function notifyTenantAdministrators(input: { tenantId: string; actorId: number; preference: "role_update_email" | "preset_ownership_transfer_email"; subject: string; message: string }) {
-  const optedIn = await getOperatorAuthPool().query<{ email: string }>(
-    `SELECT operator.email
+  const optedIn = await getOperatorAuthPool().query<{ id: number; email: string }>(
+    `SELECT operator.id, operator.email
      FROM operator_credentials operator
      JOIN tenant_admin_notification_preferences preference
        ON preference.operator_id = operator.id AND preference.tenant_id = operator.tenant_id
@@ -413,15 +435,29 @@ async function notifyTenantAdministrators(input: { tenantId: string; actorId: nu
     [input.tenantId, input.actorId],
   );
   if (!optedIn.rows.length) return { requested: 0, delivered: true };
-  const outcomes = await Promise.all(optedIn.rows.map(async ({ email }) => {
+  const notificationType = input.preference === "role_update_email" ? "role_update" : "preset_ownership_transfer" as const;
+  const outcomes = await Promise.all(optedIn.rows.map(async ({ id, email }) => {
     try {
-      await sendLifecycleEmail(email, "tenant_admin_alert", input.subject, input.message);
-      return true;
-    } catch {
-      return false;
+      const delivery = await sendLifecycleEmail(email, "tenant_admin_alert", input.subject, input.message);
+      const emailResult = delivery.results.find((result) => result.channel === "email");
+      return { recipientOperatorId: id, notificationType, deliveryStatus: "delivered" as const, dispatchRequestId: delivery.requestId, provider: emailResult?.provider ?? null, providerMessageId: emailResult?.messageId ?? null, failureCode: null };
+    } catch (error) {
+      const rawCode = error instanceof Error ? error.message : "notification_dispatch_failed";
+      const failureCode = /^(lifecycle_email_delivery_failed|notification_dispatcher_not_configured|notification_dispatch_http_\d+)$/.test(rawCode) ? rawCode : "notification_dispatch_failed";
+      return { recipientOperatorId: id, notificationType, deliveryStatus: "failed" as const, dispatchRequestId: null, provider: null, providerMessageId: null, failureCode };
     }
   }));
-  return { requested: optedIn.rows.length, delivered: outcomes.every(Boolean) };
+  try {
+    await Promise.all(outcomes.map((outcome) => getOperatorAuthPool().query(
+      `INSERT INTO tenant_admin_notification_delivery_history
+       (id, tenant_id, recipient_operator_id, notification_type, subject, delivery_status, dispatch_request_id, provider, provider_message_id, failure_code)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+      [randomUUID(), input.tenantId, outcome.recipientOperatorId, outcome.notificationType, input.subject, outcome.deliveryStatus, outcome.dispatchRequestId, outcome.provider, outcome.providerMessageId, outcome.failureCode],
+    )));
+  } catch {
+    return { requested: optedIn.rows.length, delivered: false };
+  }
+  return { requested: optedIn.rows.length, delivered: outcomes.every((outcome) => outcome.deliveryStatus === "delivered") };
 }
 
 export async function beginSignup(input: { email: string; name: string; password: string }) {
@@ -802,7 +838,7 @@ export async function exportInvitationActivityCsv(input: { operatorId: number; s
     };
     return columns.map((column) => values[column]);
   });
-  return [columns, ...rows].map((row) => row.map((value) => csvCell(value)).join(",")).join("\r\n");
+  return { csv: [columns, ...rows].map((row) => row.map((value) => csvCell(value)).join(",")).join("\r\n"), rowCount: rows.length };
 }
 
 export async function getTenantBranding(operatorId: number): Promise<TenantBranding> {
@@ -979,6 +1015,23 @@ export async function getTenantAdminNotificationPreferences(operatorId: number):
   );
   const preference = result.rows[0];
   return { roleUpdateEmail: preference?.role_update_email ?? false, presetOwnershipTransferEmail: preference?.preset_ownership_transfer_email ?? false, updatedAt: preference?.updated_at ?? null };
+}
+
+export async function listTenantAdminNotificationDeliveryHistory(operatorId: number): Promise<TenantAdminNotificationDeliveryHistory[]> {
+  await ensureAccountLifecycleStore();
+  const { operator } = await getTenantAdminContext(operatorId);
+  const result = await getOperatorAuthPool().query<{
+    id: string; recipient_email: string | null; notification_type: "role_update" | "preset_ownership_transfer"; subject: string;
+    delivery_status: "delivered" | "failed"; provider: string | null; provider_message_id: string | null; failure_code: string | null; sent_at: Date;
+  }>(
+    `SELECT history.id, recipient.email AS recipient_email, history.notification_type, history.subject, history.delivery_status,
+            history.provider, history.provider_message_id, history.failure_code, history.sent_at
+     FROM tenant_admin_notification_delivery_history history
+     LEFT JOIN operator_credentials recipient ON recipient.id = history.recipient_operator_id
+     WHERE history.tenant_id = $1 ORDER BY history.sent_at DESC LIMIT 100`,
+    [operator.tenant_id],
+  );
+  return result.rows.map((row) => ({ id: row.id, recipientEmail: row.recipient_email, notificationType: row.notification_type, subject: row.subject, deliveryStatus: row.delivery_status, provider: row.provider, providerMessageId: row.provider_message_id, failureCode: row.failure_code, sentAt: row.sent_at }));
 }
 
 export async function updateTenantAdminNotificationPreferences(input: { operatorId: number; roleUpdateEmail: boolean; presetOwnershipTransferEmail: boolean }): Promise<TenantAdminNotificationPreferences> {

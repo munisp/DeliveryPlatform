@@ -118,4 +118,21 @@ describe("tenant admin action contracts", () => {
     expect(actions).toContain('anchor.download = "invitation-activity.csv"');
     expect(actions).toContain("setExportStage(\"downloading\")");
   });
+
+  it("records only tenant-scoped sanitized alert delivery metadata and returns export row counts", async () => {
+    const store = await readFile(resolve(root, "server/_core/accountLifecycleStore.ts"), "utf8");
+    const routes = await readFile(resolve(root, "server/_core/index.ts"), "utf8");
+    const migration = await readFile(resolve(root, "drizzle/0015_tenant_admin_notification_delivery_history.sql"), "utf8");
+    const rollback = await readFile(resolve(root, "drizzle/rollback/0015_tenant_admin_notification_delivery_history.down.sql"), "utf8");
+
+    expect(store).toContain("tenant_admin_notification_delivery_history");
+    expect(store).toContain("listTenantAdminNotificationDeliveryHistory");
+    expect(store).toContain("failureCode");
+    expect(store).toContain("rowCount: rows.length");
+    expect(routes).toContain('"/api/auth/tenant/notification-delivery-history"');
+    expect(routes).toContain('"X-Exported-Row-Count"');
+    expect(migration).toContain("delivery_status");
+    expect(migration).toContain("recipient_operator_id");
+    expect(rollback).toContain("DROP TABLE IF EXISTS tenant_admin_notification_delivery_history");
+  });
 });
