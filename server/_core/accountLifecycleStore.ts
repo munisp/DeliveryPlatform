@@ -78,6 +78,11 @@ export type TenantAdminNotificationDeliveryHistory = {
   sentAt: Date;
 };
 
+export type TenantAdminNotificationDeliveryRetention = {
+  retentionDays: 30 | 90 | 180 | 365;
+  updatedAt: Date | null;
+};
+
 export type InvitationActivityColumn =
   | "invitation_id"
   | "recipient_email"
@@ -100,10 +105,11 @@ export type InvitationStatus = {
 };
 
 const supportedRoles = new Set<LifecycleRole>(["admin", "operator", "viewer"]);
-const requiredTables = ["organizations", "platform_tenants", "organization_memberships", "account_lifecycle_tokens", "tenant_branding_presets", "tenant_branding_preset_ownership_audit", "tenant_admin_notification_preferences", "tenant_admin_notification_delivery_history"];
+const requiredTables = ["organizations", "platform_tenants", "organization_memberships", "account_lifecycle_tokens", "tenant_branding_presets", "tenant_branding_preset_ownership_audit", "tenant_admin_notification_preferences", "tenant_admin_notification_delivery_history", "tenant_admin_notification_delivery_retention"];
 const maxBulkInvitationActions = 10;
 const maxBulkMemberRoleChanges = 10;
 const invitationActivityColumns: InvitationActivityColumn[] = ["invitation_id", "recipient_email", "role", "status", "sent_at", "expires_at", "accepted_at", "revoked_at"];
+const notificationDeliveryRetentionDays = new Set([30, 90, 180, 365]);
 let schemaReady: Promise<void> | null = null;
 
 function normalizeEmail(value: string) {
@@ -183,6 +189,18 @@ function normalizeActivityFilters(input: { status?: string | null; startDate?: s
   if (startDate && endDate && startDate > endDate) throw new Error("invalid_invitation_activity_date_range");
   if (startDate && endDate && endDate.getTime() - startDate.getTime() > 366 * 24 * 60 * 60 * 1000) throw new Error("invitation_activity_range_too_large");
   return { status, startDate, endDate };
+}
+
+function normalizeNotificationDeliveryHistoryFilters(input: { status?: string | null; startDate?: string | null; endDate?: string | null }) {
+  const dates = normalizeActivityFilters({ startDate: input.startDate, endDate: input.endDate });
+  const status = input.status && input.status !== "all" ? input.status : null;
+  if (status && status !== "delivered" && status !== "failed") throw new Error("invalid_notification_delivery_status");
+  return { status: status as "delivered" | "failed" | null, startDate: dates.startDate, endDate: dates.endDate };
+}
+
+function normalizeNotificationDeliveryRetentionDays(value: number) {
+  if (!Number.isInteger(value) || !notificationDeliveryRetentionDays.has(value)) throw new Error("invalid_notification_delivery_retention_days");
+  return value as TenantAdminNotificationDeliveryRetention["retentionDays"];
 }
 
 function normalizeInvitationActivityColumns(columns?: string[] | null) {
@@ -352,6 +370,11 @@ export async function ensureAccountLifecycleStore() {
           dispatch_request_id VARCHAR(128), provider VARCHAR(128), provider_message_id VARCHAR(255), failure_code VARCHAR(128),
           sent_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
         await client.query("CREATE INDEX IF NOT EXISTS tenant_admin_notification_delivery_history_lookup ON tenant_admin_notification_delivery_history (tenant_id, sent_at DESC)");
+        await client.query(`CREATE TABLE IF NOT EXISTS tenant_admin_notification_delivery_retention (
+          tenant_id VARCHAR(128) PRIMARY KEY REFERENCES platform_tenants(id) ON DELETE CASCADE,
+          retention_days INTEGER NOT NULL CHECK (retention_days IN (30, 90, 180, 365)),
+          updated_by_operator_id INTEGER REFERENCES operator_credentials(id) ON DELETE SET NULL,
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
         await client.query(`UPDATE tenant_branding_presets preset SET organization_id = tenant.organization_id
           FROM platform_tenants tenant WHERE preset.tenant_id = tenant.id AND preset.organization_id IS NULL`);
         await client.query("CREATE INDEX IF NOT EXISTS tenant_branding_presets_organization_sharing_lookup ON tenant_branding_presets (organization_id, shared_at DESC) WHERE organization_shared = TRUE");
@@ -1017,9 +1040,30 @@ export async function getTenantAdminNotificationPreferences(operatorId: number):
   return { roleUpdateEmail: preference?.role_update_email ?? false, presetOwnershipTransferEmail: preference?.preset_ownership_transfer_email ?? false, updatedAt: preference?.updated_at ?? null };
 }
 
-export async function listTenantAdminNotificationDeliveryHistory(operatorId: number): Promise<TenantAdminNotificationDeliveryHistory[]> {
-  await ensureAccountLifecycleStore();
-  const { operator } = await getTenantAdminContext(operatorId);
+type NotificationDeliveryHistoryRow = {
+  id: string; recipient_email: string | null; notification_type: "role_update" | "preset_ownership_transfer"; subject: string;
+  delivery_status: "delivered" | "failed"; provider: string | null; provider_message_id: string | null; failure_code: string | null; sent_at: Date;
+};
+
+async function readTenantAdminNotificationDeliveryRetention(tenantId: string) {
+  const result = await getOperatorAuthPool().query<{ retention_days: number; updated_at: Date }>(
+    "SELECT retention_days, updated_at FROM tenant_admin_notification_delivery_retention WHERE tenant_id = $1",
+    [tenantId],
+  );
+  const retention = result.rows[0];
+  return { retentionDays: (retention?.retention_days ?? 365) as TenantAdminNotificationDeliveryRetention["retentionDays"], updatedAt: retention?.updated_at ?? null };
+}
+
+async function pruneTenantAdminNotificationDeliveryHistory(tenantId: string, retentionDays: TenantAdminNotificationDeliveryRetention["retentionDays"]) {
+  const result = await getOperatorAuthPool().query(
+    "DELETE FROM tenant_admin_notification_delivery_history WHERE tenant_id = $1 AND sent_at < NOW() - ($2::integer * INTERVAL '1 day')",
+    [tenantId, retentionDays],
+  );
+  return result.rowCount ?? 0;
+}
+
+async function queryTenantAdminNotificationDeliveryHistory(input: { tenantId: string; status?: string | null; startDate?: string | null; endDate?: string | null; limit: number }) {
+  const filters = normalizeNotificationDeliveryHistoryFilters(input);
   const result = await getOperatorAuthPool().query<{
     id: string; recipient_email: string | null; notification_type: "role_update" | "preset_ownership_transfer"; subject: string;
     delivery_status: "delivered" | "failed"; provider: string | null; provider_message_id: string | null; failure_code: string | null; sent_at: Date;
@@ -1028,10 +1072,72 @@ export async function listTenantAdminNotificationDeliveryHistory(operatorId: num
             history.provider, history.provider_message_id, history.failure_code, history.sent_at
      FROM tenant_admin_notification_delivery_history history
      LEFT JOIN operator_credentials recipient ON recipient.id = history.recipient_operator_id
-     WHERE history.tenant_id = $1 ORDER BY history.sent_at DESC LIMIT 100`,
-    [operator.tenant_id],
+     WHERE history.tenant_id = $1
+       AND ($2::text IS NULL OR history.delivery_status = $2)
+       AND ($3::timestamptz IS NULL OR history.sent_at >= $3)
+       AND ($4::timestamptz IS NULL OR history.sent_at <= $4)
+     ORDER BY history.sent_at DESC LIMIT $5`,
+    [input.tenantId, filters.status, filters.startDate, filters.endDate, input.limit],
   );
-  return result.rows.map((row) => ({ id: row.id, recipientEmail: row.recipient_email, notificationType: row.notification_type, subject: row.subject, deliveryStatus: row.delivery_status, provider: row.provider, providerMessageId: row.provider_message_id, failureCode: row.failure_code, sentAt: row.sent_at }));
+  return result.rows as NotificationDeliveryHistoryRow[];
+}
+
+function toTenantAdminNotificationDeliveryHistory(row: NotificationDeliveryHistoryRow): TenantAdminNotificationDeliveryHistory {
+  return { id: row.id, recipientEmail: row.recipient_email, notificationType: row.notification_type, subject: row.subject, deliveryStatus: row.delivery_status, provider: row.provider, providerMessageId: row.provider_message_id, failureCode: row.failure_code, sentAt: row.sent_at };
+}
+
+export async function listTenantAdminNotificationDeliveryHistory(input: { operatorId: number; status?: string | null; startDate?: string | null; endDate?: string | null }): Promise<TenantAdminNotificationDeliveryHistory[]> {
+  await ensureAccountLifecycleStore();
+  const { operator } = await getTenantAdminContext(input.operatorId);
+  const retention = await readTenantAdminNotificationDeliveryRetention(operator.tenant_id);
+  await pruneTenantAdminNotificationDeliveryHistory(operator.tenant_id, retention.retentionDays);
+  const rows = await queryTenantAdminNotificationDeliveryHistory({ tenantId: operator.tenant_id, status: input.status, startDate: input.startDate, endDate: input.endDate, limit: 100 });
+  return rows.map(toTenantAdminNotificationDeliveryHistory);
+}
+
+export async function exportTenantAdminNotificationDeliveryHistoryCsv(input: { operatorId: number; status?: string | null; startDate?: string | null; endDate?: string | null }) {
+  await ensureAccountLifecycleStore();
+  const { operator } = await getTenantAdminContext(input.operatorId);
+  const retention = await readTenantAdminNotificationDeliveryRetention(operator.tenant_id);
+  await pruneTenantAdminNotificationDeliveryHistory(operator.tenant_id, retention.retentionDays);
+  const rows = await queryTenantAdminNotificationDeliveryHistory({ tenantId: operator.tenant_id, status: input.status, startDate: input.startDate, endDate: input.endDate, limit: 5000 });
+  const columns = ["recipient_email", "notification_type", "subject", "delivery_status", "provider", "failure_code", "sent_at"];
+  const csvRows = rows.map((row) => [row.recipient_email ?? "", row.notification_type, row.subject, row.delivery_status, row.provider ?? "", row.failure_code ?? "", row.sent_at.toISOString()]);
+  return { csv: [columns, ...csvRows].map((row) => row.map((value) => csvCell(value)).join(",")).join("\r\n"), rowCount: rows.length };
+}
+
+export async function getTenantAdminNotificationDeliveryRetention(operatorId: number): Promise<TenantAdminNotificationDeliveryRetention> {
+  await ensureAccountLifecycleStore();
+  const { operator } = await getTenantAdminContext(operatorId);
+  return readTenantAdminNotificationDeliveryRetention(operator.tenant_id);
+}
+
+export async function updateTenantAdminNotificationDeliveryRetention(input: { operatorId: number; retentionDays: number }) {
+  await ensureAccountLifecycleStore();
+  const { operator } = await getTenantAdminContext(input.operatorId);
+  const retentionDays = normalizeNotificationDeliveryRetentionDays(input.retentionDays);
+  const client = await getOperatorAuthPool().connect();
+  try {
+    await client.query("BEGIN");
+    const result = await client.query<{ retention_days: number; updated_at: Date }>(
+      `INSERT INTO tenant_admin_notification_delivery_retention (tenant_id, retention_days, updated_by_operator_id)
+       VALUES ($1,$2,$3)
+       ON CONFLICT (tenant_id) DO UPDATE SET retention_days = EXCLUDED.retention_days, updated_by_operator_id = EXCLUDED.updated_by_operator_id, updated_at = NOW()
+       RETURNING retention_days, updated_at`,
+      [operator.tenant_id, retentionDays, operator.id],
+    );
+    const pruned = await client.query(
+      "DELETE FROM tenant_admin_notification_delivery_history WHERE tenant_id = $1 AND sent_at < NOW() - ($2::integer * INTERVAL '1 day')",
+      [operator.tenant_id, retentionDays],
+    );
+    await client.query("COMMIT");
+    return { retentionDays: result.rows[0].retention_days as TenantAdminNotificationDeliveryRetention["retentionDays"], updatedAt: result.rows[0].updated_at, pruned: pruned.rowCount ?? 0 };
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 export async function updateTenantAdminNotificationPreferences(input: { operatorId: number; roleUpdateEmail: boolean; presetOwnershipTransferEmail: boolean }): Promise<TenantAdminNotificationPreferences> {

@@ -30,7 +30,9 @@ import {
   createOrganizationAndTenant,
   deleteTenantBrandingPreset,
   ensureAccountLifecycleStore,
+  exportTenantAdminNotificationDeliveryHistoryCsv,
   exportInvitationActivityCsv,
+  getTenantAdminNotificationDeliveryRetention,
   listTenantAdminNotificationDeliveryHistory,
   getTenantAdminNotificationPreferences,
   getTenantBranding,
@@ -47,6 +49,7 @@ import {
   saveTenantBrandingPreset,
   setTenantBrandingPresetOrganizationSharing,
   transferTenantBrandingPresetOwnership,
+  updateTenantAdminNotificationDeliveryRetention,
   updateTenantAdminNotificationPreferences,
   updateTenantBranding,
 } from "./accountLifecycleStore";
@@ -748,7 +751,53 @@ app.get("/api/auth/tenant/notification-delivery-history", async (req, res) => {
   const user = requireAuthenticatedOperator(req, res);
   if (!user) return;
   try {
-    res.status(200).json({ history: await listTenantAdminNotificationDeliveryHistory(Number(user.id)) });
+    const status = typeof req.query.status === "string" ? req.query.status : null;
+    const startDate = typeof req.query.startDate === "string" ? req.query.startDate : null;
+    const endDate = typeof req.query.endDate === "string" ? req.query.endDate : null;
+    res.status(200).json({ history: await listTenantAdminNotificationDeliveryHistory({ operatorId: Number(user.id), status, startDate, endDate }) });
+  } catch (error) {
+    const mapped = lifecycleErrorStatus(error);
+    res.status(mapped.code === "tenant_admin_required" ? 403 : mapped.status).json({ error: mapped.code });
+  }
+});
+
+app.get("/api/auth/tenant/notification-delivery-history.csv", rateLimit(10), async (req, res) => {
+  const user = requireAuthenticatedOperator(req, res);
+  if (!user) return;
+  try {
+    const status = typeof req.query.status === "string" ? req.query.status : null;
+    const startDate = typeof req.query.startDate === "string" ? req.query.startDate : null;
+    const endDate = typeof req.query.endDate === "string" ? req.query.endDate : null;
+    const exported = await exportTenantAdminNotificationDeliveryHistoryCsv({ operatorId: Number(user.id), status, startDate, endDate });
+    await recordOperationalEvent({ eventType: "auth.notification_delivery_history_exported", actorId: `${user.id}`, actorRole: user.role, tenantId: user.tenantId, route: req.path, outcome: "success", payload: { status, startDate, endDate, rowCount: exported.rowCount } });
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", 'attachment; filename="notification-delivery-history.csv"');
+    res.setHeader("X-Exported-Row-Count", `${exported.rowCount}`);
+    res.status(200).send(exported.csv);
+  } catch (error) {
+    const mapped = lifecycleErrorStatus(error);
+    res.status(mapped.code === "tenant_admin_required" ? 403 : mapped.status).json({ error: mapped.code });
+  }
+});
+
+app.get("/api/auth/tenant/notification-delivery-retention", async (req, res) => {
+  const user = requireAuthenticatedOperator(req, res);
+  if (!user) return;
+  try {
+    res.status(200).json(await getTenantAdminNotificationDeliveryRetention(Number(user.id)));
+  } catch (error) {
+    const mapped = lifecycleErrorStatus(error);
+    res.status(mapped.code === "tenant_admin_required" ? 403 : mapped.status).json({ error: mapped.code });
+  }
+});
+
+app.post("/api/auth/tenant/notification-delivery-retention", rateLimit(20), async (req, res) => {
+  const user = requireAuthenticatedOperator(req, res);
+  if (!user) return;
+  try {
+    const retention = await updateTenantAdminNotificationDeliveryRetention({ operatorId: Number(user.id), retentionDays: Number(req.body?.retentionDays) });
+    await recordOperationalEvent({ eventType: "auth.notification_delivery_retention_updated", actorId: `${user.id}`, actorRole: user.role, tenantId: user.tenantId, route: req.path, outcome: "success", payload: { retentionDays: retention.retentionDays, pruned: retention.pruned } });
+    res.status(200).json(retention);
   } catch (error) {
     const mapped = lifecycleErrorStatus(error);
     res.status(mapped.code === "tenant_admin_required" ? 403 : mapped.status).json({ error: mapped.code });

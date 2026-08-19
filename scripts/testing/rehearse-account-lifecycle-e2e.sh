@@ -237,6 +237,30 @@ grep -q '"deliveryStatus":"delivered"' /tmp/lifecycle-notification-delivery-hist
 psql "$TEST_DATABASE_URL" -Atqc "SELECT count(*) FROM tenant_admin_notification_delivery_history WHERE tenant_id = (SELECT tenant_id FROM operator_credentials WHERE id = ${invitee_operator_id}) AND delivery_status = 'delivered'" | grep -qx '2'
 
 activity_date="$(date +%F)"
+filtered_delivery_history_status="$(curl --silent --show-error --output /tmp/lifecycle-filtered-notification-delivery-history.json --write-out '%{http_code}' \
+  -b "$cookie_file" "${LIFECYCLE_TEST_BASE_URL%/}/api/auth/tenant/notification-delivery-history?status=delivered&startDate=${activity_date}&endDate=${activity_date}")"
+test "$filtered_delivery_history_status" = '200'
+grep -q '"deliveryStatus":"delivered"' /tmp/lifecycle-filtered-notification-delivery-history.json
+if grep -q '"deliveryStatus":"failed"' /tmp/lifecycle-filtered-notification-delivery-history.json; then echo "Unexpected failed history entry in delivered filter" >&2; exit 1; fi
+
+delivery_csv_status="$(curl --silent --show-error --dump-header /tmp/lifecycle-notification-delivery-history.headers --output /tmp/lifecycle-notification-delivery-history.csv --write-out '%{http_code}' \
+  -b "$cookie_file" "${LIFECYCLE_TEST_BASE_URL%/}/api/auth/tenant/notification-delivery-history.csv?status=delivered&startDate=${activity_date}&endDate=${activity_date}")"
+test "$delivery_csv_status" = '200'
+tr -d '\r' </tmp/lifecycle-notification-delivery-history.headers | grep -Eiq '^x-exported-row-count: [1-9][0-9]*$'
+grep -q '^"recipient_email","notification_type","subject","delivery_status","provider","failure_code","sent_at"' /tmp/lifecycle-notification-delivery-history.csv
+grep -q "${LIFECYCLE_TEST_INVITEE_EMAIL}" /tmp/lifecycle-notification-delivery-history.csv
+if grep -q 'provider_message_id' /tmp/lifecycle-notification-delivery-history.csv; then echo "Unexpected provider message ID CSV column" >&2; exit 1; fi
+
+tenant_id="$(psql "$TEST_DATABASE_URL" -Atqc "SELECT tenant_id FROM operator_credentials WHERE id = ${invitee_operator_id}")"
+psql "$TEST_DATABASE_URL" -v ON_ERROR_STOP=1 -c "INSERT INTO tenant_admin_notification_delivery_history (id, tenant_id, recipient_operator_id, notification_type, subject, delivery_status, sent_at) VALUES ('00000000-0000-0000-0000-000000000001', '${tenant_id}', ${invitee_operator_id}, 'role_update', 'Expired rehearsal alert', 'delivered', NOW() - INTERVAL '45 days')"
+retention_status="$(curl --silent --show-error --output /tmp/lifecycle-notification-delivery-retention.json --write-out '%{http_code}' \
+  -b "$cookie_file" -H 'Content-Type: application/json' --data '{"retentionDays":30}' \
+  "${LIFECYCLE_TEST_BASE_URL%/}/api/auth/tenant/notification-delivery-retention")"
+test "$retention_status" = '200'
+grep -q '"retentionDays":30' /tmp/lifecycle-notification-delivery-retention.json
+grep -q '"pruned":1' /tmp/lifecycle-notification-delivery-retention.json
+psql "$TEST_DATABASE_URL" -Atqc "SELECT count(*) FROM tenant_admin_notification_delivery_history WHERE id = '00000000-0000-0000-0000-000000000001'" | grep -qx '0'
+
 audit_status="$(curl --silent --show-error --output /tmp/lifecycle-preset-ownership-history.json --write-out '%{http_code}' \
   -b "$cookie_file" "${LIFECYCLE_TEST_BASE_URL%/}/api/auth/tenant-branding/presets/audit-history?startDate=${activity_date}&endDate=${activity_date}")"
 test "$audit_status" = '200'

@@ -135,4 +135,23 @@ describe("tenant admin action contracts", () => {
     expect(migration).toContain("recipient_operator_id");
     expect(rollback).toContain("DROP TABLE IF EXISTS tenant_admin_notification_delivery_history");
   });
+
+  it("bounds delivery-history reporting, safely exports filtered records, and persists tenant retention policies", async () => {
+    const store = await readFile(resolve(root, "server/_core/accountLifecycleStore.ts"), "utf8");
+    const routes = await readFile(resolve(root, "server/_core/index.ts"), "utf8");
+    const migration = await readFile(resolve(root, "drizzle/0016_tenant_admin_notification_delivery_retention.sql"), "utf8");
+    const rollback = await readFile(resolve(root, "drizzle/rollback/0016_tenant_admin_notification_delivery_retention.down.sql"), "utf8");
+
+    expect(store).toContain("normalizeNotificationDeliveryHistoryFilters");
+    expect(store).toContain("invalid_notification_delivery_status");
+    expect(store).toContain("exportTenantAdminNotificationDeliveryHistoryCsv");
+    expect(store).toContain("formulaSafe");
+    expect(store).toContain("normalizeNotificationDeliveryRetentionDays");
+    expect(store).toContain("pruneTenantAdminNotificationDeliveryHistory");
+    expect(routes).toContain('"/api/auth/tenant/notification-delivery-history.csv"');
+    expect(routes).toContain('"/api/auth/tenant/notification-delivery-retention"');
+    expect(migration).toContain("retention_days");
+    expect(migration).toContain("CHECK (retention_days IN (30, 90, 180, 365))");
+    expect(rollback).toContain("DROP TABLE IF EXISTS tenant_admin_notification_delivery_retention");
+  });
 });

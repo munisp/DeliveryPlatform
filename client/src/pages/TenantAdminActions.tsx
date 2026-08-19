@@ -8,6 +8,7 @@ import "./account-lifecycle.css";
 type Member = { id: number; email: string; name: string; role: "admin" | "operator" | "viewer"; updatedAt: string };
 type NotificationPreferences = { roleUpdateEmail: boolean; presetOwnershipTransferEmail: boolean; updatedAt: string | null };
 type NotificationDeliveryHistory = { id: string; recipientEmail: string | null; notificationType: "role_update" | "preset_ownership_transfer"; subject: string; deliveryStatus: "delivered" | "failed"; provider: string | null; providerMessageId: string | null; failureCode: string | null; sentAt: string };
+type NotificationDeliveryRetention = { retentionDays: 30 | 90 | 180 | 365; updatedAt: string | null };
 type ApiError = { error?: string };
 type ExportStage = "idle" | "preparing" | "downloading" | "complete";
 
@@ -61,6 +62,28 @@ async function downloadInvitationActivity(
   return rowCount;
 }
 
+function deliveryHistoryQuery(filters: { status: string; startDate: string; endDate: string }) {
+  const query = new URLSearchParams();
+  if (filters.status !== "all") query.set("status", filters.status);
+  if (filters.startDate) query.set("startDate", filters.startDate);
+  if (filters.endDate) query.set("endDate", filters.endDate);
+  return query.toString();
+}
+
+async function downloadDeliveryHistory(filters: { status: string; startDate: string; endDate: string }) {
+  const response = await fetch(`/api/auth/tenant/notification-delivery-history.csv?${deliveryHistoryQuery(filters)}`, { credentials: "include" });
+  if (!response.ok) throw new Error("notification_delivery_history_export_failed");
+  const rowCount = Number(response.headers.get("X-Exported-Row-Count"));
+  if (!Number.isSafeInteger(rowCount) || rowCount < 0) throw new Error("notification_delivery_history_export_count_unavailable");
+  const url = URL.createObjectURL(await response.blob());
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = "notification-delivery-history.csv";
+  anchor.click();
+  window.setTimeout(() => URL.revokeObjectURL(url), 0);
+  return rowCount;
+}
+
 function EmailAlertPreview({ preferences, onClose }: { preferences: NotificationPreferences; onClose: () => void }) {
   const notices = [
     preferences.roleUpdateEmail ? {
@@ -104,16 +127,27 @@ export default function TenantAdminActions() {
   const [exportStage, setExportStage] = useState<ExportStage>("idle");
   const [exportToastVisible, setExportToastVisible] = useState(false);
   const [exportRowCount, setExportRowCount] = useState<number | null>(null);
+  const [deliveryHistoryStatus, setDeliveryHistoryStatus] = useState("all");
+  const [deliveryHistoryStartDate, setDeliveryHistoryStartDate] = useState("");
+  const [deliveryHistoryEndDate, setDeliveryHistoryEndDate] = useState("");
+  const [deliveryHistoryExportRowCount, setDeliveryHistoryExportRowCount] = useState<number | null>(null);
+  const [deliveryHistoryExportToastVisible, setDeliveryHistoryExportToastVisible] = useState(false);
+  const [deliveryRetentionDraft, setDeliveryRetentionDraft] = useState<NotificationDeliveryRetention["retentionDays"] | null>(null);
+  const [retentionConfirmationOpen, setRetentionConfirmationOpen] = useState(false);
 
   const members = useQuery({ queryKey: ["tenant-members"], queryFn: () => request<{ members: Member[] }>("/api/auth/members") });
   const preferences = useQuery({ queryKey: ["tenant-admin-notification-preferences"], queryFn: () => request<NotificationPreferences>("/api/auth/tenant/notification-preferences") });
-  const deliveryHistory = useQuery({ queryKey: ["tenant-admin-notification-delivery-history"], queryFn: () => request<{ history: NotificationDeliveryHistory[] }>("/api/auth/tenant/notification-delivery-history") });
+  const deliveryHistory = useQuery({ queryKey: ["tenant-admin-notification-delivery-history", deliveryHistoryStatus, deliveryHistoryStartDate, deliveryHistoryEndDate], queryFn: () => request<{ history: NotificationDeliveryHistory[] }>(`/api/auth/tenant/notification-delivery-history?${deliveryHistoryQuery({ status: deliveryHistoryStatus, startDate: deliveryHistoryStartDate, endDate: deliveryHistoryEndDate })}`) });
+  const deliveryRetention = useQuery({ queryKey: ["tenant-admin-notification-delivery-retention"], queryFn: () => request<NotificationDeliveryRetention>("/api/auth/tenant/notification-delivery-retention") });
   const selectedMembers = useMemo(() => members.data?.members.filter((member) => selected.includes(member.id)) ?? [], [members.data?.members, selected]);
   const activePreferences = preferences.data ?? { roleUpdateEmail: false, presetOwnershipTransferEmail: false, updatedAt: null };
   const currentPreferences = notificationDraft ?? activePreferences;
   const notificationPreferencesChanged = currentPreferences.roleUpdateEmail !== activePreferences.roleUpdateEmail || currentPreferences.presetOwnershipTransferEmail !== activePreferences.presetOwnershipTransferEmail;
   const selectable = members.data?.members.filter((member) => member.role !== "admin") ?? [];
   const invalidDateRange = Boolean(activityStartDate && activityEndDate && activityStartDate > activityEndDate);
+  const invalidDeliveryHistoryDateRange = Boolean(deliveryHistoryStartDate && deliveryHistoryEndDate && deliveryHistoryStartDate > deliveryHistoryEndDate);
+  const currentDeliveryRetentionDays = deliveryRetentionDraft ?? deliveryRetention.data?.retentionDays ?? 365;
+  const deliveryRetentionChanged = Boolean(deliveryRetention.data && currentDeliveryRetentionDays !== deliveryRetention.data.retentionDays);
   const exportProgressLabel = exportStage === "downloading" ? "Generating file and starting the download" : "Preparing the invitation activity export";
 
   const changeRoles = useMutation({
@@ -143,6 +177,15 @@ export default function TenantAdminActions() {
       presetOwnershipTransferEmail: next.presetOwnershipTransferEmail,
     }),
     onSuccess: () => { setNotificationDraft(null); preferences.refetch(); },
+  });
+  const exportDeliveryHistory = useMutation({
+    mutationFn: () => downloadDeliveryHistory({ status: deliveryHistoryStatus, startDate: deliveryHistoryStartDate, endDate: deliveryHistoryEndDate }),
+    onMutate: () => { setDeliveryHistoryExportRowCount(null); setDeliveryHistoryExportToastVisible(false); },
+    onSuccess: (rowCount) => { setDeliveryHistoryExportRowCount(rowCount); setDeliveryHistoryExportToastVisible(true); window.setTimeout(() => setDeliveryHistoryExportToastVisible(false), 6000); },
+  });
+  const updateDeliveryRetention = useMutation({
+    mutationFn: (retentionDays: NotificationDeliveryRetention["retentionDays"]) => request<NotificationDeliveryRetention & { pruned: number }>("/api/auth/tenant/notification-delivery-retention", { retentionDays }),
+    onSuccess: () => { setDeliveryRetentionDraft(null); setRetentionConfirmationOpen(false); deliveryRetention.refetch(); deliveryHistory.refetch(); },
   });
 
   const toggleMember = (id: number) => setSelected((ids) => ids.includes(id) ? ids.filter((candidate) => candidate !== id) : [...ids, id]);
@@ -205,15 +248,22 @@ export default function TenantAdminActions() {
       </Card>
 
       <Card>
-        <CardHeader><CardTitle>Email alert delivery history</CardTitle><CardDescription>Review the latest 100 tenant-scoped committed alert delivery attempts. Message bodies and invitation tokens are never retained here.</CardDescription></CardHeader>
-        <CardContent className="space-y-3">
-          {deliveryHistory.isLoading ? <p className="text-sm text-slate-400">Loading delivery history…</p> : deliveryHistory.isError ? <p role="alert" className="text-sm text-rose-300">Delivery history is unavailable. Refresh and try again.</p> : deliveryHistory.data?.history.length ? <ul className="tenant-preset-list">{deliveryHistory.data.history.map((entry) => <li key={entry.id}><div><strong>{entry.subject}</strong><small>{entry.recipientEmail ?? "Former tenant administrator"} · {entry.notificationType === "role_update" ? "Role update" : "Preset ownership transfer"} · {new Date(entry.sentAt).toLocaleString()}</small>{entry.deliveryStatus === "failed" ? <small className="text-rose-300">Delivery failed: {entry.failureCode ?? "notification_dispatch_failed"}</small> : <small className="text-emerald-300">Delivered{entry.provider ? ` via ${entry.provider}` : ""}</small>}</div><span className={`invitation-status invitation-status-${entry.deliveryStatus === "delivered" ? "accepted" : "revoked"}`}>{entry.deliveryStatus}</span></li>)}</ul> : <p className="text-sm text-slate-400">No tenant-admin alerts have been delivered yet.</p>}<button type="button" onClick={() => deliveryHistory.refetch()} disabled={deliveryHistory.isFetching} className="rounded-xl border border-slate-600 px-3 py-2 text-sm font-semibold text-slate-100 disabled:opacity-50">{deliveryHistory.isFetching ? "Refreshing history…" : "Refresh delivery history"}</button>
+        <CardHeader><CardTitle>Email alert delivery history</CardTitle><CardDescription>Find committed tenant-scoped delivery attempts, download the filtered log, and retain only the metadata your operating policy requires. Message bodies and invitation tokens are never retained here.</CardDescription></CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex flex-wrap gap-3"><label className="grid gap-2 text-sm text-slate-200"><span>Delivery status</span><select value={deliveryHistoryStatus} onChange={(event) => setDeliveryHistoryStatus(event.target.value)} className="rounded-xl border border-slate-700 bg-slate-950 px-3 py-2"><option value="all">All outcomes</option><option value="delivered">Delivered</option><option value="failed">Failed</option></select></label><label className="grid gap-2 text-sm text-slate-200"><span>From</span><input type="date" value={deliveryHistoryStartDate} onChange={(event) => setDeliveryHistoryStartDate(event.target.value)} className="rounded-xl border border-slate-700 bg-slate-950 px-3 py-2" /></label><label className="grid gap-2 text-sm text-slate-200"><span>To</span><input type="date" value={deliveryHistoryEndDate} onChange={(event) => setDeliveryHistoryEndDate(event.target.value)} className="rounded-xl border border-slate-700 bg-slate-950 px-3 py-2" /></label></div>
+          {invalidDeliveryHistoryDateRange ? <p role="alert" className="text-sm text-rose-300">The delivery-history start date must be before the end date.</p> : null}
+          <div className="flex flex-wrap gap-3"><button type="button" onClick={() => exportDeliveryHistory.mutate()} disabled={exportDeliveryHistory.isPending || invalidDeliveryHistoryDateRange} className="rounded-xl border border-cyan-400/40 bg-cyan-500/10 px-4 py-2 text-sm font-semibold text-cyan-100 disabled:opacity-50">{exportDeliveryHistory.isPending ? "Preparing delivery log…" : "Download delivery history CSV"}</button><button type="button" onClick={() => deliveryHistory.refetch()} disabled={deliveryHistory.isFetching} className="rounded-xl border border-slate-600 px-3 py-2 text-sm font-semibold text-slate-100 disabled:opacity-50">{deliveryHistory.isFetching ? "Refreshing history…" : "Refresh delivery history"}</button></div>
+          {exportDeliveryHistory.isError ? <p role="alert" className="text-sm text-rose-300">The delivery-history export is unavailable. Try a maximum one-year range.</p> : null}
+          {deliveryHistory.isLoading ? <p className="text-sm text-slate-400">Loading delivery history…</p> : deliveryHistory.isError ? <p role="alert" className="text-sm text-rose-300">Delivery history is unavailable. Refresh and try again.</p> : deliveryHistory.data?.history.length ? <ul className="tenant-preset-list">{deliveryHistory.data.history.map((entry) => <li key={entry.id}><div><strong>{entry.subject}</strong><small>{entry.recipientEmail ?? "Former tenant administrator"} · {entry.notificationType === "role_update" ? "Role update" : "Preset ownership transfer"} · {new Date(entry.sentAt).toLocaleString()}</small>{entry.deliveryStatus === "failed" ? <small className="text-rose-300">Delivery failed: {entry.failureCode ?? "notification_dispatch_failed"}</small> : <small className="text-emerald-300">Delivered{entry.provider ? ` via ${entry.provider}` : ""}</small>}</div><span className={`invitation-status invitation-status-${entry.deliveryStatus === "delivered" ? "accepted" : "revoked"}`}>{entry.deliveryStatus}</span></li>)}</ul> : <p className="text-sm text-slate-400">No tenant-admin alerts match this filter.</p>}
+          <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-4"><h3 className="text-sm font-semibold text-slate-100">Delivery metadata retention</h3><p className="mt-1 text-sm text-slate-400">Changing this setting permanently prunes this tenant’s delivery metadata older than the selected window.</p>{deliveryRetention.isLoading ? <p className="mt-2 text-sm text-slate-400">Loading retention settings…</p> : deliveryRetention.isError ? <p role="alert" className="mt-2 text-sm text-rose-300">Retention settings are unavailable.</p> : <div className="mt-3 flex flex-wrap items-end gap-3"><label className="grid gap-2 text-sm text-slate-200"><span>Keep delivery metadata for</span><select value={currentDeliveryRetentionDays} disabled={updateDeliveryRetention.isPending} onChange={(event) => setDeliveryRetentionDraft(Number(event.target.value) as NotificationDeliveryRetention["retentionDays"])} className="rounded-xl border border-slate-700 bg-slate-950 px-3 py-2"><option value="30">30 days</option><option value="90">90 days</option><option value="180">180 days</option><option value="365">365 days</option></select></label><button type="button" onClick={() => setRetentionConfirmationOpen(true)} disabled={!deliveryRetentionChanged || updateDeliveryRetention.isPending} className="rounded-xl bg-cyan-400 px-4 py-2 text-sm font-semibold text-slate-950 disabled:opacity-50">Save retention setting</button>{updateDeliveryRetention.isSuccess ? <p role="status" className="text-sm text-emerald-300">Retention saved. {updateDeliveryRetention.data.pruned} historical record{updateDeliveryRetention.data.pruned === 1 ? "" : "s"} pruned.</p> : null}{updateDeliveryRetention.isError ? <p role="alert" className="text-sm text-rose-300">Retention setting could not be saved.</p> : null}</div>}</div>
         </CardContent>
       </Card>
 
       {roleConfirmationOpen ? <div className="lifecycle-modal-backdrop" role="presentation"><section className="lifecycle-modal" role="dialog" aria-modal="true" aria-labelledby="role-confirmation-title"><h2 id="role-confirmation-title">Update {selected.length} member role{selected.length === 1 ? "" : "s"}?</h2><p>The selected members will become <strong>{role}</strong>. This may change what they can access in the tenant. Your own role and the final tenant administrator remain protected.</p>{selectedMembers.length ? <ul className="mt-3 list-disc pl-5 text-sm text-slate-300">{selectedMembers.map((member) => <li key={member.id}>{member.email}</li>)}</ul> : null}<div><button type="button" onClick={() => setRoleConfirmationOpen(false)}>Cancel</button><button type="button" className="invitation-revoke" onClick={() => { setRoleConfirmationOpen(false); changeRoles.mutate(); }}>Confirm role change</button></div></section></div> : null}
+      {retentionConfirmationOpen ? <div className="lifecycle-modal-backdrop" role="presentation"><section className="lifecycle-modal" role="dialog" aria-modal="true" aria-labelledby="retention-confirmation-title"><h2 id="retention-confirmation-title">Apply {currentDeliveryRetentionDays}-day retention?</h2><p>Delivery-history metadata older than {currentDeliveryRetentionDays} days will be permanently deleted for this tenant. Alert message bodies and invitation tokens are never stored in this history.</p><div><button type="button" onClick={() => setRetentionConfirmationOpen(false)}>Cancel</button><button type="button" className="invitation-revoke" disabled={updateDeliveryRetention.isPending} onClick={() => updateDeliveryRetention.mutate(currentDeliveryRetentionDays)}>Confirm retention change</button></div></section></div> : null}
       {notificationPreviewOpen ? <EmailAlertPreview preferences={currentPreferences} onClose={() => setNotificationPreviewOpen(false)} /> : null}
       {exportToastVisible && exportRowCount !== null ? <div className="fixed bottom-6 right-6 z-50 flex max-w-sm items-start gap-3 rounded-xl border border-emerald-400/40 bg-slate-950 px-4 py-3 text-sm text-emerald-100 shadow-2xl" role="status" aria-live="polite"><span className="font-semibold">Invitation activity CSV downloaded with {exportRowCount} {exportRowCount === 1 ? "row" : "rows"}.</span><button type="button" onClick={() => setExportToastVisible(false)} className="text-emerald-200 underline underline-offset-2">Dismiss</button></div> : null}
+      {deliveryHistoryExportToastVisible && deliveryHistoryExportRowCount !== null ? <div className="fixed bottom-6 right-6 z-50 flex max-w-sm items-start gap-3 rounded-xl border border-emerald-400/40 bg-slate-950 px-4 py-3 text-sm text-emerald-100 shadow-2xl" role="status" aria-live="polite"><span className="font-semibold">Delivery-history CSV downloaded with {deliveryHistoryExportRowCount} {deliveryHistoryExportRowCount === 1 ? "row" : "rows"}.</span><button type="button" onClick={() => setDeliveryHistoryExportToastVisible(false)} className="text-emerald-200 underline underline-offset-2">Dismiss</button></div> : null}
     </div>
   </DashboardLayout>;
 }

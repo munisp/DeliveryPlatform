@@ -148,8 +148,21 @@ describe("account lifecycle onboarding UI", () => {
     expect(actions).toContain('response.headers.get("X-Exported-Row-Count")');
     expect(actions).toContain("exportRowCount");
     expect(actions).toContain("downloaded with {exportRowCount}");
-    expect(actions).toContain('"/api/auth/tenant/notification-delivery-history"');
+    expect(actions).toContain("/api/auth/tenant/notification-delivery-history?");
     expect(actions).toContain("Email alert delivery history");
     expect(actions).toContain("Message bodies and invitation tokens are never retained here.");
+  });
+
+  it("filters and exports delivery history while requiring confirmation for retention pruning", async () => {
+    const actions = await readFile(resolve(root, "client/src/pages/TenantAdminActions.tsx"), "utf8");
+
+    expect(actions).toContain("deliveryHistoryStatus");
+    expect(actions).toContain("deliveryHistoryStartDate");
+    expect(actions).toContain("deliveryHistoryEndDate");
+    expect(actions).toContain("Download delivery history CSV");
+    expect(actions).toContain('anchor.download = "notification-delivery-history.csv"');
+    expect(actions).toContain("Delivery metadata retention");
+    expect(actions).toContain("retentionConfirmationOpen");
+    expect(actions).toContain("Confirm retention change");
   });
 });
