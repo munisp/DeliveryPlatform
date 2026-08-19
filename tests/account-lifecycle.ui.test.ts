@@ -108,4 +108,28 @@ describe("account lifecycle onboarding UI", () => {
     expect(page).toContain("ownershipEndDate");
     expect(page).toContain("startDate");
   });
+
+  it("provides quick ownership-audit date ranges that remain aligned to the date-filter query", async () => {
+    const page = await readFile(resolve(root, "client/src/pages/AccountLifecycle.tsx"), "utf8");
+
+    expect(page).toContain("ownershipRangePreset");
+    expect(page).toContain("recentDateRange(7)");
+    expect(page).toContain("recentDateRange(30)");
+    expect(page).toContain("Last 7 days");
+    expect(page).toContain("Last 30 days");
+    expect(page).toContain('aria-pressed={ownershipRangePreset === "last-seven-days"}');
+  });
+
+  it("previews draft email alerts and confirms invitation activity downloads with progress and a toast", async () => {
+    const actions = await readFile(resolve(root, "client/src/pages/TenantAdminActions.tsx"), "utf8");
+
+    expect(actions).toContain("notificationPreviewOpen");
+    expect(actions).toContain("Preview sample notification");
+    expect(actions).toContain("This preview reflects the selections currently shown on this page");
+    expect(actions).toContain("never include invitation tokens or branding image data");
+    expect(actions).toContain('role="progressbar"');
+    expect(actions).toContain("exportToastVisible");
+    expect(actions).toContain('aria-live="polite"');
+    expect(actions).toContain("Invitation activity CSV downloaded.");
+  });
 });

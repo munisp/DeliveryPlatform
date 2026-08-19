@@ -169,6 +169,11 @@
 .tenant-brand-presets h3 { margin: 0; color: #f8fafc; font-size: 16px; }
 .tenant-brand-shared-presets h3 { margin: 0; color: #f8fafc; font-size: 16px; }
 .tenant-brand-presets p, .tenant-brand-shared-presets p { margin: 5px 0 0; color: #94a3b8; font-size: 13px; }
+.tenant-audit-range-presets { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; border: 1px solid #1e293b; border-radius: 10px; padding: 10px; color: #94a3b8; font-size: 12px; }
+.tenant-audit-range-presets > span { margin-right: 2px; color: #cbd5e1; font-weight: 700; }
+.tenant-audit-range-presets button { border: 1px solid #475569; border-radius: 8px; background: #0f172a; color: #dbeafe; cursor: pointer; padding: 7px 9px; font: inherit; font-weight: 800; }
+.tenant-audit-range-presets button[aria-pressed="true"] { border-color: #22d3ee; background: #164e63; color: #cffafe; }
+.tenant-audit-range-presets button:focus-visible { outline: 2px solid #a5f3fc; outline-offset: 2px; }
 .tenant-preset-save { display: flex; align-items: end; gap: 12px; }
 .tenant-preset-save .lifecycle-field { flex: 1; }
 .tenant-preset-list { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
@@ -213,6 +218,17 @@
 .lifecycle-modal p { margin: 10px 0 18px; color: #cbd5e1; font-size: 14px; line-height: 1.55; }
 .lifecycle-modal div { display: flex; justify-content: end; gap: 9px; }
 .lifecycle-modal .invitation-revoke, .invitation-bulk-toolbar .invitation-revoke { border-color: rgba(251,113,133,.55); color: #fecdd3; }
+.notification-preview-modal { width: min(100%, 560px); border-color: rgba(34, 211, 238, .45); }
+.notification-preview-modal .lifecycle-eyebrow { margin-bottom: 8px; }
+.notification-preview-modal > div:last-child { margin-top: 18px; }
+.notification-email-preview { display: grid !important; gap: 10px; }
+.notification-email-preview article { display: grid; gap: 9px; border: 1px solid #334155; border-radius: 10px; background: #020617; padding: 13px; }
+.notification-email-preview article header { display: grid; gap: 3px; }
+.notification-email-preview article header span, .notification-email-preview article small { color: #94a3b8; font-size: 11px; }
+.notification-email-preview article header strong { color: #e2e8f0; font-size: 12px; }
+.notification-email-preview article p { margin: 0; }
+.notification-email-preview .notification-email-subject { color: #cffafe; font-weight: 800; }
+.notification-preview-empty { justify-content: start !important; border: 1px solid #334155; border-radius: 10px; background: #020617; color: #cbd5e1; padding: 13px; font-size: 13px; }
 
 @media (max-width: 700px) {
   .tenant-branding-heading { align-items: stretch; flex-direction: column; }
@@ -221,6 +237,8 @@
   .tenant-preset-save, .tenant-preset-list li { align-items: stretch; flex-direction: column; }
   .tenant-preset-list li { gap: 8px; }
   .tenant-preset-list li button { width: 100%; }
+  .tenant-audit-range-presets { align-items: stretch; flex-direction: column; }
+  .tenant-audit-range-presets button { width: 100%; }
   .invitation-status-list li { align-items: flex-start; flex-direction: column; }
   .invitation-row-actions { justify-content: flex-start; flex-wrap: wrap; }
   .invitation-toolbar { grid-template-columns: 1fr 1fr; }

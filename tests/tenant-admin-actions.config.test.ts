@@ -108,4 +108,14 @@ describe("tenant admin action contracts", () => {
     expect(migration).toContain("preset_ownership_transfer_email");
     expect(rollback).toContain("DROP TABLE IF EXISTS tenant_admin_notification_preferences");
   });
+
+  it("keeps email previews client-side and starts exports only after the scoped CSV response is received", async () => {
+    const actions = await readFile(resolve(root, "client/src/pages/TenantAdminActions.tsx"), "utf8");
+
+    expect(actions).toContain("EmailAlertPreview");
+    expect(actions).toContain("It does not send email or save preference changes.");
+    expect(actions).toContain("onDownloadReady");
+    expect(actions).toContain('anchor.download = "invitation-activity.csv"');
+    expect(actions).toContain("setExportStage(\"downloading\")");
+  });
 });
