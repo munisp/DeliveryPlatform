@@ -1,0 +1,4 @@
+DROP TRIGGER IF EXISTS trg_mojaloop_refund_identity_immutable ON mojaloop_refunds;
+DROP TRIGGER IF EXISTS trg_mojaloop_quote_identity_immutable ON mojaloop_quotes;
+DROP TRIGGER IF EXISTS trg_mojaloop_transfer_identity_immutable ON mojaloop_transfers;
+DROP FUNCTION IF EXISTS mojaloop_reject_financial_identity_rewrite();

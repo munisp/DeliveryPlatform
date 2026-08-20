@@ -429,13 +429,17 @@ func (s *MojaloopService) beginIdempotency(operation, key, resourceID string) (m
 	}
 
 	var status string
+	var existingResourceID sql.NullString
 	var body []byte
 	if err := s.db.QueryRow(
-		`SELECT status, COALESCE(response_body::text, '{}') FROM mojaloop_idempotency_keys WHERE operation = $1 AND idempotency_key = $2`,
+		`SELECT status, resource_id, COALESCE(response_body::text, '{}') FROM mojaloop_idempotency_keys WHERE operation = $1 AND idempotency_key = $2`,
 		operation,
 		key,
-	).Scan(&status, &body); err != nil {
+	).Scan(&status, &existingResourceID, &body); err != nil {
 		return nil, false, fmt.Errorf("load idempotency record: %w", err)
+	}
+	if existingResourceID.Valid && strings.TrimSpace(resourceID) != "" && existingResourceID.String != resourceID {
+		return nil, false, fmt.Errorf("idempotency key is already bound to a different resource")
 	}
 	if status == "completed" {
 		var cached map[string]any
@@ -789,6 +793,9 @@ func (s *MojaloopService) buildReconciliationReport(transferID string) (Reconcil
 
 	platformRefunded := uint64(0)
 	for _, refund := range refunds {
+		if refund.State != "PENDING_LEDGER" && refund.State != "PENDING" && refund.State != "COMPLETED" {
+			continue
+		}
 		if ^uint64(0)-platformRefunded < refund.AmountMinor {
 			return ReconciliationReport{}, fmt.Errorf("refund aggregation overflow")
 		}

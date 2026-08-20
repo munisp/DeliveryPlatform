@@ -35,18 +35,29 @@ func (s *MojaloopService) storeTransferAndWorkflow(transfer Transfer, event Fund
 		return fmt.Errorf("begin transfer and outbox transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	if _, err = tx.Exec(
+	result, err := tx.Exec(
 		`INSERT INTO mojaloop_transfers (
 			transfer_id, payer_fsp, payee_fsp, amount, amount_minor, currency, ilp_packet, condition, expiration, state, completed_time, fulfilment_value, created_at, updated_at
 		) VALUES ($1,$2,$3,$4::numeric / 100,$4,$5,$6,$7,$8,$9,$10,$11,NOW(),NOW())
-		ON CONFLICT (transfer_id) DO UPDATE SET
-			payer_fsp = EXCLUDED.payer_fsp, payee_fsp = EXCLUDED.payee_fsp, amount = EXCLUDED.amount, amount_minor = EXCLUDED.amount_minor,
-			currency = EXCLUDED.currency, ilp_packet = EXCLUDED.ilp_packet, condition = EXCLUDED.condition, expiration = EXCLUDED.expiration,
-			state = EXCLUDED.state, completed_time = EXCLUDED.completed_time, fulfilment_value = EXCLUDED.fulfilment_value, updated_at = NOW()`,
+		ON CONFLICT (transfer_id) DO UPDATE SET updated_at = NOW()
+		WHERE mojaloop_transfers.payer_fsp IS NOT DISTINCT FROM EXCLUDED.payer_fsp
+			AND mojaloop_transfers.payee_fsp IS NOT DISTINCT FROM EXCLUDED.payee_fsp
+			AND mojaloop_transfers.amount_minor IS NOT DISTINCT FROM EXCLUDED.amount_minor
+			AND mojaloop_transfers.currency IS NOT DISTINCT FROM EXCLUDED.currency
+			AND mojaloop_transfers.ilp_packet IS NOT DISTINCT FROM EXCLUDED.ilp_packet
+			AND mojaloop_transfers.condition IS NOT DISTINCT FROM EXCLUDED.condition
+			AND mojaloop_transfers.expiration IS NOT DISTINCT FROM EXCLUDED.expiration`,
 		transfer.TransferID, transfer.PayerFSP, transfer.PayeeFSP, int64(transfer.AmountMinor), transfer.Currency, transfer.IlpPacket, transfer.Condition,
 		transfer.Expiration, transfer.State, nullableTime(transfer.CompletedTime), nullableString(transfer.FulfilmentValue),
-	); err != nil {
+	)
+	if err != nil {
 		return fmt.Errorf("store transfer with outbox: %w", err)
+	}
+	if rows, rowsErr := result.RowsAffected(); rowsErr != nil || rows != 1 {
+		if rowsErr != nil {
+			return fmt.Errorf("verify transfer financial identity: %w", rowsErr)
+		}
+		return fmt.Errorf("transfer id %q is already bound to a different immutable financial identity", transfer.TransferID)
 	}
 	if err = s.persistFundsWorkflowEvent(tx, event); err != nil {
 		return err
@@ -63,17 +74,28 @@ func (s *MojaloopService) storeQuoteAndWorkflow(quote Quote, event FundsWorkflow
 		return fmt.Errorf("begin quote and outbox transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	if _, err = tx.Exec(
+	result, err := tx.Exec(
 		`INSERT INTO mojaloop_quotes (
 			quote_id, transaction_id, payer_fsp, payee_fsp, amount, amount_minor, currency, fees, fees_minor, expiration, state, created_at, updated_at
 		) VALUES ($1,$2,$3,$4,$5::numeric / 100,$5,$6,$7::numeric / 100,$7,$8,$9,NOW(),NOW())
-		ON CONFLICT (quote_id) DO UPDATE SET
-			transaction_id = EXCLUDED.transaction_id, payer_fsp = EXCLUDED.payer_fsp, payee_fsp = EXCLUDED.payee_fsp,
-			amount = EXCLUDED.amount, amount_minor = EXCLUDED.amount_minor, currency = EXCLUDED.currency, fees = EXCLUDED.fees,
-			fees_minor = EXCLUDED.fees_minor, expiration = EXCLUDED.expiration, state = EXCLUDED.state, updated_at = NOW()`,
+		ON CONFLICT (quote_id) DO UPDATE SET updated_at = NOW()
+		WHERE mojaloop_quotes.transaction_id IS NOT DISTINCT FROM EXCLUDED.transaction_id
+			AND mojaloop_quotes.payer_fsp IS NOT DISTINCT FROM EXCLUDED.payer_fsp
+			AND mojaloop_quotes.payee_fsp IS NOT DISTINCT FROM EXCLUDED.payee_fsp
+			AND mojaloop_quotes.amount_minor IS NOT DISTINCT FROM EXCLUDED.amount_minor
+			AND mojaloop_quotes.fees_minor IS NOT DISTINCT FROM EXCLUDED.fees_minor
+			AND mojaloop_quotes.currency IS NOT DISTINCT FROM EXCLUDED.currency
+			AND mojaloop_quotes.expiration IS NOT DISTINCT FROM EXCLUDED.expiration`,
 		quote.QuoteID, quote.TransactionID, quote.PayerFSP, quote.PayeeFSP, int64(quote.AmountMinor), quote.Currency, int64(quote.FeesMinor), quote.Expiration, quote.State,
-	); err != nil {
+	)
+	if err != nil {
 		return fmt.Errorf("store quote with outbox: %w", err)
+	}
+	if rows, rowsErr := result.RowsAffected(); rowsErr != nil || rows != 1 {
+		if rowsErr != nil {
+			return fmt.Errorf("verify quote financial identity: %w", rowsErr)
+		}
+		return fmt.Errorf("quote id %q is already bound to a different immutable financial identity", quote.QuoteID)
 	}
 	if err = s.persistFundsWorkflowEvent(tx, event); err != nil {
 		return err
@@ -103,18 +125,28 @@ func (s *MojaloopService) storeRefundAndWorkflowTx(tx *sql.Tx, refund Refund, ev
 	if tx == nil {
 		return fmt.Errorf("refund and outbox transaction is required")
 	}
-	if _, err := tx.Exec(
+	result, err := tx.Exec(
 		`INSERT INTO mojaloop_refunds (
 			refund_id, original_transfer_id, payer_fsp, payee_fsp, amount, amount_minor, currency, reason, state, completed_time, created_at, updated_at
 		) VALUES ($1,$2,$3,$4,$5::numeric / 100,$5,$6,$7,$8,$9,NOW(),NOW())
-		ON CONFLICT (refund_id) DO UPDATE SET
-			original_transfer_id = EXCLUDED.original_transfer_id, payer_fsp = EXCLUDED.payer_fsp, payee_fsp = EXCLUDED.payee_fsp,
-			amount = EXCLUDED.amount, amount_minor = EXCLUDED.amount_minor, currency = EXCLUDED.currency, reason = EXCLUDED.reason,
-			state = EXCLUDED.state, completed_time = EXCLUDED.completed_time, updated_at = NOW()`,
+		ON CONFLICT (refund_id) DO UPDATE SET updated_at = NOW()
+		WHERE mojaloop_refunds.original_transfer_id IS NOT DISTINCT FROM EXCLUDED.original_transfer_id
+			AND mojaloop_refunds.payer_fsp IS NOT DISTINCT FROM EXCLUDED.payer_fsp
+			AND mojaloop_refunds.payee_fsp IS NOT DISTINCT FROM EXCLUDED.payee_fsp
+			AND mojaloop_refunds.amount_minor IS NOT DISTINCT FROM EXCLUDED.amount_minor
+			AND mojaloop_refunds.currency IS NOT DISTINCT FROM EXCLUDED.currency
+			AND mojaloop_refunds.reason IS NOT DISTINCT FROM EXCLUDED.reason`,
 		refund.RefundID, refund.OriginalTransferID, refund.PayerFSP, refund.PayeeFSP, int64(refund.AmountMinor), refund.Currency,
 		nullableString(refund.Reason), refund.State, nullableTime(refund.CompletedTime),
-	); err != nil {
+	)
+	if err != nil {
 		return fmt.Errorf("store refund with outbox: %w", err)
+	}
+	if rows, rowsErr := result.RowsAffected(); rowsErr != nil || rows != 1 {
+		if rowsErr != nil {
+			return fmt.Errorf("verify refund financial identity: %w", rowsErr)
+		}
+		return fmt.Errorf("refund id %q is already bound to a different immutable financial identity", refund.RefundID)
 	}
 	if err := s.persistFundsWorkflowEvent(tx, event); err != nil {
 		return err

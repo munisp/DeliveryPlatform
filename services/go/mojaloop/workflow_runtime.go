@@ -329,7 +329,7 @@ func (s *MojaloopService) buildReconciliationOverview() (ReconciliationOverview,
 		return ReconciliationOverview{}, fmt.Errorf("sum transferred amount: %w", err)
 	}
 	var refundedMinor sql.NullInt64
-	if err := s.db.QueryRow(`SELECT COALESCE(SUM(amount_minor), 0) FROM mojaloop_refunds`).Scan(&refundedMinor); err != nil {
+	if err := s.db.QueryRow(`SELECT COALESCE(SUM(amount_minor), 0) FROM mojaloop_refunds WHERE state IN ('PENDING_LEDGER','PENDING','COMPLETED')`).Scan(&refundedMinor); err != nil {
 		return ReconciliationOverview{}, fmt.Errorf("sum refunded amount: %w", err)
 	}
 	if grossMinor.Valid && grossMinor.Int64 > 0 {
