@@ -112,7 +112,12 @@ export default function SecurityProfilePage() {
       <div className="mx-auto max-w-5xl space-y-6">
         <div>
           <p className="text-sm uppercase tracking-[0.24em] text-cyan-300">Profile</p>
-          <h1 className="mt-2 text-3xl font-semibold text-white">Security settings</h1>
+          <div className="mt-2 flex flex-wrap items-center gap-3">
+            <h1 className="text-3xl font-semibold text-white">Security settings</h1>
+            <span aria-live="polite" className={`rounded-full border px-3 py-1 text-xs font-semibold ${security?.mfa.authenticatedForCurrentSession ? "border-emerald-400/40 bg-emerald-500/15 text-emerald-100" : "border-amber-400/40 bg-amber-500/15 text-amber-100"}`}>
+              MFA {security?.mfa.authenticatedForCurrentSession ? "Enabled" : security?.mfa.requiredForPrivilegedActions ? "Required" : "Not enabled"}
+            </span>
+          </div>
           <p className="mt-2 max-w-3xl text-slate-400">Review the assurance level of this session, manage authenticators through your identity provider, and remove active sessions you no longer recognize.</p>
         </div>
 

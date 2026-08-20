@@ -50,8 +50,11 @@ describe("operator security profile contracts", () => {
     expect(server).toContain('app.post("/api/auth/security/sessions/revoke-others"');
     expect(server).toContain("recentLoginActivity");
     expect(page).toContain("Revoke All Other Sessions");
+    expect(page).toContain('aria-labelledby="revoke-others-title"');
+    expect(page).toContain("Revoke all other sessions?");
     expect(page).toContain("Recent login activity");
     expect(page).toContain("scan the one-time QR code");
     expect(page).toContain("not by this application");
+    expect(page).toContain('MFA {security?.mfa.authenticatedForCurrentSession ? "Enabled"');
   });
 });
