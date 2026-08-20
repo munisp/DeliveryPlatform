@@ -116,6 +116,10 @@ export type SecuritySessionRecord = {
   expires_at: string;
 };
 
+export type SecurityLoginActivityRecord = Pick<SecuritySessionRecord, "id" | "auth_source" | "mfa_authenticated" | "assurance_level" | "user_agent" | "created_at" | "last_seen_at"> & {
+  revoked_at: string | null;
+};
+
 export async function createOperatorSecuritySession(input: {
   sessionId: string;
   operatorId: number;
@@ -167,6 +171,29 @@ export async function revokeOperatorSecuritySession(operatorId: number, sessionI
     [sessionId, operatorId],
   );
   return result.rows.length === 1;
+}
+
+export async function revokeOtherOperatorSecuritySessions(operatorId: number, currentSessionId: string) {
+  await ensureOperatorAuthStore();
+  const result = await getOperatorAuthPool().query<{ id: string }>(
+    `UPDATE operator_security_sessions SET revoked_at = NOW()
+     WHERE operator_id = $1 AND id <> $2 AND revoked_at IS NULL AND expires_at > NOW()
+     RETURNING id`,
+    [operatorId, currentSessionId],
+  );
+  return result.rows.length;
+}
+
+export async function listOperatorSecurityLoginActivity(operatorId: number): Promise<SecurityLoginActivityRecord[]> {
+  await ensureOperatorAuthStore();
+  const result = await getOperatorAuthPool().query<SecurityLoginActivityRecord>(
+    `SELECT id, auth_source, mfa_authenticated, assurance_level, user_agent, created_at, last_seen_at, revoked_at
+     FROM operator_security_sessions
+     WHERE operator_id = $1
+     ORDER BY created_at DESC LIMIT 50`,
+    [operatorId],
+  );
+  return result.rows;
 }
 
 export async function authenticateOperator(email: string, password: string) {

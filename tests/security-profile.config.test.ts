@@ -31,10 +31,27 @@ describe("operator security profile contracts", () => {
     expect(server).toContain('app.get("/api/auth/security"');
     expect(server).toContain('app.delete("/api/auth/security/sessions/:id"');
     expect(server).toContain("Retry-After");
-    expect(page).toContain("Manage MFA authenticators");
+    expect(page).toContain("Set up MFA");
     expect(page).toContain("Action blocked by security policy");
     expect(page).toContain("Too many requests");
     expect(app).toContain('path="/profile/security"');
     expect(app).toContain('path="/security/blocked"');
+  });
+
+  it("supports revoking every other session and presents real identity-provider MFA recovery guidance", async () => {
+    const [store, server, page] = await Promise.all([
+      source("server/_core/operatorAuthStore.ts"),
+      source("server/_core/index.ts"),
+      source("client/src/pages/SecurityProfile.tsx"),
+    ]);
+
+    expect(store).toContain("revokeOtherOperatorSecuritySessions");
+    expect(store).toContain("listOperatorSecurityLoginActivity");
+    expect(server).toContain('app.post("/api/auth/security/sessions/revoke-others"');
+    expect(server).toContain("recentLoginActivity");
+    expect(page).toContain("Revoke All Other Sessions");
+    expect(page).toContain("Recent login activity");
+    expect(page).toContain("scan the one-time QR code");
+    expect(page).toContain("not by this application");
   });
 });

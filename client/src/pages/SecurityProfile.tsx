@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
 import { Link } from "wouter";
 
 import DashboardLayout from "@/components/DashboardLayout";
@@ -24,6 +25,7 @@ type SecurityProfile = {
   };
   currentSessionId: string | null;
   sessions: SecuritySession[];
+  recentLoginActivity: Array<SecuritySession & { revoked_at: string | null }>;
 };
 
 type Feedback = { tone: "success" | "warning" | "danger"; title: string; message: string } | null;
@@ -73,6 +75,8 @@ export function SecurityBlockedPage() {
 
 export default function SecurityProfilePage() {
   const queryClient = useQueryClient();
+  const [showMfaWizard, setShowMfaWizard] = useState(false);
+  const [confirmRevokeOthers, setConfirmRevokeOthers] = useState(false);
   const profile = useQuery({ queryKey: ["security-profile"], queryFn: getSecurityProfile, staleTime: 15_000 });
   const revokeSession = useMutation({
     mutationFn: async (sessionId: string) => {
@@ -86,8 +90,20 @@ export default function SecurityProfilePage() {
       queryClient.invalidateQueries({ queryKey: ["security-profile"] });
     },
   });
+  const revokeOtherSessions = useMutation({
+    mutationFn: async () => {
+      const response = await fetch("/api/auth/security/sessions/revoke-others", { method: "POST", credentials: "include" });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw securityFeedback(response.status, String(payload?.error ?? "security_other_sessions_revoke_failed"));
+      return payload as { revokedSessions: number };
+    },
+    onSuccess: () => {
+      setConfirmRevokeOthers(false);
+      queryClient.invalidateQueries({ queryKey: ["security-profile"] });
+    },
+  });
 
-  const error = profile.error ?? revokeSession.error;
+  const error = profile.error ?? revokeSession.error ?? revokeOtherSessions.error;
   const feedback = isFeedback(error) ? error : null;
   const security = profile.data;
 
@@ -102,6 +118,7 @@ export default function SecurityProfilePage() {
 
         {feedback ? <div role="alert" className={`rounded-xl border p-4 text-sm ${feedback.tone === "success" ? "border-emerald-400/30 bg-emerald-500/10 text-emerald-100" : feedback.tone === "warning" ? "border-amber-400/30 bg-amber-500/10 text-amber-100" : "border-rose-400/30 bg-rose-500/10 text-rose-100"}`}><strong>{feedback.title}.</strong> {feedback.message}</div> : null}
         {revokeSession.isSuccess ? <div role="status" className="rounded-xl border border-emerald-400/30 bg-emerald-500/10 p-4 text-sm text-emerald-100">Session removed successfully.</div> : null}
+        {revokeOtherSessions.isSuccess ? <div role="status" className="rounded-xl border border-emerald-400/30 bg-emerald-500/10 p-4 text-sm text-emerald-100">Other sessions removed successfully.</div> : null}
 
         <Card>
           <CardHeader>
@@ -114,13 +131,24 @@ export default function SecurityProfilePage() {
               <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4"><p className="text-xs uppercase tracking-wide text-slate-500">This session</p><p className="mt-1 font-medium text-white">{security?.mfa.authenticatedForCurrentSession ? "MFA verified" : "MFA not verified"}</p></div>
               <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4"><p className="text-xs uppercase tracking-wide text-slate-500">Assurance</p><p className="mt-1 font-medium text-white">{security?.mfa.assuranceLevel ?? "Not reported"}</p></div>
             </div>
-            {security?.mfa.setupUrl ? <a href={security.mfa.setupUrl} className="inline-flex rounded-full bg-cyan-500 px-4 py-2 text-sm font-medium text-slate-950" target="_blank" rel="noreferrer">Manage MFA authenticators</a> : <p className="text-sm text-slate-400">MFA authenticators are managed by your configured identity provider. Ask your administrator to enable external identity management in this environment.</p>}
+            <div className="flex flex-wrap gap-3">
+              <button type="button" onClick={() => setShowMfaWizard((visible) => !visible)} className="rounded-full bg-cyan-500 px-4 py-2 text-sm font-medium text-slate-950">{showMfaWizard ? "Hide enrollment steps" : "Set up MFA"}</button>
+              {security?.mfa.setupUrl ? <a href={security.mfa.setupUrl} className="rounded-full border border-cyan-400/40 px-4 py-2 text-sm text-cyan-100" target="_blank" rel="noreferrer">Open identity-provider security</a> : null}
+            </div>
+            {showMfaWizard ? <ol className="space-y-3 rounded-xl border border-cyan-400/20 bg-cyan-500/5 p-4 text-sm text-slate-200">
+              <li><strong>1. Choose an authenticator.</strong> Install or open a standards-based authenticator app on a separate device.</li>
+              <li><strong>2. Open the identity-provider security page.</strong> Select “Set up authenticator” and scan the one-time QR code shown there; never share the QR code or its setup key.</li>
+              <li><strong>3. Verify the time-based code.</strong> Enter the current code from your app to complete enrollment and refresh this page to confirm session assurance.</li>
+              <li><strong>4. Generate recovery codes in the identity provider.</strong> Download or write each one-time code offline. Recovery codes are generated and stored by the identity provider, not by this application, so this page never receives or retains them.</li>
+            </ol> : null}
+            {!security?.mfa.setupUrl ? <p className="text-sm text-slate-400">MFA authenticators and recovery codes are managed by your configured identity provider. Ask an administrator to enable external identity management in this environment.</p> : null}
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader><CardTitle>Active sessions</CardTitle><CardDescription>Sessions are recorded server-side; remove any browser or device you do not recognize.</CardDescription></CardHeader>
           <CardContent className="space-y-3">
+            {security && security.sessions.length > 1 ? <button type="button" onClick={() => setConfirmRevokeOthers(true)} className="rounded-full border border-rose-400/40 px-4 py-2 text-sm text-rose-200">Revoke All Other Sessions</button> : null}
             {profile.isLoading ? <p className="text-sm text-slate-400">Loading active sessions…</p> : null}
             {security?.sessions.length === 0 ? <p className="text-sm text-slate-400">No active server-side sessions are available.</p> : null}
             {security?.sessions.map((session) => (
@@ -131,7 +159,16 @@ export default function SecurityProfilePage() {
             ))}
           </CardContent>
         </Card>
+
+        <Card>
+          <CardHeader><CardTitle>Recent login activity</CardTitle><CardDescription>Recent authenticated session creation is retained for visibility. Network addresses and session secrets are not displayed.</CardDescription></CardHeader>
+          <CardContent className="space-y-3">
+            {security?.recentLoginActivity.map((activity) => <div key={`${activity.id}-${activity.created_at}`} className="rounded-xl border border-slate-800 bg-slate-950/60 p-4"><div className="flex flex-wrap items-center justify-between gap-2"><p className="font-medium text-white">{activity.auth_source} sign-in</p><span className={`rounded-full px-2 py-1 text-xs ${activity.revoked_at ? "bg-slate-800 text-slate-300" : "bg-emerald-500/15 text-emerald-200"}`}>{activity.revoked_at ? "Revoked" : "Active"}</span></div><p className="mt-1 text-xs text-slate-400">{new Date(activity.created_at).toLocaleString()} · MFA {activity.mfa_authenticated ? "verified" : "not verified"}</p><p className="mt-1 truncate text-xs text-slate-500">{activity.user_agent || "Browser details unavailable"}</p></div>)}
+            {security?.recentLoginActivity.length === 0 ? <p className="text-sm text-slate-400">No recent login activity is available.</p> : null}
+          </CardContent>
+        </Card>
       </div>
+      {confirmRevokeOthers ? <div role="dialog" aria-modal="true" aria-labelledby="revoke-others-title" className="fixed inset-0 z-50 grid place-items-center bg-slate-950/80 p-4"><Card className="w-full max-w-md"><CardHeader><CardTitle id="revoke-others-title">Revoke all other sessions?</CardTitle><CardDescription>Every other active browser or device will be signed out. Your current session will remain active.</CardDescription></CardHeader><CardContent className="flex justify-end gap-3"><button type="button" onClick={() => setConfirmRevokeOthers(false)} className="rounded-full border border-slate-700 px-4 py-2 text-sm text-slate-100">Cancel</button><button type="button" disabled={revokeOtherSessions.isPending} onClick={() => revokeOtherSessions.mutate()} className="rounded-full bg-rose-500 px-4 py-2 text-sm font-medium text-white disabled:opacity-60">{revokeOtherSessions.isPending ? "Revoking…" : "Revoke other sessions"}</button></CardContent></Card></div> : null}
     </DashboardLayout>
   );
 }

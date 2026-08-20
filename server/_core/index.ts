@@ -53,7 +53,7 @@ import {
   updateTenantAdminNotificationPreferences,
   updateTenantBranding,
 } from "./accountLifecycleStore";
-import { authenticateOperator, createOperatorSecuritySession, ensureExternalOperator, ensureOperatorAuthStore, isOperatorSecuritySessionActive, listOperatorSecuritySessions, revokeOperatorSecuritySession } from "./operatorAuthStore";
+import { authenticateOperator, createOperatorSecuritySession, ensureExternalOperator, ensureOperatorAuthStore, isOperatorSecuritySessionActive, listOperatorSecurityLoginActivity, listOperatorSecuritySessions, revokeOperatorSecuritySession, revokeOtherOperatorSecuritySessions } from "./operatorAuthStore";
 import { recordOperationalEvent } from "./operationalEvents";
 import { consumeRateLimit, getRateLimiterStatus } from "./rateLimiter";
 import type { SessionUser } from "./trpc";
@@ -569,7 +569,10 @@ app.get("/api/auth/security", async (req, res) => {
   const user = requireAuthenticatedOperator(req, res);
   if (!user) return;
   try {
-    const sessions = await listOperatorSecuritySessions(Number(user.id));
+    const [sessions, recentLoginActivity] = await Promise.all([
+      listOperatorSecuritySessions(Number(user.id)),
+      listOperatorSecurityLoginActivity(Number(user.id)),
+    ]);
     res.status(200).json({
       mfa: {
         requiredForPrivilegedActions: ENV.requireMfaForPrivilegedActions,
@@ -579,6 +582,7 @@ app.get("/api/auth/security", async (req, res) => {
       },
       currentSessionId: user.sessionId ?? null,
       sessions,
+      recentLoginActivity,
     });
   } catch (error) {
     console.error("[SwitchOS] Unable to load security profile", error);
@@ -606,6 +610,23 @@ app.delete("/api/auth/security/sessions/:id", rateLimit(10), async (req, res) =>
   } catch (error) {
     console.error("[SwitchOS] Unable to revoke security session", error);
     res.status(503).json({ error: "security_session_revoke_failed" });
+  }
+});
+
+app.post("/api/auth/security/sessions/revoke-others", rateLimit(5), async (req, res) => {
+  const user = requireAuthenticatedOperator(req, res);
+  if (!user) return;
+  if (!user.sessionId) {
+    res.status(409).json({ error: "security_session_registry_required" });
+    return;
+  }
+  try {
+    const revokedSessions = await revokeOtherOperatorSecuritySessions(Number(user.id), user.sessionId);
+    await recordOperationalEvent({ eventType: "auth.security.other_sessions_revoked", actorId: `${user.id}`, actorRole: user.role ?? null, tenantId: user.tenantId ?? null, route: req.path, outcome: "success", payload: { revokedSessions } });
+    res.status(200).json({ ok: true, revokedSessions });
+  } catch (error) {
+    console.error("[SwitchOS] Unable to revoke other security sessions", error);
+    res.status(503).json({ error: "security_other_sessions_revoke_failed" });
   }
 });
 
