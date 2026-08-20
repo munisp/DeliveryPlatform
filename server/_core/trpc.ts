@@ -2,6 +2,7 @@ import { initTRPC, TRPCError } from "@trpc/server";
 import { IncomingMessage, ServerResponse } from "http";
 import superjson from "superjson";
 import { UNAUTHED_ERR_MSG } from "../../shared/const";
+import { ENV } from "./env";
 import { checkPolicy } from "./policy";
 
 export type SessionUser = {
@@ -12,6 +13,9 @@ export type SessionUser = {
   openId?: string | null;
   tenantId?: string | null;
   scopes?: string[];
+  authenticationMethods?: string[];
+  assuranceLevel?: string | null;
+  mfaAuthenticated?: boolean;
 };
 
 export type TrpcContext = {
@@ -82,13 +86,11 @@ function requirePolicy(
       });
     }
 
-    const normalizedRole = `${ctx.user.role ?? ""}`.trim().toLowerCase();
-    if (normalizedRole === "admin") {
-      return next({
-        ctx: {
-          ...ctx,
-          user: ctx.user,
-        },
+    const privilegedPermission = permission === "write_platform" || permission === "write_analytics" || permission === "operate";
+    if (ENV.requireMfaForPrivilegedActions && privilegedPermission && !ctx.user.mfaAuthenticated) {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message: "MFA_REQUIRED_FOR_PRIVILEGED_ACTION",
       });
     }
 

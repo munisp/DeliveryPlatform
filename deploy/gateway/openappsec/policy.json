@@ -5,7 +5,7 @@
     "practices": {
       "webAttackMitigation": {
         "enabled": true,
-        "minimumConfidence": "medium",
+        "minimumConfidence": "high",
         "protections": [
           "sql-injection",
           "cross-site-scripting",
@@ -27,6 +27,15 @@
       "botProtection": {
         "enabled": true,
         "suspiciousAutomation": "prevent"
+      },
+      "antiAutomation": {
+        "enabled": true,
+        "credentialStuffing": "prevent",
+        "accountEnumeration": "prevent"
+      },
+      "fileSecurity": {
+        "enabled": true,
+        "allowExecutables": false
       }
     },
     "targets": [

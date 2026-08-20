@@ -25,7 +25,8 @@ required_vars=(
   POSTGRES_HOST POSTGRES_PORT POSTGRES_DB POSTGRES_USER POSTGRES_PASSWORD REDIS_URL
   TEMPORAL_ADDRESS KAFKA_BROKERS FLUVIO_KAFKA_BROKERS TIGERBEETLE_ADDRESSES
   TIGERBEETLE_CLUSTER_ID TIGERBEETLE_ACCOUNT_MAP_JSON PERMIFY_ENDPOINT
-  PERMIFY_AUTH_TOKEN INTERNAL_SERVICE_TOKEN NOTIFICATION_DISPATCHER_URL
+  PERMIFY_AUTH_TOKEN OPA_ENDPOINT OPA_AUTH_TOKEN REQUIRE_MFA_FOR_PRIVILEGED_ACTIONS
+  INTERNAL_SERVICE_TOKEN NOTIFICATION_DISPATCHER_URL
 )
 
 for variable in "${required_vars[@]}"; do
@@ -43,6 +44,11 @@ fi
 
 if [[ "${REDIS_URL}" != rediss://* ]]; then
   echo "FAILED: REDIS_URL must use rediss:// for a promotion environment" >&2
+  exit 2
+fi
+
+if [[ "${REQUIRE_MFA_FOR_PRIVILEGED_ACTIONS,,}" != "true" ]]; then
+  echo "FAILED: REQUIRE_MFA_FOR_PRIVILEGED_ACTIONS must be true in a promotion environment" >&2
   exit 2
 fi
 
@@ -91,7 +97,8 @@ echo "PASS: OIDC discovery issuer"
 
 curl --fail --silent --show-error --max-time 15 "https://${SWITCHOS_PUBLIC_HOST}/health" >/dev/null
 curl --fail --silent --show-error --max-time 15 "${PERMIFY_ENDPOINT%/}/healthz" >/dev/null
-echo "PASS: public edge and Permify health checks"
+curl --fail --silent --show-error --max-time 15 -H "Authorization: Bearer ${OPA_AUTH_TOKEN}" "${OPA_ENDPOINT%/}/health" >/dev/null
+echo "PASS: public edge, Permify, and OPA health checks"
 
 if [[ "${PROMOTION_ENVIRONMENT}" == "staging" ]]; then
   curl --fail --silent --show-error --max-time 15 "${STAGING_MAILPIT_API_URL%/}/api/v1/messages?limit=1" >/dev/null

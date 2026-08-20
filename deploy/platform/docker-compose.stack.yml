@@ -65,6 +65,19 @@ services:
       timeout: 5s
       retries: 12
 
+  opa:
+    image: openpolicyagent/opa:0.68.0-static
+    container_name: switchos-opa
+    restart: unless-stopped
+    command: ["run", "--server", "--addr=0.0.0.0:8181", "/policies/switchos.rego"]
+    volumes:
+      - ../authorization/opa/switchos.rego:/policies/switchos.rego:ro
+    healthcheck:
+      test: ["CMD", "/opa", "eval", "--format=raw", "data.switchos.authz.allow"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
   keycloak:
     image: quay.io/keycloak/keycloak:26.0
     container_name: switchos-keycloak
@@ -116,6 +129,7 @@ services:
     depends_on:
       - apisix
       - keycloak
+      - opa
     environment:
       SWITCHOS_PUBLIC_HOST: ${SWITCHOS_PUBLIC_HOST:?SWITCHOS_PUBLIC_HOST must be set}
       SWITCHOS_AUTH_HOST: ${SWITCHOS_AUTH_HOST:?SWITCHOS_AUTH_HOST must be set}

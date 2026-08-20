@@ -7,7 +7,7 @@ const root = join(process.cwd());
 describe("promotion contract configuration", () => {
   it("defines every component dependency without deployment defaults", () => {
     const template = readFileSync(join(root, "deploy/platform/promotion.env.example"), "utf8");
-    for (const key of ["TIGERBEETLE_ADDRESSES", "KAFKA_BROKERS", "FLUVIO_KAFKA_BROKERS", "TEMPORAL_ADDRESS", "PERMIFY_ENDPOINT", "KEYCLOAK_ISSUER", "STAGING_MAILPIT_API_URL"]) {
+    for (const key of ["TIGERBEETLE_ADDRESSES", "KAFKA_BROKERS", "FLUVIO_KAFKA_BROKERS", "TEMPORAL_ADDRESS", "PERMIFY_ENDPOINT", "OPA_ENDPOINT", "REQUIRE_MFA_FOR_PRIVILEGED_ACTIONS", "KEYCLOAK_ISSUER", "STAGING_MAILPIT_API_URL"]) {
       expect(template).toContain(`${key}=`);
     }
   });
@@ -20,5 +20,7 @@ describe("promotion contract configuration", () => {
     expect(script).toContain("OIDC discovery issuer mismatch");
     expect(script).toContain("STAGING_MAILPIT_API_URL");
     expect(script).toContain("TigerBeetle");
+    expect(script).toContain("REQUIRE_MFA_FOR_PRIVILEGED_ACTIONS must be true");
+    expect(script).toContain("OPA_AUTH_TOKEN");
   });
 });

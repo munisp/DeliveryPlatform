@@ -66,6 +66,9 @@ const OIDC_RETURN_TO_COOKIE = "switchos_oidc_return_to";
 type AppRequest = express.Request & { user: SessionUser | null };
 
 const app = express();
+// The application is reachable only through Caddy and APISIX in promoted deployments.
+// Trust exactly that two-proxy chain so request throttles key on the original client IP.
+app.set("trust proxy", 2);
 const allowedOrigins = ENV.allowedOrigins
   .split(",")
   .map((origin) => origin.trim())
@@ -117,6 +120,8 @@ function setSecurityHeaders(req: express.Request, res: express.Response) {
       "frame-ancestors 'none'",
       "base-uri 'self'",
       "form-action 'self'",
+      "object-src 'none'",
+      "upgrade-insecure-requests",
     ].join("; "),
   );
 
@@ -135,7 +140,7 @@ function applyCors(req: express.Request, res: express.Response) {
   if (origin && isAllowedOrigin(origin)) {
     res.setHeader("Access-Control-Allow-Origin", origin);
     res.setHeader("Access-Control-Allow-Credentials", "true");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With, X-Internal-Service-Token");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With");
     res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
     res.setHeader("Vary", "Origin");
   }
@@ -532,6 +537,29 @@ function requireAuthenticatedOperator(req: express.Request, res: express.Respons
   }
   return user;
 }
+
+const privilegedTenantMutationPrefixes = [
+  "/api/auth/invitations",
+  "/api/auth/members/actions/bulk/role",
+  "/api/auth/tenant-branding",
+  "/api/auth/tenant/notification-preferences",
+  "/api/auth/tenant/notification-delivery-history",
+];
+
+app.use((req, res, next) => {
+  const request = req as AppRequest;
+  const isMutation = !["GET", "HEAD", "OPTIONS"].includes(req.method);
+  const requiresStepUp = privilegedTenantMutationPrefixes.some((prefix) => req.path === prefix || req.path.startsWith(`${prefix}/`));
+  if (!ENV.requireMfaForPrivilegedActions || !isMutation || !requiresStepUp || !request.user) {
+    next();
+    return;
+  }
+  if (!request.user.mfaAuthenticated) {
+    res.status(403).json({ error: "mfa_required_for_privileged_action" });
+    return;
+  }
+  next();
+});
 
 app.get("/api/auth/onboarding", async (req, res) => {
   const user = requireAuthenticatedOperator(req, res);

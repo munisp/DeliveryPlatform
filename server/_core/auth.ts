@@ -17,6 +17,9 @@ type SessionClaims = {
   openId?: string | null;
   tenantId?: string | null;
   scopes?: string[];
+  authenticationMethods?: string[];
+  assuranceLevel?: string | null;
+  mfaAuthenticated?: boolean;
 };
 
 type DiscoveryDocument = {
@@ -65,6 +68,18 @@ function normalizeScopes(value: unknown): string[] {
   return [];
 }
 
+function normalizeAuthenticationMethods(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((method): method is string => typeof method === "string" && method.trim().length > 0)
+    .map((method) => method.trim().toLowerCase());
+}
+
+function isMfaAuthenticated(authenticationMethods: string[], assuranceLevel: string | null) {
+  return authenticationMethods.some((method) => ["mfa", "otp", "webauthn", "hwk", "passkey"].includes(method))
+    || ["2", "urn:ietf:params:oauth:acr:2", "urn:mace:incommon:iap:silver"].includes(`${assuranceLevel ?? ""}`.toLowerCase());
+}
+
 function normalizeRole(payload: Record<string, unknown>) {
   if (typeof payload.role === "string" && payload.role.trim()) return payload.role;
 
@@ -95,6 +110,8 @@ function toSessionUser(payload: Record<string, unknown>): SessionUser | null {
 
   const role = normalizeRole(payload);
   const explicitScopes = normalizeScopes(payload.scopes ?? payload.scope);
+  const authenticationMethods = normalizeAuthenticationMethods(payload.amr);
+  const assuranceLevel = typeof payload.acr === "string" ? payload.acr.trim() || null : null;
 
   return {
     id: resolvedId,
@@ -116,6 +133,9 @@ function toSessionUser(payload: Record<string, unknown>): SessionUser | null {
         ? payload.azp
         : null,
     scopes: explicitScopes.length > 0 ? explicitScopes : inferDefaultScopes(role),
+    authenticationMethods,
+    assuranceLevel,
+    mfaAuthenticated: isMfaAuthenticated(authenticationMethods, assuranceLevel),
   };
 }
 
@@ -209,7 +229,7 @@ async function verifyExternalJwt(token: string, expectedNonce?: string): Promise
       audience: ENV.oidcAudience || ENV.oidcClientId,
     });
 
-    if (expectedNonce && payload.nonce && payload.nonce !== expectedNonce) {
+    if (expectedNonce && payload.nonce !== expectedNonce) {
       return null;
     }
     return toSessionUser(payload as Record<string, unknown>);
@@ -262,6 +282,9 @@ export async function createSessionToken(user: SessionClaims) {
     openId: user.openId ?? null,
     tenantId: user.tenantId ?? null,
     scopes: user.scopes ?? [],
+    authenticationMethods: user.authenticationMethods ?? [],
+    assuranceLevel: user.assuranceLevel ?? null,
+    mfaAuthenticated: Boolean(user.mfaAuthenticated),
   })
     .setProtectedHeader({ alg: "HS256", typ: "JWT" })
     .setIssuer(ENV.sessionIssuer)

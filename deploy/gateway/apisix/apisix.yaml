@@ -31,16 +31,31 @@ routes:
       cors:
         allow_origins: "https://switchos.localhost,https://localhost,https://127.0.0.1"
         allow_methods: "GET,POST,PUT,PATCH,DELETE,OPTIONS"
-        allow_headers: "Content-Type,Authorization,X-Requested-With,X-Internal-Service-Token"
+        allow_headers: "Content-Type,Authorization,X-Requested-With"
         allow_credential: true
       proxy-rewrite:
         headers:
           set:
             X-Forwarded-Proto: "https"
             X-Forwarded-Host: "$host"
+          remove:
+            - X-Internal-Service-Token
       limit-req:
-        rate: 40
-        burst: 80
+        rate: 30
+        burst: 45
+        key_type: var
+        key: remote_addr
+        rejected_code: 429
+      limit-count:
+        count: 600
+        time_window: 60
+        key_type: var
+        key: remote_addr
+        rejected_code: 429
+      limit-conn:
+        conn: 20
+        burst: 10
+        default_conn_delay: 0.1
         key_type: var
         key: remote_addr
         rejected_code: 429
@@ -63,16 +78,31 @@ routes:
       cors:
         allow_origins: "https://switchos.localhost,https://localhost,https://127.0.0.1"
         allow_methods: "GET,POST,OPTIONS"
-        allow_headers: "Content-Type,Authorization,X-Requested-With,X-Internal-Service-Token"
+        allow_headers: "Content-Type,Authorization,X-Requested-With"
         allow_credential: true
       proxy-rewrite:
         headers:
           set:
             X-Forwarded-Proto: "https"
             X-Forwarded-Host: "$host"
+          remove:
+            - X-Internal-Service-Token
       limit-req:
-        rate: 60
-        burst: 120
+        rate: 40
+        burst: 60
+        key_type: var
+        key: remote_addr
+        rejected_code: 429
+      limit-count:
+        count: 900
+        time_window: 60
+        key_type: var
+        key: remote_addr
+        rejected_code: 429
+      limit-conn:
+        conn: 30
+        burst: 10
+        default_conn_delay: 0.1
         key_type: var
         key: remote_addr
         rejected_code: 429

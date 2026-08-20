@@ -41,7 +41,19 @@ function getPolicyCacheTtlSeconds() {
 }
 
 function isPolicyEngineEnabled() {
-  return normalizePermifyEndpoint().length > 0;
+	return normalizePermifyEndpoint().length > 0;
+}
+
+function normalizeOpaEndpoint() {
+  return ENV.opaEndpoint;
+}
+
+function getOpaAuthToken() {
+  return ENV.opaAuthToken;
+}
+
+function isOpaEnabled() {
+  return normalizeOpaEndpoint().length > 0;
 }
 
 function isPolicyCacheEnabled() {
@@ -49,6 +61,7 @@ function isPolicyCacheEnabled() {
 }
 
 function scopeFallbackAllows(subject: SessionUser, permission: PolicyCheckInput["permission"]) {
+	if (ENV.isProduction) return false;
   const role = `${subject.role ?? ""}`.trim().toLowerCase();
   if (role === "admin") return true;
 
@@ -62,6 +75,53 @@ function scopeFallbackAllows(subject: SessionUser, permission: PolicyCheckInput[
         : "platform:read";
 
   return scopes.has(requiredScope);
+}
+
+function isTenantBound(input: PolicyCheckInput) {
+  return input.resource.type !== "tenant" || !input.subject.tenantId || input.subject.tenantId === input.resource.id;
+}
+
+function recordPolicyDecision(input: PolicyCheckInput, allowed: boolean, source: "cache" | "permify" | "fallback" | "opa" | "tenant-boundary") {
+  console.info(JSON.stringify({
+    event: "policy.decision",
+    allowed,
+    source,
+    subject: String(input.subject.openId ?? input.subject.id),
+    tenantId: input.subject.tenantId ?? "switchos-core",
+    resourceType: input.resource.type,
+    resourceId: input.resource.id,
+    permission: input.permission,
+    mfa: Boolean(input.subject.mfaAuthenticated),
+  }));
+}
+
+async function checkOpaPolicy(input: PolicyCheckInput): Promise<boolean> {
+  if (!isOpaEnabled()) {
+    if (ENV.isProduction) throw new Error("OPA policy endpoint is required in production");
+    return true;
+  }
+  const authToken = getOpaAuthToken();
+  if (authToken === "") throw new Error("OPA policy client requires OPA_AUTH_TOKEN when OPA_ENDPOINT is configured");
+
+  const response = await fetch(`${normalizeOpaEndpoint()}/v1/data/switchos/authz/allow`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${authToken}` },
+    body: JSON.stringify({ input: {
+      subject: {
+        id: String(input.subject.openId ?? input.subject.id),
+        tenant_id: input.subject.tenantId ?? "switchos-core",
+        role: input.subject.role ?? "viewer",
+        scopes: input.subject.scopes ?? [],
+        mfa: Boolean(input.subject.mfaAuthenticated),
+        assurance: input.subject.assuranceLevel ?? null,
+      },
+      permission: input.permission,
+      resource: { type: input.resource.type, id: input.resource.id },
+    } }),
+  });
+  if (!response.ok) throw new Error(`OPA policy check failed: ${response.status}`);
+  const payload = await response.json() as { result?: boolean };
+  return payload.result === true;
 }
 
 function getPolicyCacheKey(input: PolicyCheckInput) {
@@ -134,8 +194,21 @@ async function writeCachedPolicyDecision(input: PolicyCheckInput, allowed: boole
 }
 
 export async function checkPolicy(input: PolicyCheckInput): Promise<boolean> {
+	if (!isTenantBound(input)) {
+		recordPolicyDecision(input, false, "tenant-boundary");
+		return false;
+	}
+
+	const opaAllowed = await checkOpaPolicy(input);
+	if (!opaAllowed) {
+		recordPolicyDecision(input, false, "opa");
+		return false;
+	}
+
 	if (!isPolicyEngineEnabled()) {
-		return scopeFallbackAllows(input.subject, input.permission);
+		const allowed = scopeFallbackAllows(input.subject, input.permission);
+		recordPolicyDecision(input, allowed, "fallback");
+		return allowed;
 	}
 	const authToken = getPermifyAuthToken();
 	if (authToken === "") {
@@ -144,6 +217,7 @@ export async function checkPolicy(input: PolicyCheckInput): Promise<boolean> {
 
   const cachedDecision = await readCachedPolicyDecision(input);
   if (cachedDecision != null) {
+		recordPolicyDecision(input, cachedDecision, "cache");
     return cachedDecision;
   }
 
@@ -184,6 +258,7 @@ export async function checkPolicy(input: PolicyCheckInput): Promise<boolean> {
     : `${payload.can ?? ""}`.toUpperCase() === "RESULT_ALLOWED";
 
   await writeCachedPolicyDecision(input, allowed);
+	recordPolicyDecision(input, allowed, "permify");
   return allowed;
 }
 
@@ -194,6 +269,10 @@ export function getPolicyIntegrationStatus() {
     schemaVersion: buildAuthzModelId(),
 		fallbackMode: !isPolicyEngineEnabled(),
 		authenticated: getPermifyAuthToken() !== "",
+		opaEnabled: isOpaEnabled(),
+		opaEndpoint: normalizeOpaEndpoint() || null,
+		opaAuthenticated: getOpaAuthToken() !== "",
+		failClosedInProduction: ENV.isProduction,
     cacheConfigured: Boolean(ENV.redisUrl),
     cacheEnabled: isPolicyCacheEnabled(),
     cacheTtlSeconds: getPolicyCacheTtlSeconds(),

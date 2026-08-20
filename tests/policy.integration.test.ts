@@ -18,6 +18,8 @@ describe("SwitchOS policy integration", () => {
 		PERMIFY_ENDPOINT: process.env.PERMIFY_ENDPOINT,
 		PERMIFY_AUTH_TOKEN: process.env.PERMIFY_AUTH_TOKEN,
 		PERMIFY_SCHEMA_VERSION: process.env.PERMIFY_SCHEMA_VERSION,
+		OPA_ENDPOINT: process.env.OPA_ENDPOINT,
+		OPA_AUTH_TOKEN: process.env.OPA_AUTH_TOKEN,
     PERMIFY_DEPTH: process.env.PERMIFY_DEPTH,
     REDIS_URL: process.env.REDIS_URL,
     POLICY_CACHE_TTL_SECONDS: process.env.POLICY_CACHE_TTL_SECONDS,
@@ -29,6 +31,8 @@ describe("SwitchOS policy integration", () => {
 		process.env.PERMIFY_ENDPOINT = "";
 		process.env.PERMIFY_AUTH_TOKEN = "";
 		process.env.PERMIFY_SCHEMA_VERSION = "switchos-v1";
+		process.env.OPA_ENDPOINT = "";
+		process.env.OPA_AUTH_TOKEN = "";
     process.env.PERMIFY_DEPTH = "20";
     process.env.REDIS_URL = "";
     process.env.POLICY_CACHE_TTL_SECONDS = "30";
@@ -38,6 +42,8 @@ describe("SwitchOS policy integration", () => {
 		process.env.PERMIFY_ENDPOINT = originalEnv.PERMIFY_ENDPOINT;
 		process.env.PERMIFY_AUTH_TOKEN = originalEnv.PERMIFY_AUTH_TOKEN;
 		process.env.PERMIFY_SCHEMA_VERSION = originalEnv.PERMIFY_SCHEMA_VERSION;
+		process.env.OPA_ENDPOINT = originalEnv.OPA_ENDPOINT;
+		process.env.OPA_AUTH_TOKEN = originalEnv.OPA_AUTH_TOKEN;
     process.env.PERMIFY_DEPTH = originalEnv.PERMIFY_DEPTH;
     process.env.REDIS_URL = originalEnv.REDIS_URL;
     process.env.POLICY_CACHE_TTL_SECONDS = originalEnv.POLICY_CACHE_TTL_SECONDS;
@@ -219,8 +225,8 @@ describe("SwitchOS policy integration", () => {
 		).rejects.toThrow(/Permify permission check failed: 503 policy unavailable/);
 	});
 
-	it("rejects an enabled policy engine without its service credential", async () => {
-		process.env.PERMIFY_ENDPOINT = "http://127.0.0.1:3476";
+		it("rejects an enabled policy engine without its service credential", async () => {
+			process.env.PERMIFY_ENDPOINT = "http://127.0.0.1:3476";
 		process.env.PERMIFY_AUTH_TOKEN = "";
 		const { checkPolicy } = await loadPolicyModule();
 
@@ -229,6 +235,38 @@ describe("SwitchOS policy integration", () => {
 			permission: "read_platform",
 			resource: { type: "tenant", id: "switchos-core" },
 		})).rejects.toThrow("Permify policy client requires PERMIFY_AUTH_TOKEN");
+			expect(fetchMock).not.toHaveBeenCalled();
+		});
+
+	it("requires an OPA allow decision before Permify and passes MFA assurance context", async () => {
+		process.env.OPA_ENDPOINT = "https://opa.switchos.test";
+		process.env.OPA_AUTH_TOKEN = "opa-test-token";
+		process.env.PERMIFY_ENDPOINT = "http://127.0.0.1:3476";
+		process.env.PERMIFY_AUTH_TOKEN = "permify-test-token";
+		fetchMock
+			.mockResolvedValueOnce({ ok: true, json: async () => ({ result: true }) })
+			.mockResolvedValueOnce({ ok: true, json: async () => ({ allowed: true }) });
+
+		const { checkPolicy } = await loadPolicyModule();
+		await expect(checkPolicy({
+			subject: { id: 21, name: "Privileged operator", role: "operator", tenantId: "switchos-core", mfaAuthenticated: true, assuranceLevel: "2" },
+			permission: "operate",
+			resource: { type: "tenant", id: "switchos-core" },
+		})).resolves.toBe(true);
+
+		expect(fetchMock).toHaveBeenNthCalledWith(1, "https://opa.switchos.test/v1/data/switchos/authz/allow", expect.objectContaining({
+			headers: expect.objectContaining({ Authorization: "Bearer opa-test-token" }),
+		}));
+		expect(JSON.parse(String(fetchMock.mock.calls[0][1].body))).toMatchObject({ input: { subject: { mfa: true, assurance: "2" }, permission: "operate" } });
+	});
+
+	it("denies cross-tenant tenant access before reaching either policy engine", async () => {
+		const { checkPolicy } = await loadPolicyModule();
+		await expect(checkPolicy({
+			subject: { id: 22, name: "Tenant operator", role: "operator", tenantId: "tenant-a" },
+			permission: "read_platform",
+			resource: { type: "tenant", id: "tenant-b" },
+		})).resolves.toBe(false);
 		expect(fetchMock).not.toHaveBeenCalled();
 	});
 });

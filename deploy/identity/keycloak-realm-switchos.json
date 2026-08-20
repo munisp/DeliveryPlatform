@@ -3,7 +3,35 @@
   "enabled": true,
   "registrationAllowed": false,
   "resetPasswordAllowed": true,
-  "rememberMe": true,
+  "rememberMe": false,
+  "duplicateEmailsAllowed": false,
+  "bruteForceProtected": true,
+  "permanentLockout": false,
+  "maxFailureWaitSeconds": 900,
+  "minimumQuickLoginWaitSeconds": 60,
+  "waitIncrementSeconds": 60,
+  "quickLoginCheckMilliSeconds": 1000,
+  "maxDeltaTimeSeconds": 43200,
+  "failureFactor": 5,
+  "accessTokenLifespan": 300,
+  "accessTokenLifespanForImplicitFlow": 300,
+  "ssoSessionIdleTimeout": 1800,
+  "ssoSessionMaxLifespan": 28800,
+  "otpPolicyType": "totp",
+  "otpPolicyAlgorithm": "HmacSHA1",
+  "otpPolicyDigits": 6,
+  "otpPolicyPeriod": 30,
+  "otpSupportedApplications": ["totpAppGoogleName", "totpAppFreeOTPName", "totpAppMicrosoftAuthenticatorName"],
+  "requiredActions": [
+    {
+      "alias": "CONFIGURE_TOTP",
+      "name": "Configure OTP",
+      "providerId": "CONFIGURE_TOTP",
+      "enabled": true,
+      "defaultAction": true,
+      "priority": 10
+    }
+  ],
   "clients": [
     {
       "clientId": "switchos-operator-dashboard",
@@ -28,7 +56,8 @@
       "directAccessGrantsEnabled": false,
       "serviceAccountsEnabled": true,
       "attributes": {
-        "post.logout.redirect.uris": "+"
+        "post.logout.redirect.uris": "+",
+        "pkce.code.challenge.method": "S256"
       },
       "protocol": "openid-connect",
       "defaultClientScopes": [

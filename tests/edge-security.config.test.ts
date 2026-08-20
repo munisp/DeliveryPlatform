@@ -15,7 +15,12 @@ describe("Caddy and API gateway security configuration", () => {
 
     expect(caddyfile).toContain("admin off");
     expect(caddyfile).toContain("Strict-Transport-Security");
+    expect(caddyfile).toContain("preload");
     expect(caddyfile).toContain("X-Content-Type-Options");
+    expect(caddyfile).toContain("X-Permitted-Cross-Domain-Policies");
+    expect(caddyfile).toContain("Content-Security-Policy");
+    expect(caddyfile).toContain("max_size 5MB");
+    expect(caddyfile).toContain("response_header_timeout 30s");
     expect(caddyfile).toContain("reverse_proxy apisix:9080");
     expect(caddyfile).toContain("reverse_proxy keycloak:8080");
     expect(compose).toContain("caddy:");
@@ -38,6 +43,11 @@ describe("Caddy and API gateway security configuration", () => {
     expect(routes).not.toContain("http://localhost:3000");
     expect(routes).toContain('X-Forwarded-Proto: "https"');
     expect(routes).toContain("limit-req:");
+    expect(routes).toContain("limit-count:");
+    expect(routes).toContain("limit-conn:");
+    expect(routes).not.toContain('allow_headers: "Content-Type,Authorization,X-Requested-With,X-Internal-Service-Token"');
+    expect(routes).toContain("remove:");
+    expect(routes).toContain("X-Internal-Service-Token");
   });
 
   it("removes seeded Keycloak users and applies prevention-mode WAF coverage to Caddy hostnames", async () => {
@@ -50,7 +60,13 @@ describe("Caddy and API gateway security configuration", () => {
     expect(realm).not.toContain("ChangeMe123!");
     expect(realm).not.toContain("change-me-before-production");
     expect(realm).toContain("https://switchos.localhost/api/auth/oidc/callback");
+    expect(realm).toContain('"bruteForceProtected": true');
+    expect(realm).toContain('"otpPolicyType": "totp"');
+    expect(realm).toContain('"defaultAction": true');
+    expect(realm).toContain('"pkce.code.challenge.method": "S256"');
     expect(policy).toContain('"suspiciousAutomation": "prevent"');
+    expect(policy).toContain('"credentialStuffing": "prevent"');
+    expect(policy).toContain('"accountEnumeration": "prevent"');
     expect(policy).toContain('"host": "switchos.localhost"');
     expect(policy).toContain('"host": "auth.localhost"');
   });
@@ -66,5 +82,17 @@ describe("Caddy and API gateway security configuration", () => {
     expect(compose).toContain('PERMIFY_AUTHN_ENABLED: "true"');
     expect(compose).toContain("PERMIFY_AUTHN_PRESHARED_KEYS:");
     expect(compose).toContain("grpc_health_probe");
+  });
+
+  it("deploys OPA policy-as-code for role, MFA, and privileged-operation constraints", async () => {
+    const [compose, policy] = await Promise.all([
+      source("deploy/platform/docker-compose.stack.yml"),
+      source("deploy/authorization/opa/switchos.rego"),
+    ]);
+
+    expect(compose).toContain("openpolicyagent/opa:0.68.0-static");
+    expect(policy).toContain("default allow := false");
+    expect(policy).toContain("input.subject.mfa == true");
+    expect(policy).toContain("privileged_permissions");
   });
 });

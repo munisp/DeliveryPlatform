@@ -7,6 +7,8 @@ const productionEnvironment = {
 	BOOTSTRAP_OPERATOR_PASSWORD: "a-high-entropy-test-operator-password",
 	PERMIFY_ENDPOINT: "https://permify.switchos.test",
 	PERMIFY_AUTH_TOKEN: "a-high-entropy-test-permify-token",
+	OPA_ENDPOINT: "https://opa.switchos.test",
+	OPA_AUTH_TOKEN: "a-high-entropy-test-opa-token",
 	PUBLIC_APP_ORIGIN: "https://app.switchos.test",
 };
 
@@ -14,6 +16,7 @@ async function loadEnvironment(
 	internalServiceToken?: string,
 	permifyOverrides: Partial<Record<"endpoint" | "authToken", string>> = {},
 	lifecycleOverrides: Partial<Record<"publicOrigin" | "signupEnabled" | "notificationDispatcher", string>> = {},
+	opaOverrides: Partial<Record<"endpoint" | "authToken", string>> = {},
 ) {
 	vi.resetModules();
 	for (const [key, value] of Object.entries(productionEnvironment)) {
@@ -22,6 +25,8 @@ async function loadEnvironment(
 	vi.stubEnv("INTERNAL_SERVICE_TOKEN", internalServiceToken ?? "");
 	if (permifyOverrides.endpoint !== undefined) vi.stubEnv("PERMIFY_ENDPOINT", permifyOverrides.endpoint);
 	if (permifyOverrides.authToken !== undefined) vi.stubEnv("PERMIFY_AUTH_TOKEN", permifyOverrides.authToken);
+	if (opaOverrides.endpoint !== undefined) vi.stubEnv("OPA_ENDPOINT", opaOverrides.endpoint);
+	if (opaOverrides.authToken !== undefined) vi.stubEnv("OPA_AUTH_TOKEN", opaOverrides.authToken);
 	if (lifecycleOverrides.publicOrigin !== undefined) vi.stubEnv("PUBLIC_APP_ORIGIN", lifecycleOverrides.publicOrigin);
 	if (lifecycleOverrides.signupEnabled !== undefined) vi.stubEnv("ENABLE_SELF_SERVICE_SIGNUP", lifecycleOverrides.signupEnabled);
 	if (lifecycleOverrides.notificationDispatcher !== undefined) vi.stubEnv("NOTIFICATION_DISPATCHER_URL", lifecycleOverrides.notificationDispatcher);
@@ -56,10 +61,15 @@ describe("production internal-service credential configuration", () => {
 	});
 
 	it("rejects a missing Permify service credential in production", async () => {
-		await expect(loadEnvironment("a-high-entropy-test-internal-token", { authToken: "" })).rejects.toThrow(
-			"PERMIFY_AUTH_TOKEN is required in production",
-		);
-	});
+			await expect(loadEnvironment("a-high-entropy-test-internal-token", { authToken: "" })).rejects.toThrow(
+				"PERMIFY_AUTH_TOKEN is required in production",
+			);
+		});
+
+	it("rejects missing OPA endpoint or service credentials in production", async () => {
+			await expect(loadEnvironment("a-high-entropy-test-internal-token", {}, {}, { endpoint: "" })).rejects.toThrow("OPA_ENDPOINT is required in production");
+			await expect(loadEnvironment("a-high-entropy-test-internal-token", {}, {}, { authToken: "" })).rejects.toThrow("OPA_AUTH_TOKEN is required in production");
+		});
 
 	it("rejects a missing public origin for lifecycle links in production", async () => {
 		await expect(loadEnvironment("a-high-entropy-test-internal-token", {}, { publicOrigin: "" })).rejects.toThrow(
