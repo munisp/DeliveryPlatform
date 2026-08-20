@@ -49,10 +49,16 @@ describe("operator security profile contracts", () => {
     expect(store).toContain("listOperatorSecurityLoginActivity");
     expect(server).toContain('app.post("/api/auth/security/sessions/revoke-others"');
     expect(server).toContain("recentLoginActivity");
+    expect(server).toContain('app.get("/api/auth/security/login-activity.csv"');
+    expect(server).toContain("securityCsvCell");
+    expect(server).toContain('filename="security-login-activity.csv"');
     expect(page).toContain("Revoke All Other Sessions");
     expect(page).toContain('aria-labelledby="revoke-others-title"');
     expect(page).toContain("Revoke all other sessions?");
     expect(page).toContain("Recent login activity");
+    expect(page).toContain("Download security history (CSV)");
+    expect(page).toContain("mfa-status-explainer");
+    expect(page).toContain('href="#mfa-settings"');
     expect(page).toContain("scan the one-time QR code");
     expect(page).toContain("not by this application");
     expect(page).toContain('MFA {security?.mfa.authenticatedForCurrentSession ? "Enabled"');

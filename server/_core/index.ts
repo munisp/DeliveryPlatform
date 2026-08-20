@@ -613,6 +613,40 @@ app.delete("/api/auth/security/sessions/:id", rateLimit(10), async (req, res) =>
   }
 });
 
+function securityCsvCell(value: string | number | boolean | null | undefined) {
+  const normalized = `${value ?? ""}`.replace(/\r?\n/g, " ");
+  const formulaSafe = /^[=+\-@]/.test(normalized) ? `'${normalized}` : normalized;
+  return `"${formulaSafe.replace(/"/g, '""')}"`;
+}
+
+app.get("/api/auth/security/login-activity.csv", rateLimit(10), async (req, res) => {
+  const user = requireAuthenticatedOperator(req, res);
+  if (!user) return;
+  try {
+    const activity = await listOperatorSecurityLoginActivity(Number(user.id));
+    const csv = [
+      ["auth_source", "mfa_verified", "assurance_level", "created_at", "last_seen_at", "status", "browser"].map(securityCsvCell).join(","),
+      ...activity.map((entry) => [
+        entry.auth_source,
+        entry.mfa_authenticated ? "yes" : "no",
+        entry.assurance_level,
+        entry.created_at,
+        entry.last_seen_at,
+        entry.revoked_at ? "revoked" : "active",
+        entry.user_agent,
+      ].map(securityCsvCell).join(",")),
+    ].join("\n");
+    await recordOperationalEvent({ eventType: "auth.security.login_activity_exported", actorId: `${user.id}`, actorRole: user.role ?? null, tenantId: user.tenantId ?? null, route: req.path, outcome: "success", payload: { rowCount: activity.length } });
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", 'attachment; filename="security-login-activity.csv"');
+    res.setHeader("X-Exported-Row-Count", `${activity.length}`);
+    res.status(200).send(csv);
+  } catch (error) {
+    console.error("[SwitchOS] Unable to export login activity", error);
+    res.status(503).json({ error: "security_login_activity_export_failed" });
+  }
+});
+
 app.post("/api/auth/security/sessions/revoke-others", rateLimit(5), async (req, res) => {
   const user = requireAuthenticatedOperator(req, res);
   if (!user) return;

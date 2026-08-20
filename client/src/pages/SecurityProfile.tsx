@@ -77,6 +77,7 @@ export default function SecurityProfilePage() {
   const queryClient = useQueryClient();
   const [showMfaWizard, setShowMfaWizard] = useState(false);
   const [confirmRevokeOthers, setConfirmRevokeOthers] = useState(false);
+  const [loginExportFeedback, setLoginExportFeedback] = useState<string | null>(null);
   const profile = useQuery({ queryKey: ["security-profile"], queryFn: getSecurityProfile, staleTime: 15_000 });
   const revokeSession = useMutation({
     mutationFn: async (sessionId: string) => {
@@ -107,6 +108,24 @@ export default function SecurityProfilePage() {
   const feedback = isFeedback(error) ? error : null;
   const security = profile.data;
 
+  async function exportLoginActivity() {
+    setLoginExportFeedback(null);
+    const response = await fetch("/api/auth/security/login-activity.csv", { credentials: "include" });
+    const payload = response.ok ? await response.blob() : await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const structured = securityFeedback(response.status, String((payload as { error?: string })?.error ?? "security_login_activity_export_failed"));
+      setLoginExportFeedback(structured?.message ?? "The login activity export could not be completed safely.");
+      return;
+    }
+    const url = URL.createObjectURL(payload as Blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = "security-login-activity.csv";
+    anchor.click();
+    URL.revokeObjectURL(url);
+    setLoginExportFeedback(`Security history downloaded with ${response.headers.get("X-Exported-Row-Count") ?? "0"} rows.`);
+  }
+
   return (
     <DashboardLayout>
       <div className="mx-auto max-w-5xl space-y-6">
@@ -114,9 +133,10 @@ export default function SecurityProfilePage() {
           <p className="text-sm uppercase tracking-[0.24em] text-cyan-300">Profile</p>
           <div className="mt-2 flex flex-wrap items-center gap-3">
             <h1 className="text-3xl font-semibold text-white">Security settings</h1>
-            <span aria-live="polite" className={`rounded-full border px-3 py-1 text-xs font-semibold ${security?.mfa.authenticatedForCurrentSession ? "border-emerald-400/40 bg-emerald-500/15 text-emerald-100" : "border-amber-400/40 bg-amber-500/15 text-amber-100"}`}>
+            <a href="#mfa-settings" aria-describedby="mfa-status-explainer" title="Review MFA status and enrollment guidance" className={`group relative rounded-full border px-3 py-1 text-xs font-semibold ${security?.mfa.authenticatedForCurrentSession ? "border-emerald-400/40 bg-emerald-500/15 text-emerald-100" : "border-amber-400/40 bg-amber-500/15 text-amber-100"}`}>
               MFA {security?.mfa.authenticatedForCurrentSession ? "Enabled" : security?.mfa.requiredForPrivilegedActions ? "Required" : "Not enabled"}
-            </span>
+              <span id="mfa-status-explainer" role="tooltip" className="pointer-events-none absolute left-0 top-full z-20 mt-2 hidden w-64 rounded-lg border border-slate-700 bg-slate-950 p-3 text-left text-xs font-normal leading-relaxed text-slate-200 shadow-xl group-hover:block group-focus:block">{security?.mfa.authenticatedForCurrentSession ? "This session has verified MFA assurance. Select to review authenticator and recovery-code guidance." : "This session does not currently have verified MFA assurance. Select to open setup guidance."}</span>
+            </a>
           </div>
           <p className="mt-2 max-w-3xl text-slate-400">Review the assurance level of this session, manage authenticators through your identity provider, and remove active sessions you no longer recognize.</p>
         </div>
@@ -125,7 +145,7 @@ export default function SecurityProfilePage() {
         {revokeSession.isSuccess ? <div role="status" className="rounded-xl border border-emerald-400/30 bg-emerald-500/10 p-4 text-sm text-emerald-100">Session removed successfully.</div> : null}
         {revokeOtherSessions.isSuccess ? <div role="status" className="rounded-xl border border-emerald-400/30 bg-emerald-500/10 p-4 text-sm text-emerald-100">Other sessions removed successfully.</div> : null}
 
-        <Card>
+        <Card id="mfa-settings">
           <CardHeader>
             <CardTitle>Multi-factor authentication</CardTitle>
             <CardDescription>Privileged actions require verified MFA when the tenant policy is enabled.</CardDescription>
@@ -168,6 +188,7 @@ export default function SecurityProfilePage() {
         <Card>
           <CardHeader><CardTitle>Recent login activity</CardTitle><CardDescription>Recent authenticated session creation is retained for visibility. Network addresses and session secrets are not displayed.</CardDescription></CardHeader>
           <CardContent className="space-y-3">
+            <div className="flex flex-wrap items-center gap-3"><button type="button" onClick={exportLoginActivity} className="rounded-full border border-cyan-400/40 px-4 py-2 text-sm text-cyan-100">Download security history (CSV)</button>{loginExportFeedback ? <span role="status" className="text-sm text-slate-300">{loginExportFeedback}</span> : null}</div>
             {security?.recentLoginActivity.map((activity) => <div key={`${activity.id}-${activity.created_at}`} className="rounded-xl border border-slate-800 bg-slate-950/60 p-4"><div className="flex flex-wrap items-center justify-between gap-2"><p className="font-medium text-white">{activity.auth_source} sign-in</p><span className={`rounded-full px-2 py-1 text-xs ${activity.revoked_at ? "bg-slate-800 text-slate-300" : "bg-emerald-500/15 text-emerald-200"}`}>{activity.revoked_at ? "Revoked" : "Active"}</span></div><p className="mt-1 text-xs text-slate-400">{new Date(activity.created_at).toLocaleString()} · MFA {activity.mfa_authenticated ? "verified" : "not verified"}</p><p className="mt-1 truncate text-xs text-slate-500">{activity.user_agent || "Browser details unavailable"}</p></div>)}
             {security?.recentLoginActivity.length === 0 ? <p className="text-sm text-slate-400">No recent login activity is available.</p> : null}
           </CardContent>
