@@ -53,7 +53,7 @@ import {
   updateTenantAdminNotificationPreferences,
   updateTenantBranding,
 } from "./accountLifecycleStore";
-import { authenticateOperator, ensureExternalOperator, ensureOperatorAuthStore } from "./operatorAuthStore";
+import { authenticateOperator, createOperatorSecuritySession, ensureExternalOperator, ensureOperatorAuthStore, isOperatorSecuritySessionActive, listOperatorSecuritySessions, revokeOperatorSecuritySession } from "./operatorAuthStore";
 import { recordOperationalEvent } from "./operationalEvents";
 import { consumeRateLimit, getRateLimiterStatus } from "./rateLimiter";
 import type { SessionUser } from "./trpc";
@@ -166,7 +166,9 @@ function rateLimit(limit: number): express.RequestHandler {
       res.setHeader("X-RateLimit-Backend", bucket.mode);
 
       if (!bucket.allowed) {
-        res.status(429).json({ error: "rate_limit_exceeded" });
+        const retryAfterSeconds = Math.max(1, Math.ceil((bucket.resetAt - Date.now()) / 1000));
+        res.setHeader("Retry-After", String(retryAfterSeconds));
+        res.status(429).json({ error: "rate_limit_exceeded", retryAfterSeconds });
         return;
       }
 
@@ -179,9 +181,13 @@ function rateLimit(limit: number): express.RequestHandler {
 }
 
 async function issueOperatorSession(
+  req: express.Request,
   res: express.Response,
   operator: { id: number; name: string; email: string; role: string; tenantId: string | null },
+  options: { authSource?: "managed" | "oidc" | "development"; mfaAuthenticated?: boolean; assuranceLevel?: string | null } = {},
 ) {
+  const sessionId = randomUUID();
+  const mfaAuthenticated = Boolean(options.mfaAuthenticated);
   const token = await createSessionToken({
     sub: String(operator.id),
     name: operator.name,
@@ -192,6 +198,20 @@ async function issueOperatorSession(
     scopes: operator.role === "viewer"
       ? ["platform:read", "analytics:read"]
       : ["platform:read", "platform:write", "analytics:read"],
+    sessionId,
+    mfaAuthenticated,
+    assuranceLevel: options.assuranceLevel ?? null,
+  });
+
+  await createOperatorSecuritySession({
+    sessionId,
+    operatorId: operator.id,
+    authSource: options.authSource ?? "managed",
+    mfaAuthenticated,
+    assuranceLevel: options.assuranceLevel ?? null,
+    userAgent: req.get("user-agent") ?? null,
+    clientIp: req.ip,
+    expiresAt: new Date(Date.now() + 12 * 60 * 60 * 1000),
   });
 
   res.cookie(COOKIE_NAME, token, getCookieOptions());
@@ -288,7 +308,7 @@ app.post("/api/auth/email-verification/resend", rateLimit(5), async (req, res) =
 app.post("/api/auth/email-verification/confirm", rateLimit(10), async (req, res) => {
   try {
     const operator = await confirmEmailVerification(`${req.body?.token ?? ""}`);
-    await issueOperatorSession(res, operator);
+    await issueOperatorSession(req, res, operator);
     await recordOperationalEvent({ eventType: "auth.email_verified", actorId: `${operator.id}`, actorRole: operator.role, route: req.path, outcome: "success" });
     res.status(200).json({ ok: true, user: operator, redirect: "/onboarding" });
   } catch (error) {
@@ -325,7 +345,7 @@ app.post("/api/auth/invitations/accept", rateLimit(10), async (req, res) => {
       name: `${req.body?.name ?? ""}`,
       password: `${req.body?.password ?? ""}`,
     });
-    await issueOperatorSession(res, result.operator);
+    await issueOperatorSession(req, res, result.operator);
     await recordOperationalEvent({ eventType: "auth.invitation_accepted", actorId: `${result.operator.id}`, actorRole: result.operator.role, tenantId: result.operator.tenantId, route: req.path, outcome: "success" });
     res.status(200).json({ ok: true, user: result.operator, redirect: "/dashboard" });
   } catch (error) {
@@ -421,7 +441,11 @@ app.get("/api/auth/oidc/callback", rateLimit(30), async (req, res) => {
       name: identity.name,
       tenantId: identity.tenantId,
     });
-    await issueOperatorSession(res, operator);
+    await issueOperatorSession(req, res, operator, {
+      authSource: "oidc",
+      mfaAuthenticated: Boolean(identity.mfaAuthenticated),
+      assuranceLevel: identity.assuranceLevel ?? null,
+    });
     await recordOperationalEvent({
       eventType: "auth.oidc.callback",
       actorId: `${operator.id}`,
@@ -476,7 +500,7 @@ app.post("/api/auth/login", rateLimit(15), async (req, res) => {
       return;
     }
 
-    await issueOperatorSession(res, operator);
+    await issueOperatorSession(req, res, operator);
     await recordOperationalEvent({
       eventType: "auth.local.login",
       actorId: `${operator.id}`,
@@ -520,8 +544,11 @@ app.post("/api/auth/logout", rateLimit(20), async (req, res) => {
 
 app.use(async (req, _res, next) => {
   const request = req as AppRequest;
-  try {
-    request.user = await getSessionUserFromRequest(req.headers);
+	try {
+		request.user = await getSessionUserFromRequest(req.headers);
+		if (request.user?.sessionId && !await isOperatorSecuritySessionActive(request.user.id, request.user.sessionId)) {
+			request.user = null;
+		}
   } catch (error) {
     console.warn("[SwitchOS] Failed to resolve session user", error);
     request.user = null;
@@ -537,6 +564,50 @@ function requireAuthenticatedOperator(req: express.Request, res: express.Respons
   }
   return user;
 }
+
+app.get("/api/auth/security", async (req, res) => {
+  const user = requireAuthenticatedOperator(req, res);
+  if (!user) return;
+  try {
+    const sessions = await listOperatorSecuritySessions(Number(user.id));
+    res.status(200).json({
+      mfa: {
+        requiredForPrivilegedActions: ENV.requireMfaForPrivilegedActions,
+        authenticatedForCurrentSession: Boolean(user.mfaAuthenticated),
+        assuranceLevel: user.assuranceLevel ?? null,
+        setupUrl: ENV.enableExternalOidc && ENV.oidcIssuerUrl ? `${ENV.oidcIssuerUrl}/account/#/security/signingin` : null,
+      },
+      currentSessionId: user.sessionId ?? null,
+      sessions,
+    });
+  } catch (error) {
+    console.error("[SwitchOS] Unable to load security profile", error);
+    res.status(503).json({ error: "security_profile_unavailable" });
+  }
+});
+
+app.delete("/api/auth/security/sessions/:id", rateLimit(10), async (req, res) => {
+  const user = requireAuthenticatedOperator(req, res);
+  if (!user) return;
+  const sessionId = `${req.params.id ?? ""}`.trim();
+  if (!/^[0-9a-f-]{36}$/i.test(sessionId)) {
+    res.status(400).json({ error: "invalid_session_id" });
+    return;
+  }
+  try {
+    const revoked = await revokeOperatorSecuritySession(Number(user.id), sessionId);
+    if (!revoked) {
+      res.status(404).json({ error: "session_not_found" });
+      return;
+    }
+    if (user.sessionId === sessionId) res.clearCookie(COOKIE_NAME, getCookieOptions());
+    await recordOperationalEvent({ eventType: "auth.security.session_revoked", actorId: `${user.id}`, actorRole: user.role ?? null, tenantId: user.tenantId ?? null, route: req.path, outcome: "success" });
+    res.status(200).json({ ok: true, currentSessionRevoked: user.sessionId === sessionId });
+  } catch (error) {
+    console.error("[SwitchOS] Unable to revoke security session", error);
+    res.status(503).json({ error: "security_session_revoke_failed" });
+  }
+});
 
 const privilegedTenantMutationPrefixes = [
   "/api/auth/invitations",
@@ -584,7 +655,11 @@ app.post("/api/auth/onboarding/organization", rateLimit(10), async (req, res) =>
       tenantName: `${req.body?.tenantName ?? ""}`,
     });
     const state = await getOnboardingState(Number(user.id));
-    await issueOperatorSession(res, state.operator);
+    await issueOperatorSession(req, res, state.operator, {
+      authSource: "managed",
+      mfaAuthenticated: Boolean(user.mfaAuthenticated),
+      assuranceLevel: user.assuranceLevel ?? null,
+    });
     await recordOperationalEvent({ eventType: "auth.organization_created", actorId: `${user.id}`, actorRole: user.role, tenantId: result.tenantId, route: req.path, outcome: "success" });
     res.status(201).json({ ok: true, ...result, redirect: "/onboarding?step=branding" });
   } catch (error) {

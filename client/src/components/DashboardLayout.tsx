@@ -24,6 +24,7 @@ const menuItems = [
   { icon: Store, label: "Merchant Channels", path: "/merchant-channels" },
   { icon: PhoneCall, label: "Phone Ordering", path: "/phone-ordering-studio" },
   { icon: ShieldCheck, label: "Service Recovery", path: "/service-recovery" },
+  { icon: ShieldCheck, label: "Security Settings", path: "/profile/security" },
 ];
 
 function cn(...parts: Array<string | false | null | undefined>) {

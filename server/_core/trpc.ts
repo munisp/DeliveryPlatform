@@ -16,6 +16,7 @@ export type SessionUser = {
   authenticationMethods?: string[];
   assuranceLevel?: string | null;
   mfaAuthenticated?: boolean;
+  sessionId?: string | null;
 };
 
 export type TrpcContext = {

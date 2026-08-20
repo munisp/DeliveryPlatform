@@ -12,6 +12,7 @@ import MerchantChannels from "@/pages/MerchantChannels";
 import ServiceRecovery from "@/pages/ServiceRecovery";
 import PhoneOrderingStudio from "@/pages/PhoneOrderingStudio";
 import TenantAdminActions from "@/pages/TenantAdminActions";
+import SecurityProfilePage, { SecurityBlockedPage } from "@/pages/SecurityProfile";
 import { InvitationAcceptancePage, InviteTeamPage, OnboardingPage, PasswordResetPage, SignupPage, VerifyEmailPage } from "@/pages/AccountLifecycle";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
@@ -382,6 +383,8 @@ export default function App() {
       <Route path="/onboarding" component={OnboardingPage} />
       <Route path="/team/invite" component={InviteTeamPage} />
       <Route path="/tenant-admin" component={TenantAdminActions} />
+      <Route path="/profile/security" component={SecurityProfilePage} />
+      <Route path="/security/blocked" component={SecurityBlockedPage} />
       <Route path="/dashboard" component={DashboardPage} />
       <Route path="/analytics" component={Analytics} />
       <Route path="/driver-mobility" component={DriverMobility} />

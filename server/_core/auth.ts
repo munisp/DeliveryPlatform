@@ -1,5 +1,5 @@
 import cookie from "cookie";
-import { createHash, randomBytes } from "crypto";
+import { createHash, randomBytes, randomUUID } from "crypto";
 import { createRemoteJWKSet, jwtVerify, SignJWT } from "jose";
 
 import { COOKIE_NAME } from "../../shared/const";
@@ -20,6 +20,7 @@ type SessionClaims = {
   authenticationMethods?: string[];
   assuranceLevel?: string | null;
   mfaAuthenticated?: boolean;
+  sessionId?: string | null;
 };
 
 type DiscoveryDocument = {
@@ -136,6 +137,7 @@ function toSessionUser(payload: Record<string, unknown>): SessionUser | null {
     authenticationMethods,
     assuranceLevel,
     mfaAuthenticated: isMfaAuthenticated(authenticationMethods, assuranceLevel),
+    sessionId: typeof payload.jti === "string" ? payload.jti : null,
   };
 }
 
@@ -290,6 +292,7 @@ export async function createSessionToken(user: SessionClaims) {
     .setIssuer(ENV.sessionIssuer)
     .setAudience(ENV.sessionAudience)
     .setSubject(subject)
+    .setJti(user.sessionId ?? randomUUID())
     .setIssuedAt()
     .setExpirationTime(`${SESSION_TTL_SECONDS}s`)
     .sign(getSessionKey());

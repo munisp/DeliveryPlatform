@@ -1,4 +1,4 @@
-import { randomUUID, scryptSync, timingSafeEqual } from "crypto";
+import { createHash, randomUUID, scryptSync, timingSafeEqual } from "crypto";
 
 import pg from "pg";
 
@@ -59,6 +59,25 @@ export async function ensureOperatorAuthStore() {
       )
     `);
 
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS operator_security_sessions (
+        id UUID PRIMARY KEY,
+        operator_id INTEGER NOT NULL REFERENCES operator_credentials(id) ON DELETE CASCADE,
+        session_hash CHAR(64) NOT NULL UNIQUE,
+        auth_source VARCHAR(32) NOT NULL,
+        mfa_authenticated BOOLEAN NOT NULL DEFAULT false,
+        assurance_level VARCHAR(128),
+        user_agent VARCHAR(512),
+        ip_hash CHAR(64),
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        expires_at TIMESTAMPTZ NOT NULL,
+        revoked_at TIMESTAMPTZ
+      );
+      CREATE INDEX IF NOT EXISTS operator_security_sessions_operator_lookup
+        ON operator_security_sessions (operator_id, revoked_at, expires_at DESC);
+    `);
+
     const existing = await client.query<{ id: number }>(
       `SELECT id FROM operator_credentials WHERE email = $1 LIMIT 1`,
       [ENV.bootstrapOperatorEmail],
@@ -80,6 +99,74 @@ export async function ensureOperatorAuthStore() {
   } finally {
     client.release();
   }
+}
+
+function hashSecurityValue(value: string) {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+export type SecuritySessionRecord = {
+  id: string;
+  auth_source: string;
+  mfa_authenticated: boolean;
+  assurance_level: string | null;
+  user_agent: string | null;
+  created_at: string;
+  last_seen_at: string;
+  expires_at: string;
+};
+
+export async function createOperatorSecuritySession(input: {
+  sessionId: string;
+  operatorId: number;
+  authSource: "managed" | "oidc" | "development";
+  mfaAuthenticated: boolean;
+  assuranceLevel?: string | null;
+  userAgent?: string | null;
+  clientIp?: string | null;
+  expiresAt: Date;
+}) {
+  await ensureOperatorAuthStore();
+  await getOperatorAuthPool().query(
+    `INSERT INTO operator_security_sessions
+      (id, operator_id, session_hash, auth_source, mfa_authenticated, assurance_level, user_agent, ip_hash, expires_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+    [input.sessionId, input.operatorId, hashSecurityValue(input.sessionId), input.authSource, input.mfaAuthenticated, input.assuranceLevel ?? null, input.userAgent?.slice(0, 512) ?? null, input.clientIp ? hashSecurityValue(input.clientIp) : null, input.expiresAt],
+  );
+}
+
+export async function listOperatorSecuritySessions(operatorId: number): Promise<SecuritySessionRecord[]> {
+  await ensureOperatorAuthStore();
+  const result = await getOperatorAuthPool().query<SecuritySessionRecord>(
+    `SELECT id, auth_source, mfa_authenticated, assurance_level, user_agent, created_at, last_seen_at, expires_at
+     FROM operator_security_sessions
+     WHERE operator_id = $1 AND revoked_at IS NULL AND expires_at > NOW()
+     ORDER BY last_seen_at DESC LIMIT 25`,
+    [operatorId],
+  );
+  return result.rows;
+}
+
+export async function isOperatorSecuritySessionActive(operatorId: number, sessionId: string) {
+  await ensureOperatorAuthStore();
+  const result = await getOperatorAuthPool().query<{ id: string }>(
+    `UPDATE operator_security_sessions SET last_seen_at = NOW()
+     WHERE id = $1 AND operator_id = $2 AND session_hash = $3 AND revoked_at IS NULL AND expires_at > NOW()
+     RETURNING id`,
+    [sessionId, operatorId, hashSecurityValue(sessionId)],
+  );
+  return result.rows.length === 1;
+}
+
+export async function revokeOperatorSecuritySession(operatorId: number, sessionId: string) {
+  await ensureOperatorAuthStore();
+  const result = await getOperatorAuthPool().query<{ id: string }>(
+    `UPDATE operator_security_sessions SET revoked_at = NOW()
+     WHERE id = $1 AND operator_id = $2 AND revoked_at IS NULL
+     RETURNING id`,
+    [sessionId, operatorId],
+  );
+  return result.rows.length === 1;
 }
 
 export async function authenticateOperator(email: string, password: string) {
