@@ -1,6 +1,24 @@
 {
   "executions": [
     {
+      "recordedAt": "2026-08-21T12:00:00.000Z",
+      "workflow": "MFA enrollment and session management",
+      "status": "not_run",
+      "level": "warning",
+      "detail": "Requires isolated staging base URL and short-lived MFA session. Run with: PLAYWRIGHT_BASE_URL=https://staging.example.com pnpm test:e2e",
+      "testCount": 6,
+      "errorTrace": null
+    },
+    {
+      "recordedAt": "2026-08-21T12:00:00.000Z",
+      "workflow": "Financial administration read-only verification",
+      "status": "not_run",
+      "level": "warning",
+      "detail": "Requires isolated staging base URL with MFA-backed financial administrator session. Run with: PLAYWRIGHT_BASE_URL=https://staging.example.com pnpm test:e2e",
+      "testCount": 5,
+      "errorTrace": null
+    },
+    {
       "recordedAt": "2026-08-21T13:41:48.000Z",
       "workflow": "administrator security and financial workflows",
       "status": "not_run",

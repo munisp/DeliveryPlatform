@@ -106,6 +106,32 @@ export async function getAlertOwnership(alertId: string): Promise<{ assignedTo: 
   return { assignedTo: result.rows[0].assigned_to_operator_id, escalationDeadline: result.rows[0].escalation_deadline ? new Date(result.rows[0].escalation_deadline).toISOString() : null };
 }
 
+export async function getAlertActionHistory(): Promise<Array<{ alertId: string; action: string; note: string | null; actorId: number; assignedTo: number | null; escalationDeadline: string | null; createdAt: string }>> {
+  const result = await requirePool().query(
+    `SELECT alert_id, action, note, actor_id, assigned_to_operator_id, escalation_deadline, created_at FROM financial_admin_alert_actions ORDER BY created_at DESC LIMIT 500`
+  );
+  return result.rows.map((row) => ({
+    alertId: String(row.alert_id),
+    action: String(row.action),
+    note: row.note ? String(row.note) : null,
+    actorId: Number(row.actor_id),
+    assignedTo: row.assigned_to_operator_id ? Number(row.assigned_to_operator_id) : null,
+    escalationDeadline: row.escalation_deadline ? new Date(row.escalation_deadline).toISOString() : null,
+    createdAt: new Date(row.created_at).toISOString(),
+  }));
+}
+
+export async function getAlertEscalations(): Promise<Array<{ alertId: string; assignedTo: number; escalationDeadline: string }>> {
+  const result = await requirePool().query(
+    `SELECT DISTINCT ON (alert_id) alert_id, assigned_to_operator_id, escalation_deadline FROM financial_admin_alert_actions WHERE assigned_to_operator_id IS NOT NULL AND escalation_deadline IS NOT NULL ORDER BY alert_id, created_at DESC`
+  );
+  return result.rows.map((row) => ({
+    alertId: String(row.alert_id),
+    assignedTo: Number(row.assigned_to_operator_id),
+    escalationDeadline: new Date(row.escalation_deadline).toISOString(),
+  }));
+}
+
 export async function getFinancialAdminAlerts(): Promise<FinancialAdminAlert[]> {
   const db = requirePool();
   const [reconciliations, dependencies, actionRows, database] = await Promise.all([

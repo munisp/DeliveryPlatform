@@ -57,9 +57,11 @@ import { authenticateOperator, createOperatorSecuritySession, ensureExternalOper
 import { recordOperationalEvent } from "./operationalEvents";
 import { consumeRateLimit, getRateLimiterStatus } from "./rateLimiter";
 import { getFilteredFinancialAdminSnapshot, getFinancialAdminAlerts, getFinancialDatabaseEvidence, listFinancialDependencyHealthHistory, recordFinancialAdminAlertAction, recordFinancialDependencyHealth } from "./financialAdminStore";
+import { getAlertActionHistory, getAlertEscalations } from "./financialAdminStore";
 import coverageBaseline from "../../assurance/CODE_COVERAGE_BASELINE.json";
 import coverageHistory from "../../assurance/CODE_COVERAGE_HISTORY.json";
 import playwrightExecutions from "../../assurance/PLAYWRIGHT_EXECUTION_HISTORY.json";
+
 import type { SessionUser } from "./trpc";
 
 const OIDC_STATE_COOKIE = "switchos_oidc_state";
@@ -703,6 +705,36 @@ app.post("/api/admin/finance/alerts/:id/actions", rateLimit(10), async (req, res
   } catch (error) {
     console.error("[SwitchOS] Unable to persist financial alert action", error);
     res.status(503).json({ error: "financial_alert_action_unavailable" });
+  }
+});
+
+app.get("/api/admin/finance/alert-actions/history.csv", rateLimit(10), async (req, res) => {
+  const user = requireFinancialAdministrator(req, res);
+  if (!user) return;
+  try {
+    const rows = await getAlertActionHistory();
+    const safe = (v: string | null) => v ? `"${String(v).replace(/"/g, '""').replace(/[\r\n]+/g, " ").replace(/^[=+\-@\t\r]/g, "'$&")}"` : "";
+    const header = "alert_id,action,note,actor_id,assigned_to,escalation_deadline,created_at";
+    const csv = [header, ...rows.map((r) => [safe(r.alertId), safe(r.action), safe(r.note), r.actorId, r.assignedTo ?? "", r.escalationDeadline ? safe(r.escalationDeadline) : "", safe(r.createdAt)].join(","))].join("\n");
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="alert-action-history-${new Date().toISOString().slice(0, 10)}.csv"`);
+    res.setHeader("X-Row-Count", String(rows.length));
+    res.status(200).send(csv);
+  } catch (error) {
+    console.error("[SwitchOS] Unable to export alert-action history", error);
+    res.status(503).json({ error: "alert_action_export_unavailable" });
+  }
+});
+
+app.get("/api/admin/finance/alert-escalations", rateLimit(30), async (req, res) => {
+  const user = requireFinancialAdministrator(req, res);
+  if (!user) return;
+  try {
+    const escalations = await getAlertEscalations();
+    res.status(200).json({ escalations, retrievedAt: new Date().toISOString() });
+  } catch (error) {
+    console.error("[SwitchOS] Unable to retrieve alert escalations", error);
+    res.status(503).json({ error: "alert_escalations_unavailable" });
   }
 });
 
