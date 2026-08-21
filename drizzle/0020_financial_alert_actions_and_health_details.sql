@@ -11,3 +11,7 @@ CREATE TABLE IF NOT EXISTS financial_admin_alert_actions (
 );
 CREATE INDEX IF NOT EXISTS idx_financial_admin_alert_actions_latest
   ON financial_admin_alert_actions (alert_id, created_at DESC);
+
+ALTER TABLE financial_admin_alert_actions
+  ADD COLUMN IF NOT EXISTS assigned_to_operator_id BIGINT,
+  ADD COLUMN IF NOT EXISTS escalation_deadline TIMESTAMPTZ;

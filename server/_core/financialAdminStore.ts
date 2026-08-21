@@ -89,6 +89,23 @@ export async function recordFinancialAdminAlertAction(input: { alertId: string; 
   await requirePool().query(`INSERT INTO financial_admin_alert_actions (alert_id, action, note, actor_id) VALUES ($1, $2, $3, $4)`, [input.alertId, input.action, input.note, input.actorId]);
 }
 
+export async function assignAlertOwnership(input: { alertId: string; assignedTo: number; escalationDeadline: string | null; actorId: number }) {
+  const note = `Assigned to operator ${input.assignedTo}${input.escalationDeadline ? ` with deadline ${input.escalationDeadline}` : ""}`;
+  await requirePool().query(
+    `INSERT INTO financial_admin_alert_actions (alert_id, action, note, actor_id, assigned_to_operator_id, escalation_deadline) VALUES ($1, 'assign', $2, $3, $4, $5)`,
+    [input.alertId, note, input.actorId, input.assignedTo, input.escalationDeadline]
+  );
+}
+
+export async function getAlertOwnership(alertId: string): Promise<{ assignedTo: number | null; escalationDeadline: string | null }> {
+  const result = await requirePool().query(
+    `SELECT assigned_to_operator_id, escalation_deadline FROM financial_admin_alert_actions WHERE alert_id = $1 AND assigned_to_operator_id IS NOT NULL ORDER BY created_at DESC LIMIT 1`,
+    [alertId]
+  );
+  if (result.rows.length === 0) return { assignedTo: null, escalationDeadline: null };
+  return { assignedTo: result.rows[0].assigned_to_operator_id, escalationDeadline: result.rows[0].escalation_deadline ? new Date(result.rows[0].escalation_deadline).toISOString() : null };
+}
+
 export async function getFinancialAdminAlerts(): Promise<FinancialAdminAlert[]> {
   const db = requirePool();
   const [reconciliations, dependencies, actionRows, database] = await Promise.all([

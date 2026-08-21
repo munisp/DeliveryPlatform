@@ -682,12 +682,22 @@ app.post("/api/admin/finance/alerts/:id/actions", rateLimit(10), async (req, res
   const alertId = `${req.params.id ?? ""}`.trim();
   const action = `${req.body?.action ?? ""}`.trim();
   const note = `${req.body?.note ?? ""}`.trim();
-  if (!/^(reconciliation-\d+|dependency-(tigerbeetle|temporal)|database-tls|migration-age)$/.test(alertId) || !["acknowledge", "dismiss", "note"].includes(action) || note.length > 500 || (action === "note" && !note)) {
+  if (!/^(reconciliation-\d+|dependency-(tigerbeetle|temporal)|database-tls|migration-age)$/.test(alertId) || !["acknowledge", "dismiss", "note", "assign"].includes(action) || note.length > 500 || (action === "note" && !note)) {
     res.status(400).json({ error: "invalid_financial_alert_action" });
     return;
   }
   try {
     await recordFinancialAdminAlertAction({ alertId, action: action as "acknowledge" | "dismiss" | "note", note: note || null, actorId: Number(user.id) });
+    if (action === "assign") {
+      const { assignAlertOwnership } = await import("./financialAdminStore");
+      const assignedTo = parseInt(String(req.body.assignedTo), 10);
+      const escalationDeadline = typeof req.body.escalationDeadline === "string" && req.body.escalationDeadline ? req.body.escalationDeadline : null;
+      if (!Number.isFinite(assignedTo) || assignedTo <= 0) { res.status(400).json({ error: "Valid assignedTo operator ID required." }); return; }
+      await assignAlertOwnership({ alertId, assignedTo, escalationDeadline, actorId: Number(user.id) });
+      await recordOperationalEvent({ eventType: "finance.alert.assign", actorId: `${user.id}`, actorRole: user.role ?? null, tenantId: user.tenantId ?? null, route: req.path, outcome: "success", payload: { alertId, action: "assign", assignedTo, escalationDeadline } });
+      res.status(200).json({ ok: true, alertId, action: "assign", assignedTo, escalationDeadline });
+      return;
+    }
     await recordOperationalEvent({ eventType: "finance.alert.action", actorId: `${user.id}`, actorRole: user.role ?? null, tenantId: user.tenantId ?? null, route: req.path, outcome: "success", payload: { alertId, action } });
     res.status(200).json({ ok: true });
   } catch (error) {

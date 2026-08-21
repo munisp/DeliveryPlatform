@@ -96,5 +96,13 @@ describe("financial administration safeguards", () => {
     expect(page).toContain("filteredExecutions");
     expect(store).toContain('id: "database-tls"');
     expect(store).toContain('id: "migration-age"');
+    expect(store).toContain("assignAlertOwnership");
+    expect(store).toContain("assigned_to_operator_id");
+    expect(store).toContain("escalation_deadline");
+    expect(page).toContain("Search workflows");
+    expect(page).toContain("All statuses");
+    expect(page).toContain("Failed");
+    expect(page).toContain("Not run");
+    expect(page).toContain("Modules:");
   });
 });
