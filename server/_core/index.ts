@@ -56,7 +56,7 @@ import {
 import { authenticateOperator, createOperatorSecuritySession, ensureExternalOperator, ensureOperatorAuthStore, isOperatorSecuritySessionActive, listOperatorSecurityLoginActivity, listOperatorSecuritySessions, revokeOperatorSecuritySession, revokeOtherOperatorSecuritySessions } from "./operatorAuthStore";
 import { recordOperationalEvent } from "./operationalEvents";
 import { consumeRateLimit, getRateLimiterStatus } from "./rateLimiter";
-import { getFinancialAdminSnapshot } from "../db";
+import { getFilteredFinancialAdminSnapshot, getFinancialAdminAlerts, listFinancialDependencyHealthHistory, recordFinancialDependencyHealth } from "./financialAdminStore";
 import type { SessionUser } from "./trpc";
 
 const OIDC_STATE_COOKIE = "switchos_oidc_state";
@@ -600,13 +600,36 @@ function financialSimulationConfiguration() {
   return { enabled, executorUrl, token };
 }
 
+function financialAdminDate(value: unknown, endOfDay = false) {
+  const normalized = `${value ?? ""}`.trim();
+  if (!normalized) return undefined;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(normalized)) throw new Error("invalid_financial_admin_date");
+  const parsed = new Date(`${normalized}T${endOfDay ? "23:59:59.999" : "00:00:00.000"}Z`);
+  if (Number.isNaN(parsed.getTime())) throw new Error("invalid_financial_admin_date");
+  return parsed;
+}
+
 app.get("/api/admin/finance/overview", rateLimit(30), async (req, res) => {
   const user = requireFinancialAdministrator(req, res);
   if (!user) return;
   try {
-    const snapshot = await getFinancialAdminSnapshot();
+    const sort = `${req.query.sort ?? "updated_desc"}`;
+    if (!new Set(["updated_desc", "updated_asc", "created_desc", "created_asc"]).has(sort)) {
+      res.status(400).json({ error: "invalid_financial_admin_sort" });
+      return;
+    }
+    const snapshot = await getFilteredFinancialAdminSnapshot({
+      query: `${req.query.query ?? ""}`,
+      startDate: financialAdminDate(req.query.startDate),
+      endDate: financialAdminDate(req.query.endDate, true),
+      sort: sort as "updated_desc" | "updated_asc" | "created_desc" | "created_asc",
+    });
     res.status(200).json({ ...snapshot, immutableIdentityEnforced: true, retrievedAt: new Date().toISOString() });
   } catch (error) {
+    if (error instanceof Error && error.message === "invalid_financial_admin_date") {
+      res.status(400).json({ error: error.message });
+      return;
+    }
     console.error("[SwitchOS] Unable to load financial administration snapshot", error);
     res.status(503).json({ error: "financial_admin_data_unavailable" });
   }
@@ -620,7 +643,27 @@ app.get("/api/admin/finance/health", rateLimit(30), async (req, res) => {
     dependencyHealth("TigerBeetle adapter", ENV.tigerbeetleServiceUrl),
     dependencyHealth("Temporal bridge", temporalBridgeUrl),
   ]);
-  res.status(200).json({ dependencies, retrievedAt: new Date().toISOString() });
+  try {
+    await Promise.all([
+      recordFinancialDependencyHealth({ dependency: "tigerbeetle", status: dependencies[0].status, latencyMs: dependencies[0].latencyMs, observedAt: dependencies[0].checkedAt }),
+      recordFinancialDependencyHealth({ dependency: "temporal", status: dependencies[1].status, latencyMs: dependencies[1].latencyMs, observedAt: dependencies[1].checkedAt }),
+    ]);
+    res.status(200).json({ dependencies, history: await listFinancialDependencyHealthHistory(), retrievedAt: new Date().toISOString() });
+  } catch (error) {
+    console.error("[SwitchOS] Unable to persist financial dependency health", error);
+    res.status(503).json({ error: "financial_health_history_unavailable" });
+  }
+});
+
+app.get("/api/admin/finance/alerts", rateLimit(30), async (req, res) => {
+  const user = requireFinancialAdministrator(req, res);
+  if (!user) return;
+  try {
+    res.status(200).json({ alerts: await getFinancialAdminAlerts(), retrievedAt: new Date().toISOString() });
+  } catch (error) {
+    console.error("[SwitchOS] Unable to load financial administration alerts", error);
+    res.status(503).json({ error: "financial_admin_alerts_unavailable" });
+  }
 });
 
 app.get("/api/admin/finance/simulations", rateLimit(30), (req, res) => {

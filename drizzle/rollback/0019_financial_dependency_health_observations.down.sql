@@ -1,0 +1,1 @@
+DROP TABLE IF EXISTS financial_dependency_health_observations;

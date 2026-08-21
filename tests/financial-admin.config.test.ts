@@ -30,4 +30,18 @@ describe("financial administration safeguards", () => {
     expect(page).toContain("Isolated recovery scenarios");
     expect(page).toContain("disabled={!simulations.data.enabled || simulation.isPending}");
   });
+
+  it("bounds financial record filters and retains evidence-backed health and alert history", () => {
+    const server = readFileSync(resolve(root, "server/_core/index.ts"), "utf8");
+    const store = readFileSync(resolve(root, "server/_core/financialAdminStore.ts"), "utf8");
+    const page = readFileSync(resolve(root, "client/src/pages/FinancialAdministration.tsx"), "utf8");
+    expect(server).toContain("invalid_financial_admin_date");
+    expect(server).toContain('app.get("/api/admin/finance/alerts"');
+    expect(store).toContain("LIMIT 100");
+    expect(store).toContain("financial_dependency_health_observations");
+    expect(store).toContain("INTERVAL '24 hours'");
+    expect(page).toContain("Notification center");
+    expect(page).toContain("TigerBeetle adapter uptime");
+    expect(page).toContain("Find immutable financial records");
+  });
 });
