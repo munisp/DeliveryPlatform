@@ -56,7 +56,8 @@ import {
 import { authenticateOperator, createOperatorSecuritySession, ensureExternalOperator, ensureOperatorAuthStore, isOperatorSecuritySessionActive, listOperatorSecurityLoginActivity, listOperatorSecuritySessions, revokeOperatorSecuritySession, revokeOtherOperatorSecuritySessions } from "./operatorAuthStore";
 import { recordOperationalEvent } from "./operationalEvents";
 import { consumeRateLimit, getRateLimiterStatus } from "./rateLimiter";
-import { getFilteredFinancialAdminSnapshot, getFinancialAdminAlerts, listFinancialDependencyHealthHistory, recordFinancialAdminAlertAction, recordFinancialDependencyHealth } from "./financialAdminStore";
+import { getFilteredFinancialAdminSnapshot, getFinancialAdminAlerts, getFinancialDatabaseEvidence, listFinancialDependencyHealthHistory, recordFinancialAdminAlertAction, recordFinancialDependencyHealth } from "./financialAdminStore";
+import coverageBaseline from "../../assurance/CODE_COVERAGE_BASELINE.json";
 import type { SessionUser } from "./trpc";
 
 const OIDC_STATE_COOKIE = "switchos_oidc_state";
@@ -649,11 +650,17 @@ app.get("/api/admin/finance/health", rateLimit(30), async (req, res) => {
       recordFinancialDependencyHealth({ dependency: "tigerbeetle", status: dependencies[0].status, latencyMs: dependencies[0].latencyMs, detail: dependencies[0].detail, observedAt: dependencies[0].checkedAt }),
       recordFinancialDependencyHealth({ dependency: "temporal", status: dependencies[1].status, latencyMs: dependencies[1].latencyMs, detail: dependencies[1].detail, observedAt: dependencies[1].checkedAt }),
     ]);
-    res.status(200).json({ dependencies, history: await listFinancialDependencyHealthHistory(), retrievedAt: new Date().toISOString() });
+    res.status(200).json({ dependencies, history: await listFinancialDependencyHealthHistory(), database: await getFinancialDatabaseEvidence(), retrievedAt: new Date().toISOString() });
   } catch (error) {
     console.error("[SwitchOS] Unable to persist financial dependency health", error);
     res.status(503).json({ error: "financial_health_history_unavailable" });
   }
+});
+
+app.get("/api/admin/quality/coverage", rateLimit(30), (req, res) => {
+  const user = requireFinancialAdministrator(req, res);
+  if (!user) return;
+  res.status(200).json({ ...coverageBaseline, retrievedAt: new Date().toISOString() });
 });
 
 app.get("/api/admin/finance/alerts", rateLimit(30), async (req, res) => {

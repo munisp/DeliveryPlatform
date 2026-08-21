@@ -77,4 +77,16 @@ describe("financial administration safeguards", () => {
     expect(db).toContain("A missing period is an operational data condition");
     expect(db).not.toContain("_platformTablesEnsured = false;\n  await ensurePlatformTables();");
   });
+
+  it("exposes measured coverage and PostgreSQL TLS and migration evidence only through MFA-gated administration contracts", () => {
+    const index = readFileSync(resolve(root, "server/_core/index.ts"), "utf8");
+    const store = readFileSync(resolve(root, "server/_core/financialAdminStore.ts"), "utf8");
+    const page = readFileSync(resolve(root, "client/src/pages/FinancialAdministration.tsx"), "utf8");
+    expect(index).toContain('"/api/admin/quality/coverage"');
+    expect(index).toContain("getFinancialDatabaseEvidence");
+    expect(store).toContain("pg_stat_ssl");
+    expect(store).toContain("__drizzle_migrations");
+    expect(page).toContain("Testing and coverage");
+    expect(page).toContain("PostgreSQL TLS");
+  });
 });

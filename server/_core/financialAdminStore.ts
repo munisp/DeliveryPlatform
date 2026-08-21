@@ -20,6 +20,7 @@ function requirePool() {
 export type FinancialAdminFilters = { query?: string; startDate?: Date; endDate?: Date; sort?: "updated_desc" | "updated_asc" | "created_desc" | "created_asc" };
 export type FinancialHealthObservation = { dependency: "tigerbeetle" | "temporal"; status: "reachable" | "unhealthy" | "unreachable" | "unconfigured"; latencyMs: number | null; detail: string | null; observedAt: string };
 export type FinancialAdminAlert = { id: string; severity: "warning" | "critical"; source: "reconciliation" | "dependency"; title: string; detail: string; createdAt: string; action: "acknowledge" | "dismiss" | "note" | null; note: string | null };
+export type FinancialDatabaseEvidence = { status: "verified" | "unencrypted" | "unreachable"; tlsVersion: string | null; cipher: string | null; migrationVersions: Array<{ id: number; appliedAt: string }>; detail: string | null; checkedAt: string };
 
 const transferOrder = (sort: FinancialAdminFilters["sort"]) => sort === "updated_asc" ? "updated_at ASC" : sort === "created_desc" ? "created_at DESC" : sort === "created_asc" ? "created_at ASC" : "updated_at DESC";
 
@@ -59,6 +60,23 @@ export async function recordFinancialDependencyHealth(observation: FinancialHeal
 export async function listFinancialDependencyHealthHistory(): Promise<FinancialHealthObservation[]> {
   const result = await requirePool().query(`SELECT dependency, status, latency_ms, detail, observed_at FROM (SELECT dependency, status, latency_ms, detail, observed_at, ROW_NUMBER() OVER (PARTITION BY dependency ORDER BY observed_at DESC) AS sequence FROM financial_dependency_health_observations WHERE observed_at >= NOW() - INTERVAL '24 hours') observations WHERE sequence <= 60 ORDER BY dependency, observed_at ASC`);
   return result.rows.map((row) => ({ dependency: row.dependency, status: row.status, latencyMs: row.latency_ms === null ? null : Number(row.latency_ms), detail: row.detail ?? null, observedAt: new Date(row.observed_at).toISOString() }));
+}
+
+export async function getFinancialDatabaseEvidence(): Promise<FinancialDatabaseEvidence> {
+  const checkedAt = new Date().toISOString();
+  try {
+    const db = requirePool();
+    const [tls, migrations] = await Promise.all([
+      db.query(`SELECT ssl, version, cipher FROM pg_stat_ssl WHERE pid = pg_backend_pid()`),
+      db.query(`SELECT id, created_at FROM __drizzle_migrations ORDER BY created_at DESC LIMIT 20`).catch(() => ({ rows: [] })),
+    ]);
+    const connection = tls.rows[0];
+    const migrationVersions = migrations.rows.map((row) => ({ id: Number(row.id), appliedAt: new Date(Number(row.created_at)).toISOString() }));
+    if (!connection?.ssl) return { status: "unencrypted", tlsVersion: null, cipher: null, migrationVersions, detail: "The active PostgreSQL connection is not protected by TLS.", checkedAt };
+    return { status: "verified", tlsVersion: connection.version ?? null, cipher: connection.cipher ?? null, migrationVersions, detail: null, checkedAt };
+  } catch {
+    return { status: "unreachable", tlsVersion: null, cipher: null, migrationVersions: [], detail: "PostgreSQL TLS and migration evidence could not be retrieved.", checkedAt };
+  }
 }
 
 export async function recordFinancialAdminAlertAction(input: { alertId: string; action: "acknowledge" | "dismiss" | "note"; note: string | null; actorId: number }) {

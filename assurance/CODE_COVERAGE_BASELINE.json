@@ -1,0 +1,12 @@
+{
+  "collectedAt": "2026-08-21T12:26:23.487Z",
+  "testCount": 205,
+  "skippedCount": 30,
+  "lineCoverage": 12.92,
+  "branchCoverage": 57.44,
+  "functionCoverage": 28.3,
+  "statementCoverage": 12.92,
+  "goal": 100,
+  "scope": "all instrumented repository files",
+  "note": "Coverage is a measured baseline. Environment-gated topology tests and excluded generated assets must not be represented as covered."
+}
