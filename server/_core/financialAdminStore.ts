@@ -8,7 +8,7 @@ function requirePool() {
   if (!pool) {
     pool = new Pool({
       connectionString: ENV.databaseUrl,
-      ssl: ENV.isProduction && !ENV.databaseUrl.includes("sslmode=disable") ? { rejectUnauthorized: false } : false,
+      ssl: ENV.isProduction && !ENV.databaseUrl.includes("sslmode=disable") ? { rejectUnauthorized: true, ...(ENV.databaseSslCa ? { ca: ENV.databaseSslCa } : {}) } : false,
       max: 5,
       idleTimeoutMillis: 30_000,
       connectionTimeoutMillis: 5_000,
@@ -77,5 +77,5 @@ export async function getFinancialAdminAlerts(): Promise<FinancialAdminAlert[]> 
   return [
     ...reconciliations.rows.map((row) => applyAction({ id: `reconciliation-${row.id}`, severity: "critical", source: "reconciliation", title: "Reconciliation inconsistency", detail: `Transfer ${row.transfer_id} is recorded as ${row.transfer_state}.`, createdAt: new Date(row.created_at).toISOString() })),
     ...dependencies.rows.filter((row) => row.status !== "reachable").map((row) => applyAction({ id: `dependency-${row.dependency}`, severity: row.status === "unreachable" ? "critical" : "warning", source: "dependency", title: `${row.dependency} ${row.status}`, detail: row.detail || "Review the dependency health card and promotion contract before funds processing.", createdAt: new Date(row.observed_at).toISOString() })),
-  ].sort((left, right) => right.createdAt.localeCompare(left.createdAt)).slice(0, 100);
+  ].filter((alert) => alert.action !== "dismiss").sort((left, right) => right.createdAt.localeCompare(left.createdAt)).slice(0, 100);
 }

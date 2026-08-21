@@ -129,6 +129,11 @@ function parseInteger(value: string | undefined, fallback: number) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function getDatabaseSslCa() {
+  const configured = process.env.DATABASE_SSL_CA?.trim() ?? "";
+  return configured ? configured.replace(/\\n/g, "\n") : "";
+}
+
 function normalizeRequiredPublicOrigin() {
   const configured = normalizeOptionalUrl("PUBLIC_APP_ORIGIN");
   if (process.env.NODE_ENV === "production" && configured === "") {
@@ -151,6 +156,7 @@ export const ENV = {
   appId: getRequiredEnv("VITE_APP_ID", "switchos-operator-dashboard"),
   cookieSecret: getCookieSecret(),
   databaseUrl: getRequiredEnv("DATABASE_URL", "postgresql://ubuntu:ubuntu@127.0.0.1:5432/switchos"),
+  databaseSslCa: getDatabaseSslCa(),
   oAuthServerUrl: normalizeOAuthServerUrl(),
   ownerOpenId: process.env.OWNER_OPEN_ID ?? "switchos-owner",
   isProduction: process.env.NODE_ENV === "production",

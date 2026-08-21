@@ -59,4 +59,22 @@ describe("financial administration safeguards", () => {
     expect(page).toContain("Download CSV report");
     expect(page).toContain("No error detail recorded.");
   });
+
+  it("requires verified database TLS in production and excludes dismissed alerts from the active notification center", () => {
+    const env = readFileSync(resolve(root, "server/_core/env.ts"), "utf8");
+    const db = readFileSync(resolve(root, "server/db.ts"), "utf8");
+    const store = readFileSync(resolve(root, "server/_core/financialAdminStore.ts"), "utf8");
+    expect(env).toContain("DATABASE_SSL_CA");
+    expect(db).toContain("rejectUnauthorized: true");
+    expect(db).not.toContain("rejectUnauthorized: false");
+    expect(store).toContain('alert.action !== "dismiss"');
+  });
+
+  it("keeps legacy bootstrap DDL and sample data out of production database startup paths", () => {
+    const db = readFileSync(resolve(root, "server/db.ts"), "utf8");
+    expect(db).toContain("if (!ENV.isProduction)");
+    expect(db).toContain("Production schema and reference data must be applied only through reviewed migrations.");
+    expect(db).toContain("A missing period is an operational data condition");
+    expect(db).not.toContain("_platformTablesEnsured = false;\n  await ensurePlatformTables();");
+  });
 });

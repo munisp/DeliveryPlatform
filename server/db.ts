@@ -82,13 +82,17 @@ export async function getDb() {
       const useSsl = ENV.isProduction && !ENV.databaseUrl.includes("sslmode=disable");
       _pool = new Pool({
         connectionString: ENV.databaseUrl,
-        ssl: useSsl ? { rejectUnauthorized: false } : false,
+        ssl: useSsl ? { rejectUnauthorized: true, ...(ENV.databaseSslCa ? { ca: ENV.databaseSslCa } : {}) } : false,
         max: 20,
         idleTimeoutMillis: 30000,
         connectionTimeoutMillis: 5000,
       });
       _db = drizzle(_pool);
-      await ensurePlatformTables();
+      // Production schema and reference data must be applied only through reviewed migrations.
+      // Runtime bootstrap remains development-only until its legacy data is fully migrated.
+      if (!ENV.isProduction) {
+        await ensurePlatformTables();
+      }
     } catch (error) {
       console.warn("[Database] Failed to connect:", error);
       _db = null;
@@ -4775,22 +4779,8 @@ export async function getCurrentLeaderboardPeriod() {
     };
   }
 
-  _platformTablesEnsured = false;
-  await ensurePlatformTables();
-
-  const retry = await _pool.query<any>(
-    `SELECT * FROM referral_leaderboard_periods 
-     WHERE is_active = true 
-     ORDER BY period_start DESC 
-     LIMIT 1`
-  );
-
-  return retry.rows[0]
-    ? {
-        ...retry.rows[0],
-        status: 'active',
-      }
-    : null;
+  // A missing period is an operational data condition, not permission to seed live data.
+  return null;
 }
 
 export async function updateLeaderboardEntry(userId: number, periodId?: number) {
