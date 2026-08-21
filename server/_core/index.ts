@@ -56,6 +56,7 @@ import {
 import { authenticateOperator, createOperatorSecuritySession, ensureExternalOperator, ensureOperatorAuthStore, isOperatorSecuritySessionActive, listOperatorSecurityLoginActivity, listOperatorSecuritySessions, revokeOperatorSecuritySession, revokeOtherOperatorSecuritySessions } from "./operatorAuthStore";
 import { recordOperationalEvent } from "./operationalEvents";
 import { consumeRateLimit, getRateLimiterStatus } from "./rateLimiter";
+import { getFinancialAdminSnapshot } from "../db";
 import type { SessionUser } from "./trpc";
 
 const OIDC_STATE_COOKIE = "switchos_oidc_state";
@@ -564,6 +565,96 @@ function requireAuthenticatedOperator(req: express.Request, res: express.Respons
   }
   return user;
 }
+
+function requireFinancialAdministrator(req: express.Request, res: express.Response): SessionUser | null {
+  const user = requireAuthenticatedOperator(req, res);
+  if (!user) return null;
+  if (!user.mfaAuthenticated) {
+    res.status(403).json({ error: "mfa_required_for_privileged_action" });
+    return null;
+  }
+  if (!new Set(["admin", "platform_admin", "super_admin"]).has(`${user.role ?? ""}`.toLowerCase())) {
+    res.status(403).json({ error: "financial_admin_required" });
+    return null;
+  }
+  return user;
+}
+
+async function dependencyHealth(name: string, baseUrl: string | undefined) {
+  const checkedAt = new Date().toISOString();
+  if (!baseUrl) return { name, status: "unconfigured" as const, checkedAt, latencyMs: null };
+  const startedAt = Date.now();
+  try {
+    const response = await fetch(`${baseUrl.replace(/\/$/, "")}/health`, { signal: AbortSignal.timeout(2_000) });
+    return { name, status: response.ok ? "reachable" as const : "unhealthy" as const, checkedAt, latencyMs: Date.now() - startedAt };
+  } catch {
+    return { name, status: "unreachable" as const, checkedAt, latencyMs: Date.now() - startedAt };
+  }
+}
+
+const permittedFinancialSimulationScenarios = new Set(["database-partition", "broker-failure", "temporal-recovery"]);
+function financialSimulationConfiguration() {
+  const executorUrl = `${process.env.FINANCIAL_SIMULATION_EXECUTOR_URL ?? ""}`.trim();
+  const token = `${process.env.FINANCIAL_SIMULATION_EXECUTOR_TOKEN ?? ""}`.trim();
+  const enabled = !ENV.isProduction && process.env.FINANCIAL_SIMULATION_MODE === "isolated" && Boolean(executorUrl && token);
+  return { enabled, executorUrl, token };
+}
+
+app.get("/api/admin/finance/overview", rateLimit(30), async (req, res) => {
+  const user = requireFinancialAdministrator(req, res);
+  if (!user) return;
+  try {
+    const snapshot = await getFinancialAdminSnapshot();
+    res.status(200).json({ ...snapshot, immutableIdentityEnforced: true, retrievedAt: new Date().toISOString() });
+  } catch (error) {
+    console.error("[SwitchOS] Unable to load financial administration snapshot", error);
+    res.status(503).json({ error: "financial_admin_data_unavailable" });
+  }
+});
+
+app.get("/api/admin/finance/health", rateLimit(30), async (req, res) => {
+  const user = requireFinancialAdministrator(req, res);
+  if (!user) return;
+  const temporalBridgeUrl = `${process.env.TEMPORAL_BRIDGE_URL ?? ""}`.trim() || undefined;
+  const dependencies = await Promise.all([
+    dependencyHealth("TigerBeetle adapter", ENV.tigerbeetleServiceUrl),
+    dependencyHealth("Temporal bridge", temporalBridgeUrl),
+  ]);
+  res.status(200).json({ dependencies, retrievedAt: new Date().toISOString() });
+});
+
+app.get("/api/admin/finance/simulations", rateLimit(30), (req, res) => {
+  const user = requireFinancialAdministrator(req, res);
+  if (!user) return;
+  const configuration = financialSimulationConfiguration();
+  res.status(200).json({ enabled: configuration.enabled, scenarios: [...permittedFinancialSimulationScenarios], productionBlocked: ENV.isProduction });
+});
+
+app.post("/api/admin/finance/simulations/:scenario", rateLimit(3), async (req, res) => {
+  const user = requireFinancialAdministrator(req, res);
+  if (!user) return;
+  const scenario = `${req.params.scenario ?? ""}`.trim();
+  if (!permittedFinancialSimulationScenarios.has(scenario)) {
+    res.status(400).json({ error: "unsupported_financial_simulation" });
+    return;
+  }
+  const configuration = financialSimulationConfiguration();
+  if (!configuration.enabled) {
+    res.status(409).json({ error: "financial_simulation_unavailable", detail: "Only an explicitly configured isolated non-production executor can run scenarios." });
+    return;
+  }
+  try {
+    const response = await fetch(`${configuration.executorUrl.replace(/\/$/, "")}/scenarios/${scenario}`, {
+      method: "POST", headers: { "X-Internal-Service-Token": configuration.token }, signal: AbortSignal.timeout(10_000),
+    });
+    if (!response.ok) throw new Error(`executor returned ${response.status}`);
+    await recordOperationalEvent({ eventType: "finance.simulation.requested", actorId: `${user.id}`, actorRole: user.role ?? null, tenantId: user.tenantId ?? null, route: req.path, outcome: "success", payload: { scenario } });
+    res.status(202).json({ scenario, status: "submitted" });
+  } catch (error) {
+    console.error("[SwitchOS] Financial simulation executor unavailable", error);
+    res.status(503).json({ error: "financial_simulation_executor_unavailable" });
+  }
+});
 
 app.get("/api/auth/security", async (req, res) => {
   const user = requireAuthenticatedOperator(req, res);

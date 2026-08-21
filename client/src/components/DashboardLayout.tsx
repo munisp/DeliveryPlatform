@@ -5,6 +5,7 @@ import {
   BarChart3,
   CarFront,
   LayoutDashboard,
+  Landmark,
   PackageCheck,
   Menu,
   PhoneCall,
@@ -25,6 +26,7 @@ const menuItems = [
   { icon: PhoneCall, label: "Phone Ordering", path: "/phone-ordering-studio" },
   { icon: ShieldCheck, label: "Service Recovery", path: "/service-recovery" },
   { icon: ShieldCheck, label: "Security Settings", path: "/profile/security" },
+  { icon: Landmark, label: "Financial Administration", path: "/admin/finance" },
 ];
 
 function cn(...parts: Array<string | false | null | undefined>) {

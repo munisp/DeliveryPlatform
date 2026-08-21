@@ -29,6 +29,52 @@ export class DatabaseUnavailableError extends Error {
   }
 }
 
+export type FinancialAdminSnapshot = {
+  immutableTransfers: Array<{
+    transferId: string;
+    payerFsp: string;
+    payeeFsp: string;
+    amountMinor: string;
+    currency: string;
+    state: string;
+    createdAt: string;
+    updatedAt: string;
+  }>;
+  inconsistentReconciliations: Array<{
+    id: string;
+    transferId: string;
+    transferState: string;
+    platformRefundedMinor: string;
+    platformNetSettledMinor: string;
+    createdAt: string;
+  }>;
+};
+
+export async function getFinancialAdminSnapshot(): Promise<FinancialAdminSnapshot> {
+  await getDb();
+  if (!_pool) throw new DatabaseUnavailableError("financial_admin_snapshot");
+
+  const [transferResult, reconciliationResult] = await Promise.all([
+    _pool.query(`SELECT transfer_id, payer_fsp, payee_fsp, amount_minor, currency, state, created_at, updated_at
+      FROM mojaloop_transfers ORDER BY updated_at DESC LIMIT 100`),
+    _pool.query(`SELECT id, transfer_id, transfer_state, platform_refunded_minor, platform_net_settled_minor, created_at
+      FROM mojaloop_reconciliation_audits WHERE ledger_consistent = FALSE ORDER BY created_at DESC LIMIT 100`),
+  ]);
+
+  return {
+    immutableTransfers: transferResult.rows.map((row) => ({
+      transferId: String(row.transfer_id), payerFsp: String(row.payer_fsp), payeeFsp: String(row.payee_fsp),
+      amountMinor: String(row.amount_minor), currency: String(row.currency), state: String(row.state),
+      createdAt: new Date(row.created_at).toISOString(), updatedAt: new Date(row.updated_at).toISOString(),
+    })),
+    inconsistentReconciliations: reconciliationResult.rows.map((row) => ({
+      id: String(row.id), transferId: String(row.transfer_id), transferState: String(row.transfer_state),
+      platformRefundedMinor: String(row.platform_refunded_minor), platformNetSettledMinor: String(row.platform_net_settled_minor),
+      createdAt: new Date(row.created_at).toISOString(),
+    })),
+  };
+}
+
 // Lazily create the drizzle instance so local tooling can run without a DB.
 export async function getDb() {
   if (!_db && ENV.databaseUrl) {
