@@ -44,4 +44,19 @@ describe("financial administration safeguards", () => {
     expect(page).toContain("TigerBeetle adapter uptime");
     expect(page).toContain("Find immutable financial records");
   });
+
+  it("records allowed alert actions, preserves downtime details, and exports only the active bounded report scope", () => {
+    const server = readFileSync(resolve(root, "server/_core/index.ts"), "utf8");
+    const store = readFileSync(resolve(root, "server/_core/financialAdminStore.ts"), "utf8");
+    const page = readFileSync(resolve(root, "client/src/pages/FinancialAdministration.tsx"), "utf8");
+    const migration = readFileSync(resolve(root, "drizzle/0020_financial_alert_actions_and_health_details.sql"), "utf8");
+    expect(server).toContain('app.post("/api/admin/finance/alerts/:id/actions"');
+    expect(server).toContain('app.get("/api/admin/finance/report.csv"');
+    expect(server).toContain("invalid_financial_alert_action");
+    expect(store).toContain("financial_admin_alert_actions");
+    expect(migration).toContain("detail TEXT");
+    expect(page).toContain("Alert workflow");
+    expect(page).toContain("Download CSV report");
+    expect(page).toContain("No error detail recorded.");
+  });
 });

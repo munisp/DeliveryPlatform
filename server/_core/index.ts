@@ -56,7 +56,7 @@ import {
 import { authenticateOperator, createOperatorSecuritySession, ensureExternalOperator, ensureOperatorAuthStore, isOperatorSecuritySessionActive, listOperatorSecurityLoginActivity, listOperatorSecuritySessions, revokeOperatorSecuritySession, revokeOtherOperatorSecuritySessions } from "./operatorAuthStore";
 import { recordOperationalEvent } from "./operationalEvents";
 import { consumeRateLimit, getRateLimiterStatus } from "./rateLimiter";
-import { getFilteredFinancialAdminSnapshot, getFinancialAdminAlerts, listFinancialDependencyHealthHistory, recordFinancialDependencyHealth } from "./financialAdminStore";
+import { getFilteredFinancialAdminSnapshot, getFinancialAdminAlerts, listFinancialDependencyHealthHistory, recordFinancialAdminAlertAction, recordFinancialDependencyHealth } from "./financialAdminStore";
 import type { SessionUser } from "./trpc";
 
 const OIDC_STATE_COOKIE = "switchos_oidc_state";
@@ -582,13 +582,14 @@ function requireFinancialAdministrator(req: express.Request, res: express.Respon
 
 async function dependencyHealth(name: string, baseUrl: string | undefined) {
   const checkedAt = new Date().toISOString();
-  if (!baseUrl) return { name, status: "unconfigured" as const, checkedAt, latencyMs: null };
+  if (!baseUrl) return { name, status: "unconfigured" as const, checkedAt, latencyMs: null, detail: "No health endpoint is configured for this dependency." };
   const startedAt = Date.now();
   try {
     const response = await fetch(`${baseUrl.replace(/\/$/, "")}/health`, { signal: AbortSignal.timeout(2_000) });
-    return { name, status: response.ok ? "reachable" as const : "unhealthy" as const, checkedAt, latencyMs: Date.now() - startedAt };
-  } catch {
-    return { name, status: "unreachable" as const, checkedAt, latencyMs: Date.now() - startedAt };
+    return { name, status: response.ok ? "reachable" as const : "unhealthy" as const, checkedAt, latencyMs: Date.now() - startedAt, detail: response.ok ? null : `Health endpoint returned HTTP ${response.status}.` };
+  } catch (error) {
+    const detail = error instanceof Error && error.name === "TimeoutError" ? "Health request exceeded the two-second timeout." : "Health endpoint could not be reached over the configured connection.";
+    return { name, status: "unreachable" as const, checkedAt, latencyMs: Date.now() - startedAt, detail };
   }
 }
 
@@ -645,8 +646,8 @@ app.get("/api/admin/finance/health", rateLimit(30), async (req, res) => {
   ]);
   try {
     await Promise.all([
-      recordFinancialDependencyHealth({ dependency: "tigerbeetle", status: dependencies[0].status, latencyMs: dependencies[0].latencyMs, observedAt: dependencies[0].checkedAt }),
-      recordFinancialDependencyHealth({ dependency: "temporal", status: dependencies[1].status, latencyMs: dependencies[1].latencyMs, observedAt: dependencies[1].checkedAt }),
+      recordFinancialDependencyHealth({ dependency: "tigerbeetle", status: dependencies[0].status, latencyMs: dependencies[0].latencyMs, detail: dependencies[0].detail, observedAt: dependencies[0].checkedAt }),
+      recordFinancialDependencyHealth({ dependency: "temporal", status: dependencies[1].status, latencyMs: dependencies[1].latencyMs, detail: dependencies[1].detail, observedAt: dependencies[1].checkedAt }),
     ]);
     res.status(200).json({ dependencies, history: await listFinancialDependencyHealthHistory(), retrievedAt: new Date().toISOString() });
   } catch (error) {
@@ -663,6 +664,55 @@ app.get("/api/admin/finance/alerts", rateLimit(30), async (req, res) => {
   } catch (error) {
     console.error("[SwitchOS] Unable to load financial administration alerts", error);
     res.status(503).json({ error: "financial_admin_alerts_unavailable" });
+  }
+});
+
+app.post("/api/admin/finance/alerts/:id/actions", rateLimit(10), async (req, res) => {
+  const user = requireFinancialAdministrator(req, res);
+  if (!user) return;
+  const alertId = `${req.params.id ?? ""}`.trim();
+  const action = `${req.body?.action ?? ""}`.trim();
+  const note = `${req.body?.note ?? ""}`.trim();
+  if (!/^(reconciliation-\d+|dependency-(tigerbeetle|temporal))$/.test(alertId) || !["acknowledge", "dismiss", "note"].includes(action) || note.length > 500 || (action === "note" && !note)) {
+    res.status(400).json({ error: "invalid_financial_alert_action" });
+    return;
+  }
+  try {
+    await recordFinancialAdminAlertAction({ alertId, action: action as "acknowledge" | "dismiss" | "note", note: note || null, actorId: Number(user.id) });
+    await recordOperationalEvent({ eventType: "finance.alert.action", actorId: `${user.id}`, actorRole: user.role ?? null, tenantId: user.tenantId ?? null, route: req.path, outcome: "success", payload: { alertId, action } });
+    res.status(200).json({ ok: true });
+  } catch (error) {
+    console.error("[SwitchOS] Unable to persist financial alert action", error);
+    res.status(503).json({ error: "financial_alert_action_unavailable" });
+  }
+});
+
+function financialCsvCell(value: string | number | null | undefined) {
+  const normalized = `${value ?? ""}`.replace(/\r?\n/g, " ");
+  const formulaSafe = /^[=+\-@]/.test(normalized) ? `'${normalized}` : normalized;
+  return `"${formulaSafe.replace(/"/g, '""')}"`;
+}
+
+app.get("/api/admin/finance/report.csv", rateLimit(10), async (req, res) => {
+  const user = requireFinancialAdministrator(req, res);
+  if (!user) return;
+  try {
+    const sort = `${req.query.sort ?? "updated_desc"}`;
+    if (!new Set(["updated_desc", "updated_asc", "created_desc", "created_asc"]).has(sort)) throw new Error("invalid_financial_admin_sort");
+    const snapshot = await getFilteredFinancialAdminSnapshot({ query: `${req.query.query ?? ""}`, startDate: financialAdminDate(req.query.startDate), endDate: financialAdminDate(req.query.endDate, true), sort: sort as "updated_desc" | "updated_asc" | "created_desc" | "created_asc" });
+    const rows = [
+      ["record_type", "record_id", "payer_fsp", "payee_fsp", "amount_minor", "currency", "state", "refunded_minor", "net_settled_minor", "recorded_at"].map(financialCsvCell).join(","),
+      ...snapshot.immutableTransfers.map((item) => ["transfer", item.transferId, item.payerFsp, item.payeeFsp, item.amountMinor, item.currency, item.state, "", "", item.updatedAt].map(financialCsvCell).join(",")),
+      ...snapshot.inconsistentReconciliations.map((item) => ["reconciliation", item.transferId, "", "", "", "", item.transferState, item.platformRefundedMinor, item.platformNetSettledMinor, item.createdAt].map(financialCsvCell).join(",")),
+    ];
+    await recordOperationalEvent({ eventType: "finance.report.exported", actorId: `${user.id}`, actorRole: user.role ?? null, tenantId: user.tenantId ?? null, route: req.path, outcome: "success", payload: { rowCount: rows.length - 1 } });
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", 'attachment; filename="financial-administration-report.csv"');
+    res.setHeader("X-Exported-Row-Count", `${rows.length - 1}`);
+    res.status(200).send(rows.join("\n"));
+  } catch (error) {
+    const code = error instanceof Error && ["invalid_financial_admin_date", "invalid_financial_admin_sort"].includes(error.message) ? error.message : "financial_report_export_unavailable";
+    res.status(code.startsWith("invalid_") ? 400 : 503).json({ error: code });
   }
 });
 

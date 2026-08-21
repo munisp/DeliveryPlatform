@@ -18,8 +18,8 @@ function requirePool() {
 }
 
 export type FinancialAdminFilters = { query?: string; startDate?: Date; endDate?: Date; sort?: "updated_desc" | "updated_asc" | "created_desc" | "created_asc" };
-export type FinancialHealthObservation = { dependency: "tigerbeetle" | "temporal"; status: "reachable" | "unhealthy" | "unreachable" | "unconfigured"; latencyMs: number | null; observedAt: string };
-export type FinancialAdminAlert = { id: string; severity: "warning" | "critical"; source: "reconciliation" | "dependency"; title: string; detail: string; createdAt: string };
+export type FinancialHealthObservation = { dependency: "tigerbeetle" | "temporal"; status: "reachable" | "unhealthy" | "unreachable" | "unconfigured"; latencyMs: number | null; detail: string | null; observedAt: string };
+export type FinancialAdminAlert = { id: string; severity: "warning" | "critical"; source: "reconciliation" | "dependency"; title: string; detail: string; createdAt: string; action: "acknowledge" | "dismiss" | "note" | null; note: string | null };
 
 const transferOrder = (sort: FinancialAdminFilters["sort"]) => sort === "updated_asc" ? "updated_at ASC" : sort === "created_desc" ? "created_at DESC" : sort === "created_asc" ? "created_at ASC" : "updated_at DESC";
 
@@ -53,22 +53,29 @@ export async function getFilteredFinancialAdminSnapshot(filters: FinancialAdminF
 }
 
 export async function recordFinancialDependencyHealth(observation: FinancialHealthObservation) {
-  await requirePool().query(`INSERT INTO financial_dependency_health_observations (dependency, status, latency_ms, observed_at) VALUES ($1, $2, $3, $4)`, [observation.dependency, observation.status, observation.latencyMs, observation.observedAt]);
+  await requirePool().query(`INSERT INTO financial_dependency_health_observations (dependency, status, latency_ms, detail, observed_at) VALUES ($1, $2, $3, $4, $5)`, [observation.dependency, observation.status, observation.latencyMs, observation.detail, observation.observedAt]);
 }
 
 export async function listFinancialDependencyHealthHistory(): Promise<FinancialHealthObservation[]> {
-  const result = await requirePool().query(`SELECT dependency, status, latency_ms, observed_at FROM (SELECT dependency, status, latency_ms, observed_at, ROW_NUMBER() OVER (PARTITION BY dependency ORDER BY observed_at DESC) AS sequence FROM financial_dependency_health_observations WHERE observed_at >= NOW() - INTERVAL '24 hours') observations WHERE sequence <= 60 ORDER BY dependency, observed_at ASC`);
-  return result.rows.map((row) => ({ dependency: row.dependency, status: row.status, latencyMs: row.latency_ms === null ? null : Number(row.latency_ms), observedAt: new Date(row.observed_at).toISOString() }));
+  const result = await requirePool().query(`SELECT dependency, status, latency_ms, detail, observed_at FROM (SELECT dependency, status, latency_ms, detail, observed_at, ROW_NUMBER() OVER (PARTITION BY dependency ORDER BY observed_at DESC) AS sequence FROM financial_dependency_health_observations WHERE observed_at >= NOW() - INTERVAL '24 hours') observations WHERE sequence <= 60 ORDER BY dependency, observed_at ASC`);
+  return result.rows.map((row) => ({ dependency: row.dependency, status: row.status, latencyMs: row.latency_ms === null ? null : Number(row.latency_ms), detail: row.detail ?? null, observedAt: new Date(row.observed_at).toISOString() }));
+}
+
+export async function recordFinancialAdminAlertAction(input: { alertId: string; action: "acknowledge" | "dismiss" | "note"; note: string | null; actorId: number }) {
+  await requirePool().query(`INSERT INTO financial_admin_alert_actions (alert_id, action, note, actor_id) VALUES ($1, $2, $3, $4)`, [input.alertId, input.action, input.note, input.actorId]);
 }
 
 export async function getFinancialAdminAlerts(): Promise<FinancialAdminAlert[]> {
   const db = requirePool();
-  const [reconciliations, dependencies] = await Promise.all([
+  const [reconciliations, dependencies, actionRows] = await Promise.all([
     db.query(`SELECT id, transfer_id, transfer_state, created_at FROM mojaloop_reconciliation_audits WHERE ledger_consistent = FALSE ORDER BY created_at DESC LIMIT 50`),
-    db.query(`SELECT DISTINCT ON (dependency) dependency, status, observed_at FROM financial_dependency_health_observations ORDER BY dependency, observed_at DESC`),
+    db.query(`SELECT DISTINCT ON (dependency) dependency, status, detail, observed_at FROM financial_dependency_health_observations ORDER BY dependency, observed_at DESC`),
+    db.query(`SELECT DISTINCT ON (alert_id) alert_id, action, note FROM financial_admin_alert_actions ORDER BY alert_id, created_at DESC`),
   ]);
+  const actions = new Map(actionRows.rows.map((row) => [String(row.alert_id), { action: row.action as FinancialAdminAlert["action"], note: row.note ?? null }]));
+  const applyAction = (alert: Omit<FinancialAdminAlert, "action" | "note">): FinancialAdminAlert => ({ ...alert, ...(actions.get(alert.id) ?? { action: null, note: null }) });
   return [
-    ...reconciliations.rows.map((row) => ({ id: `reconciliation-${row.id}`, severity: "critical" as const, source: "reconciliation" as const, title: "Reconciliation inconsistency", detail: `Transfer ${row.transfer_id} is recorded as ${row.transfer_state}.`, createdAt: new Date(row.created_at).toISOString() })),
-    ...dependencies.rows.filter((row) => row.status !== "reachable").map((row) => ({ id: `dependency-${row.dependency}-${new Date(row.observed_at).getTime()}`, severity: row.status === "unreachable" ? "critical" as const : "warning" as const, source: "dependency" as const, title: `${row.dependency} ${row.status}`, detail: "Review the dependency health card and promotion contract before funds processing.", createdAt: new Date(row.observed_at).toISOString() })),
+    ...reconciliations.rows.map((row) => applyAction({ id: `reconciliation-${row.id}`, severity: "critical", source: "reconciliation", title: "Reconciliation inconsistency", detail: `Transfer ${row.transfer_id} is recorded as ${row.transfer_state}.`, createdAt: new Date(row.created_at).toISOString() })),
+    ...dependencies.rows.filter((row) => row.status !== "reachable").map((row) => applyAction({ id: `dependency-${row.dependency}`, severity: row.status === "unreachable" ? "critical" : "warning", source: "dependency", title: `${row.dependency} ${row.status}`, detail: row.detail || "Review the dependency health card and promotion contract before funds processing.", createdAt: new Date(row.observed_at).toISOString() })),
   ].sort((left, right) => right.createdAt.localeCompare(left.createdAt)).slice(0, 100);
 }
