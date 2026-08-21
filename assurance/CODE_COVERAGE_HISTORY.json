@@ -1,0 +1,13 @@
+{
+  "history": [
+    {
+      "collectedAt": "2026-08-21T12:26:23.487Z",
+      "lineCoverage": 12.92,
+      "branchCoverage": 57.44,
+      "functionCoverage": 28.3,
+      "testCount": 205,
+      "source": "vitest-v8 full suite"
+    }
+  ],
+  "note": "New entries must be produced by the locked coverage command; no trend point may be manually estimated."
+}

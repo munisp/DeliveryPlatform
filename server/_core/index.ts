@@ -58,6 +58,8 @@ import { recordOperationalEvent } from "./operationalEvents";
 import { consumeRateLimit, getRateLimiterStatus } from "./rateLimiter";
 import { getFilteredFinancialAdminSnapshot, getFinancialAdminAlerts, getFinancialDatabaseEvidence, listFinancialDependencyHealthHistory, recordFinancialAdminAlertAction, recordFinancialDependencyHealth } from "./financialAdminStore";
 import coverageBaseline from "../../assurance/CODE_COVERAGE_BASELINE.json";
+import coverageHistory from "../../assurance/CODE_COVERAGE_HISTORY.json";
+import playwrightExecutions from "../../assurance/PLAYWRIGHT_EXECUTION_HISTORY.json";
 import type { SessionUser } from "./trpc";
 
 const OIDC_STATE_COOKIE = "switchos_oidc_state";
@@ -660,7 +662,7 @@ app.get("/api/admin/finance/health", rateLimit(30), async (req, res) => {
 app.get("/api/admin/quality/coverage", rateLimit(30), (req, res) => {
   const user = requireFinancialAdministrator(req, res);
   if (!user) return;
-  res.status(200).json({ ...coverageBaseline, retrievedAt: new Date().toISOString() });
+  res.status(200).json({ ...coverageBaseline, history: coverageHistory.history, executionLog: playwrightExecutions.executions, retrievedAt: new Date().toISOString() });
 });
 
 app.get("/api/admin/finance/alerts", rateLimit(30), async (req, res) => {

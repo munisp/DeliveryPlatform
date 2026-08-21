@@ -20,7 +20,7 @@ function requirePool() {
 export type FinancialAdminFilters = { query?: string; startDate?: Date; endDate?: Date; sort?: "updated_desc" | "updated_asc" | "created_desc" | "created_asc" };
 export type FinancialHealthObservation = { dependency: "tigerbeetle" | "temporal"; status: "reachable" | "unhealthy" | "unreachable" | "unconfigured"; latencyMs: number | null; detail: string | null; observedAt: string };
 export type FinancialAdminAlert = { id: string; severity: "warning" | "critical"; source: "reconciliation" | "dependency"; title: string; detail: string; createdAt: string; action: "acknowledge" | "dismiss" | "note" | null; note: string | null };
-export type FinancialDatabaseEvidence = { status: "verified" | "unencrypted" | "unreachable"; tlsVersion: string | null; cipher: string | null; migrationVersions: Array<{ id: number; appliedAt: string }>; detail: string | null; checkedAt: string };
+export type FinancialDatabaseEvidence = { status: "verified" | "unencrypted" | "unreachable"; tlsVersion: string | null; cipher: string | null; certificateExpiresAt: string | null; certificateStatus: "fresh" | "expiring" | "expired" | "unavailable"; migrationVersions: Array<{ id: number; appliedAt: string }>; migrationStatus: "fresh" | "aging" | "unavailable"; latestMigrationAgeDays: number | null; detail: string | null; checkedAt: string };
 
 const transferOrder = (sort: FinancialAdminFilters["sort"]) => sort === "updated_asc" ? "updated_at ASC" : sort === "created_desc" ? "created_at DESC" : sort === "created_asc" ? "created_at ASC" : "updated_at DESC";
 
@@ -72,10 +72,16 @@ export async function getFinancialDatabaseEvidence(): Promise<FinancialDatabaseE
     ]);
     const connection = tls.rows[0];
     const migrationVersions = migrations.rows.map((row) => ({ id: Number(row.id), appliedAt: new Date(Number(row.created_at)).toISOString() }));
-    if (!connection?.ssl) return { status: "unencrypted", tlsVersion: null, cipher: null, migrationVersions, detail: "The active PostgreSQL connection is not protected by TLS.", checkedAt };
-    return { status: "verified", tlsVersion: connection.version ?? null, cipher: connection.cipher ?? null, migrationVersions, detail: null, checkedAt };
+    const latestMigrationAgeDays = migrationVersions[0] ? Math.floor((Date.now() - new Date(migrationVersions[0].appliedAt).getTime()) / 86_400_000) : null;
+    const migrationStatus = latestMigrationAgeDays === null ? "unavailable" : latestMigrationAgeDays > 90 ? "aging" : "fresh";
+    const configuredExpiry = `${process.env.DATABASE_TLS_CERT_EXPIRES_AT ?? ""}`.trim();
+    const expiryDate = configuredExpiry && !Number.isNaN(new Date(configuredExpiry).getTime()) ? new Date(configuredExpiry) : null;
+    const certificateStatus = !expiryDate ? "unavailable" : expiryDate.getTime() <= Date.now() ? "expired" : expiryDate.getTime() - Date.now() <= 30 * 86_400_000 ? "expiring" : "fresh";
+    const certificateExpiresAt = expiryDate?.toISOString() ?? null;
+    if (!connection?.ssl) return { status: "unencrypted", tlsVersion: null, cipher: null, certificateExpiresAt, certificateStatus, migrationVersions, migrationStatus, latestMigrationAgeDays, detail: "The active PostgreSQL connection is not protected by TLS.", checkedAt };
+    return { status: "verified", tlsVersion: connection.version ?? null, cipher: connection.cipher ?? null, certificateExpiresAt, certificateStatus, migrationVersions, migrationStatus, latestMigrationAgeDays, detail: null, checkedAt };
   } catch {
-    return { status: "unreachable", tlsVersion: null, cipher: null, migrationVersions: [], detail: "PostgreSQL TLS and migration evidence could not be retrieved.", checkedAt };
+    return { status: "unreachable", tlsVersion: null, cipher: null, certificateExpiresAt: null, certificateStatus: "unavailable", migrationVersions: [], migrationStatus: "unavailable", latestMigrationAgeDays: null, detail: "PostgreSQL TLS and migration evidence could not be retrieved.", checkedAt };
   }
 }
 

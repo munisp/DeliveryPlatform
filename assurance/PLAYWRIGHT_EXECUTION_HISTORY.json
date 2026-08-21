@@ -1,0 +1,13 @@
+{
+  "executions": [
+    {
+      "recordedAt": "2026-08-21T13:41:48.000Z",
+      "workflow": "administrator security and financial workflows",
+      "status": "not_run",
+      "level": "warning",
+      "detail": "Two browser workflows were discovered. Execution is environment-gated pending E2E_BASE_URL and a short-lived MFA-assured E2E_SESSION_COOKIE.",
+      "testCount": 2
+    }
+  ],
+  "note": "Only runner-produced outcomes may be added to this log."
+}

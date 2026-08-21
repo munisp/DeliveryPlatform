@@ -86,7 +86,12 @@ describe("financial administration safeguards", () => {
     expect(index).toContain("getFinancialDatabaseEvidence");
     expect(store).toContain("pg_stat_ssl");
     expect(store).toContain("__drizzle_migrations");
+    expect(store).toContain("DATABASE_TLS_CERT_EXPIRES_AT");
+    expect(store).toContain("migrationStatus");
     expect(page).toContain("Testing and coverage");
     expect(page).toContain("PostgreSQL TLS");
+    expect(page).toContain("TLS certificate");
+    expect(page).toContain("Coverage history trend");
+    expect(page).toContain("Playwright execution log");
   });
 });
