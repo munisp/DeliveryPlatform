@@ -91,15 +91,18 @@ export async function recordFinancialAdminAlertAction(input: { alertId: string; 
 
 export async function getFinancialAdminAlerts(): Promise<FinancialAdminAlert[]> {
   const db = requirePool();
-  const [reconciliations, dependencies, actionRows] = await Promise.all([
+  const [reconciliations, dependencies, actionRows, database] = await Promise.all([
     db.query(`SELECT id, transfer_id, transfer_state, created_at FROM mojaloop_reconciliation_audits WHERE ledger_consistent = FALSE ORDER BY created_at DESC LIMIT 50`),
     db.query(`SELECT DISTINCT ON (dependency) dependency, status, detail, observed_at FROM financial_dependency_health_observations ORDER BY dependency, observed_at DESC`),
     db.query(`SELECT DISTINCT ON (alert_id) alert_id, action, note FROM financial_admin_alert_actions ORDER BY alert_id, created_at DESC`),
+    getFinancialDatabaseEvidence(),
   ]);
   const actions = new Map(actionRows.rows.map((row) => [String(row.alert_id), { action: row.action as FinancialAdminAlert["action"], note: row.note ?? null }]));
   const applyAction = (alert: Omit<FinancialAdminAlert, "action" | "note">): FinancialAdminAlert => ({ ...alert, ...(actions.get(alert.id) ?? { action: null, note: null }) });
   return [
     ...reconciliations.rows.map((row) => applyAction({ id: `reconciliation-${row.id}`, severity: "critical", source: "reconciliation", title: "Reconciliation inconsistency", detail: `Transfer ${row.transfer_id} is recorded as ${row.transfer_state}.`, createdAt: new Date(row.created_at).toISOString() })),
     ...dependencies.rows.filter((row) => row.status !== "reachable").map((row) => applyAction({ id: `dependency-${row.dependency}`, severity: row.status === "unreachable" ? "critical" : "warning", source: "dependency", title: `${row.dependency} ${row.status}`, detail: row.detail || "Review the dependency health card and promotion contract before funds processing.", createdAt: new Date(row.observed_at).toISOString() })),
+    ...(database.certificateStatus === "fresh" ? [] : [applyAction({ id: "database-tls", severity: database.certificateStatus === "expired" ? "critical" : "warning", source: "dependency", title: `PostgreSQL TLS certificate ${database.certificateStatus}`, detail: database.certificateExpiresAt ? `Certificate evidence expires ${database.certificateExpiresAt}.` : "Certificate expiry evidence is unavailable; set DATABASE_TLS_CERT_EXPIRES_AT.", createdAt: database.checkedAt })]),
+    ...(database.migrationStatus === "aging" ? [applyAction({ id: "migration-age", severity: "warning", source: "dependency", title: "Database migration evidence is aging", detail: `Latest recorded migration is ${database.latestMigrationAgeDays} days old.`, createdAt: database.checkedAt })] : []),
   ].filter((alert) => alert.action !== "dismiss").sort((left, right) => right.createdAt.localeCompare(left.createdAt)).slice(0, 100);
 }

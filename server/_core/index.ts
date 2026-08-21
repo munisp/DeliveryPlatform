@@ -682,7 +682,7 @@ app.post("/api/admin/finance/alerts/:id/actions", rateLimit(10), async (req, res
   const alertId = `${req.params.id ?? ""}`.trim();
   const action = `${req.body?.action ?? ""}`.trim();
   const note = `${req.body?.note ?? ""}`.trim();
-  if (!/^(reconciliation-\d+|dependency-(tigerbeetle|temporal))$/.test(alertId) || !["acknowledge", "dismiss", "note"].includes(action) || note.length > 500 || (action === "note" && !note)) {
+  if (!/^(reconciliation-\d+|dependency-(tigerbeetle|temporal)|database-tls|migration-age)$/.test(alertId) || !["acknowledge", "dismiss", "note"].includes(action) || note.length > 500 || (action === "note" && !note)) {
     res.status(400).json({ error: "invalid_financial_alert_action" });
     return;
   }

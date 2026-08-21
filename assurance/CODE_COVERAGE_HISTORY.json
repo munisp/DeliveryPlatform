@@ -6,7 +6,12 @@
       "branchCoverage": 57.44,
       "functionCoverage": 28.3,
       "testCount": 205,
-      "source": "vitest-v8 full suite"
+      "source": "vitest-v8 full suite",
+      "modules": [
+        { "name": "client/src", "lineCoverage": null, "detail": "Per-module V8 aggregation has not yet been collected." },
+        { "name": "server/_core", "lineCoverage": null, "detail": "Per-module V8 aggregation has not yet been collected." },
+        { "name": "services/go/mojaloop", "lineCoverage": null, "detail": "Go coverage is collected separately on the capable rehearsal host." }
+      ]
     }
   ],
   "note": "New entries must be produced by the locked coverage command; no trend point may be manually estimated."

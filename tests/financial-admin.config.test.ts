@@ -93,5 +93,8 @@ describe("financial administration safeguards", () => {
     expect(page).toContain("TLS certificate");
     expect(page).toContain("Coverage history trend");
     expect(page).toContain("Playwright execution log");
+    expect(page).toContain("filteredExecutions");
+    expect(store).toContain('id: "database-tls"');
+    expect(store).toContain('id: "migration-age"');
   });
 });
