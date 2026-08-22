@@ -14,6 +14,7 @@ import PhoneOrderingStudio from "@/pages/PhoneOrderingStudio";
 import TenantAdminActions from "@/pages/TenantAdminActions";
 import SecurityProfilePage, { SecurityBlockedPage } from "@/pages/SecurityProfile";
 import FinancialAdministration from "@/pages/FinancialAdministration";
+import { CustomerDeliveryTracking, FinancialTopologyPage } from "@/pages/DeliveryExperience";
 import { InvitationAcceptancePage, InviteTeamPage, OnboardingPage, PasswordResetPage, SignupPage, VerifyEmailPage } from "@/pages/AccountLifecycle";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
@@ -386,6 +387,8 @@ export default function App() {
       <Route path="/tenant-admin" component={TenantAdminActions} />
       <Route path="/profile/security" component={SecurityProfilePage} />
       <Route path="/admin/finance" component={FinancialAdministration} />
+      <Route path="/admin/finance/topology" component={FinancialTopologyPage} />
+      <Route path="/delivery/tracking" component={CustomerDeliveryTracking} />
       <Route path="/security/blocked" component={SecurityBlockedPage} />
       <Route path="/dashboard" component={DashboardPage} />
       <Route path="/analytics" component={Analytics} />
