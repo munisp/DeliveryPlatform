@@ -56,7 +56,7 @@ import {
 import { authenticateOperator, createOperatorSecuritySession, ensureExternalOperator, ensureOperatorAuthStore, isOperatorSecuritySessionActive, listOperatorSecurityLoginActivity, listOperatorSecuritySessions, revokeOperatorSecuritySession, revokeOtherOperatorSecuritySessions } from "./operatorAuthStore";
 import { recordOperationalEvent } from "./operationalEvents";
 import { consumeRateLimit, getRateLimiterStatus } from "./rateLimiter";
-import { getFilteredFinancialAdminSnapshot, getFinancialAdminAlerts, getFinancialDatabaseEvidence, listFinancialDependencyHealthHistory, recordFinancialAdminAlertAction, recordFinancialDependencyHealth } from "./financialAdminStore";
+import { getFilteredFinancialAdminSnapshot, getFinancialAdminAlerts, getFinancialDatabaseEvidence, getFinancialAdminSettings, listFinancialDependencyHealthHistory, recordFinancialAdminAlertAction, recordFinancialDependencyHealth, updateFinancialAdminSettings } from "./financialAdminStore";
 import { getAlertActionHistory, getAlertEscalations } from "./financialAdminStore";
 import coverageBaseline from "../../assurance/CODE_COVERAGE_BASELINE.json";
 import coverageHistory from "../../assurance/CODE_COVERAGE_HISTORY.json";
@@ -667,6 +667,20 @@ app.get("/api/admin/quality/coverage", rateLimit(30), (req, res) => {
   res.status(200).json({ ...coverageBaseline, history: coverageHistory.history, executionLog: playwrightExecutions.executions, retrievedAt: new Date().toISOString() });
 });
 
+app.post("/api/admin/quality/playwright/run", rateLimit(2), async (req, res) => {
+  const user = requireFinancialAdministrator(req, res);
+  if (!user) return;
+  const executorUrl = `${process.env.PLAYWRIGHT_EXECUTOR_URL ?? ""}`.trim().replace(/\/$/, "");
+  const token = `${process.env.PLAYWRIGHT_EXECUTOR_TOKEN ?? ""}`.trim();
+  if (ENV.isProduction || !executorUrl || !token) { res.status(409).json({ error: "playwright_execution_unavailable", detail: "Only an explicitly configured isolated non-production executor can run browser workflows." }); return; }
+  try {
+    const response = await fetch(`${executorUrl}/playwright/run`, { method: "POST", headers: { "X-Internal-Service-Token": token }, signal: AbortSignal.timeout(10_000) });
+    if (!response.ok) throw new Error("executor_unavailable");
+    await recordOperationalEvent({ eventType: "quality.playwright.requested", actorId: `${user.id}`, actorRole: user.role ?? null, tenantId: user.tenantId ?? null, route: req.path, outcome: "success", payload: {} });
+    res.status(202).json({ status: "submitted" });
+  } catch { res.status(503).json({ error: "playwright_executor_unavailable" }); }
+});
+
 app.get("/api/admin/finance/alerts", rateLimit(30), async (req, res) => {
   const user = requireFinancialAdministrator(req, res);
   if (!user) return;
@@ -676,6 +690,30 @@ app.get("/api/admin/finance/alerts", rateLimit(30), async (req, res) => {
     console.error("[SwitchOS] Unable to load financial administration alerts", error);
     res.status(503).json({ error: "financial_admin_alerts_unavailable" });
   }
+});
+
+app.get("/api/admin/finance/settings", rateLimit(30), async (req, res) => {
+  const user = requireFinancialAdministrator(req, res);
+  if (!user) return;
+  try { res.status(200).json({ settings: await getFinancialAdminSettings() }); }
+  catch { res.status(503).json({ error: "financial_admin_settings_unavailable" }); }
+});
+
+app.post("/api/admin/finance/settings", rateLimit(5), async (req, res) => {
+  const user = requireFinancialAdministrator(req, res);
+  if (!user) return;
+  const autoEscalationEnabled = Boolean(req.body?.autoEscalationEnabled);
+  const autoEscalationMinutes = Number(req.body?.autoEscalationMinutes);
+  const healthRetentionDays = Number(req.body?.healthRetentionDays);
+  const onCallWebhooks = Array.isArray(req.body?.onCallWebhooks) ? req.body.onCallWebhooks.filter((item: unknown) => typeof item === "string").map((item: string) => item.trim()).filter(Boolean).slice(0, 5) : [];
+  const hosts = `${process.env.FINANCE_ALERT_WEBHOOK_ALLOWLIST ?? ""}`.split(",").map((value) => value.trim()).filter(Boolean);
+  const validWebhooks = onCallWebhooks.every((value: string) => { try { const url = new URL(value); return url.protocol === "https:" && hosts.includes(url.hostname); } catch { return false; } });
+  if (!Number.isInteger(autoEscalationMinutes) || autoEscalationMinutes < 5 || autoEscalationMinutes > 10080 || !Number.isInteger(healthRetentionDays) || healthRetentionDays < 1 || healthRetentionDays > 365 || !validWebhooks) { res.status(400).json({ error: "invalid_financial_admin_settings" }); return; }
+  try {
+    const settings = await updateFinancialAdminSettings({ autoEscalationEnabled, autoEscalationMinutes, onCallWebhooks, healthRetentionDays, actorId: Number(user.id) });
+    await recordOperationalEvent({ eventType: "finance.admin.settings.updated", actorId: `${user.id}`, actorRole: user.role ?? null, tenantId: user.tenantId ?? null, route: req.path, outcome: "success", payload: { autoEscalationEnabled, autoEscalationMinutes, webhookCount: onCallWebhooks.length, healthRetentionDays } });
+    res.status(200).json({ settings });
+  } catch { res.status(503).json({ error: "financial_admin_settings_unavailable" }); }
 });
 
 app.post("/api/admin/finance/alerts/:id/actions", rateLimit(10), async (req, res) => {

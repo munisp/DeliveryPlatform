@@ -21,6 +21,7 @@ export type FinancialAdminFilters = { query?: string; startDate?: Date; endDate?
 export type FinancialHealthObservation = { dependency: "tigerbeetle" | "temporal"; status: "reachable" | "unhealthy" | "unreachable" | "unconfigured"; latencyMs: number | null; detail: string | null; observedAt: string };
 export type FinancialAdminAlert = { id: string; severity: "warning" | "critical"; source: "reconciliation" | "dependency"; title: string; detail: string; createdAt: string; action: "acknowledge" | "dismiss" | "note" | null; note: string | null };
 export type FinancialDatabaseEvidence = { status: "verified" | "unencrypted" | "unreachable"; tlsVersion: string | null; cipher: string | null; certificateExpiresAt: string | null; certificateStatus: "fresh" | "expiring" | "expired" | "unavailable"; migrationVersions: Array<{ id: number; appliedAt: string }>; migrationStatus: "fresh" | "aging" | "unavailable"; latestMigrationAgeDays: number | null; detail: string | null; checkedAt: string };
+export type FinancialAdminSettings = { autoEscalationEnabled: boolean; autoEscalationMinutes: number; onCallWebhooks: string[]; healthRetentionDays: number; updatedAt: string };
 
 const transferOrder = (sort: FinancialAdminFilters["sort"]) => sort === "updated_asc" ? "updated_at ASC" : sort === "created_desc" ? "created_at DESC" : sort === "created_asc" ? "created_at ASC" : "updated_at DESC";
 
@@ -58,8 +59,23 @@ export async function recordFinancialDependencyHealth(observation: FinancialHeal
 }
 
 export async function listFinancialDependencyHealthHistory(): Promise<FinancialHealthObservation[]> {
-  const result = await requirePool().query(`SELECT dependency, status, latency_ms, detail, observed_at FROM (SELECT dependency, status, latency_ms, detail, observed_at, ROW_NUMBER() OVER (PARTITION BY dependency ORDER BY observed_at DESC) AS sequence FROM financial_dependency_health_observations WHERE observed_at >= NOW() - INTERVAL '24 hours') observations WHERE sequence <= 60 ORDER BY dependency, observed_at ASC`);
+  const settings = await getFinancialAdminSettings();
+  const result = await requirePool().query(`SELECT dependency, status, latency_ms, detail, observed_at FROM (SELECT dependency, status, latency_ms, detail, observed_at, ROW_NUMBER() OVER (PARTITION BY dependency ORDER BY observed_at DESC) AS sequence FROM financial_dependency_health_observations WHERE observed_at >= GREATEST(NOW() - ($1::int * INTERVAL '1 day'), NOW() - INTERVAL '24 hours')) observations WHERE sequence <= 60 ORDER BY dependency, observed_at ASC`, [settings.healthRetentionDays]);
   return result.rows.map((row) => ({ dependency: row.dependency, status: row.status, latencyMs: row.latency_ms === null ? null : Number(row.latency_ms), detail: row.detail ?? null, observedAt: new Date(row.observed_at).toISOString() }));
+}
+
+export async function getFinancialAdminSettings(): Promise<FinancialAdminSettings> {
+  const result = await requirePool().query(`SELECT auto_escalation_enabled, auto_escalation_minutes, on_call_webhooks, health_retention_days, updated_at FROM financial_admin_settings WHERE singleton = TRUE`);
+  const row = result.rows[0];
+  if (!row) return { autoEscalationEnabled: false, autoEscalationMinutes: 60, onCallWebhooks: [], healthRetentionDays: 30, updatedAt: new Date(0).toISOString() };
+  return { autoEscalationEnabled: Boolean(row.auto_escalation_enabled), autoEscalationMinutes: Number(row.auto_escalation_minutes), onCallWebhooks: Array.isArray(row.on_call_webhooks) ? row.on_call_webhooks.filter((item: unknown) => typeof item === "string") : [], healthRetentionDays: Number(row.health_retention_days), updatedAt: new Date(row.updated_at).toISOString() };
+}
+
+export async function updateFinancialAdminSettings(input: Omit<FinancialAdminSettings, "updatedAt"> & { actorId: number }): Promise<FinancialAdminSettings> {
+  const result = await requirePool().query(`INSERT INTO financial_admin_settings (singleton, auto_escalation_enabled, auto_escalation_minutes, on_call_webhooks, health_retention_days, updated_by_operator_id, updated_at) VALUES (TRUE, $1, $2, $3::jsonb, $4, $5, NOW()) ON CONFLICT (singleton) DO UPDATE SET auto_escalation_enabled = EXCLUDED.auto_escalation_enabled, auto_escalation_minutes = EXCLUDED.auto_escalation_minutes, on_call_webhooks = EXCLUDED.on_call_webhooks, health_retention_days = EXCLUDED.health_retention_days, updated_by_operator_id = EXCLUDED.updated_by_operator_id, updated_at = NOW() RETURNING auto_escalation_enabled, auto_escalation_minutes, on_call_webhooks, health_retention_days, updated_at`, [input.autoEscalationEnabled, input.autoEscalationMinutes, JSON.stringify(input.onCallWebhooks), input.healthRetentionDays, input.actorId]);
+  const row = result.rows[0];
+  await requirePool().query(`DELETE FROM financial_dependency_health_observations WHERE observed_at < NOW() - ($1::int * INTERVAL '1 day')`, [input.healthRetentionDays]);
+  return { autoEscalationEnabled: Boolean(row.auto_escalation_enabled), autoEscalationMinutes: Number(row.auto_escalation_minutes), onCallWebhooks: Array.isArray(row.on_call_webhooks) ? row.on_call_webhooks : [], healthRetentionDays: Number(row.health_retention_days), updatedAt: new Date(row.updated_at).toISOString() };
 }
 
 export async function getFinancialDatabaseEvidence(): Promise<FinancialDatabaseEvidence> {
