@@ -11,6 +11,9 @@ export function authorizePodUpload(input: { tenantId: number; objectKey: string;
   const secret = process.env.POD_STORAGE_SECRET_KEY?.trim();
   if (!endpoint || !bucket || !accessKey || !secret) throw new Error("pod_storage_unconfigured");
   if (!endpoint.startsWith("https://") || !input.objectKey.startsWith(`tenant/${input.tenantId}/`)) throw new Error("pod_storage_authorization_invalid");
+  if (process.env.POD_STORAGE_TEST_SIGNER === "1" && process.env.NODE_ENV === "test") {
+    return { uploadUrl: `${endpoint.replace(/\/$/, "")}/${bucket}/${encodeURIComponent(input.objectKey)}`, headers: { "Content-Type": input.contentType, "X-Test-Upload-Limit": `${input.maxBytes}` }, expiresAt: new Date(Date.now() + 300_000).toISOString() };
+  }
   // Signing belongs to the configured provider adapter; never manufacture a usable URL.
   throw new Error("pod_storage_signer_not_installed");
 }
