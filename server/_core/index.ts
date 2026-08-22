@@ -56,7 +56,7 @@ import {
 import { authenticateOperator, createOperatorSecuritySession, ensureExternalOperator, ensureOperatorAuthStore, isOperatorSecuritySessionActive, listOperatorSecurityLoginActivity, listOperatorSecuritySessions, revokeOperatorSecuritySession, revokeOtherOperatorSecuritySessions } from "./operatorAuthStore";
 import { recordOperationalEvent } from "./operationalEvents";
 import { consumeRateLimit, getRateLimiterStatus } from "./rateLimiter";
-import { getFilteredFinancialAdminSnapshot, getFinancialAdminAlerts, getFinancialDatabaseEvidence, getFinancialAdminSettings, listFinancialDependencyHealthHistory, recordFinancialAdminAlertAction, recordFinancialDependencyHealth, updateFinancialAdminSettings } from "./financialAdminStore";
+import { getFilteredFinancialAdminSnapshot, getFinancialAdminAlerts, getFinancialDatabaseEvidence, getFinancialAdminSettings, listFinancialAlertDeliveryReceipts, listFinancialDependencyHealthHistory, recordFinancialAdminAlertAction, recordFinancialDependencyHealth, updateFinancialAdminSettings } from "./financialAdminStore";
 import { getAlertActionHistory, getAlertEscalations } from "./financialAdminStore";
 import coverageBaseline from "../../assurance/CODE_COVERAGE_BASELINE.json";
 import coverageHistory from "../../assurance/CODE_COVERAGE_HISTORY.json";
@@ -706,14 +706,22 @@ app.post("/api/admin/finance/settings", rateLimit(5), async (req, res) => {
   const autoEscalationMinutes = Number(req.body?.autoEscalationMinutes);
   const healthRetentionDays = Number(req.body?.healthRetentionDays);
   const onCallWebhooks = Array.isArray(req.body?.onCallWebhooks) ? req.body.onCallWebhooks.filter((item: unknown) => typeof item === "string").map((item: string) => item.trim()).filter(Boolean).slice(0, 5) : [];
-  const hosts = `${process.env.FINANCE_ALERT_WEBHOOK_ALLOWLIST ?? ""}`.split(",").map((value) => value.trim()).filter(Boolean);
-  const validWebhooks = onCallWebhooks.every((value: string) => { try { const url = new URL(value); return url.protocol === "https:" && hosts.includes(url.hostname); } catch { return false; } });
-  if (!Number.isInteger(autoEscalationMinutes) || autoEscalationMinutes < 5 || autoEscalationMinutes > 10080 || !Number.isInteger(healthRetentionDays) || healthRetentionDays < 1 || healthRetentionDays > 365 || !validWebhooks) { res.status(400).json({ error: "invalid_financial_admin_settings" }); return; }
+  const approvedWebhookHosts = Array.isArray(req.body?.approvedWebhookHosts) ? req.body.approvedWebhookHosts.filter((item: unknown) => typeof item === "string").map((item: string) => item.trim().toLowerCase()).filter(Boolean).slice(0, 20) : [];
+  const safeHost = (host: string) => /^[a-z0-9.-]+$/.test(host) && !host.includes("..") && !host.startsWith(".") && !host.endsWith(".");
+  const validWebhooks = onCallWebhooks.every((value: string) => { try { const url = new URL(value); return url.protocol === "https:" && approvedWebhookHosts.includes(url.hostname); } catch { return false; } });
+  if (!Number.isInteger(autoEscalationMinutes) || autoEscalationMinutes < 5 || autoEscalationMinutes > 10080 || !Number.isInteger(healthRetentionDays) || healthRetentionDays < 1 || healthRetentionDays > 365 || !approvedWebhookHosts.every(safeHost) || !validWebhooks) { res.status(400).json({ error: "invalid_financial_admin_settings" }); return; }
   try {
-    const settings = await updateFinancialAdminSettings({ autoEscalationEnabled, autoEscalationMinutes, onCallWebhooks, healthRetentionDays, actorId: Number(user.id) });
-    await recordOperationalEvent({ eventType: "finance.admin.settings.updated", actorId: `${user.id}`, actorRole: user.role ?? null, tenantId: user.tenantId ?? null, route: req.path, outcome: "success", payload: { autoEscalationEnabled, autoEscalationMinutes, webhookCount: onCallWebhooks.length, healthRetentionDays } });
+    const settings = await updateFinancialAdminSettings({ autoEscalationEnabled, autoEscalationMinutes, onCallWebhooks, approvedWebhookHosts, healthRetentionDays, actorId: Number(user.id) });
+    await recordOperationalEvent({ eventType: "finance.admin.settings.updated", actorId: `${user.id}`, actorRole: user.role ?? null, tenantId: user.tenantId ?? null, route: req.path, outcome: "success", payload: { autoEscalationEnabled, autoEscalationMinutes, webhookCount: onCallWebhooks.length, approvedHostCount: approvedWebhookHosts.length, healthRetentionDays } });
     res.status(200).json({ settings });
   } catch { res.status(503).json({ error: "financial_admin_settings_unavailable" }); }
+});
+
+app.get("/api/admin/finance/alert-delivery-receipts", rateLimit(30), async (req, res) => {
+  const user = requireFinancialAdministrator(req, res);
+  if (!user) return;
+  try { res.status(200).json({ receipts: await listFinancialAlertDeliveryReceipts(), retrievedAt: new Date().toISOString() }); }
+  catch { res.status(503).json({ error: "financial_alert_receipts_unavailable" }); }
 });
 
 app.post("/api/admin/finance/alerts/:id/actions", rateLimit(10), async (req, res) => {
