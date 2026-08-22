@@ -58,6 +58,7 @@ import { recordOperationalEvent } from "./operationalEvents";
 import { consumeRateLimit, getRateLimiterStatus } from "./rateLimiter";
 import { getFilteredFinancialAdminSnapshot, getFinancialAdminAlerts, getFinancialDatabaseEvidence, getFinancialAdminSettings, listFinancialAlertDeliveryReceipts, listFinancialDependencyHealthHistory, recordFinancialAdminAlertAction, recordFinancialAlertDeliveryReceipt, recordFinancialDependencyHealth, updateFinancialAdminSettings } from "./financialAdminStore";
 import { getAlertActionHistory, getAlertEscalations } from "./financialAdminStore";
+import { getFinancialTopology, getLatestDeliveryLocation, recordDeliveryLocation, recordProofOfDelivery } from "./deliveryTrackingStore";
 import coverageBaseline from "../../assurance/CODE_COVERAGE_BASELINE.json";
 import coverageHistory from "../../assurance/CODE_COVERAGE_HISTORY.json";
 import playwrightExecutions from "../../assurance/PLAYWRIGHT_EXECUTION_HISTORY.json";
@@ -857,6 +858,20 @@ app.post("/api/admin/finance/simulations/:scenario", rateLimit(3), async (req, r
     console.error("[SwitchOS] Financial simulation executor unavailable", error);
     res.status(503).json({ error: "financial_simulation_executor_unavailable" });
   }
+});
+
+app.get("/api/admin/finance/topology", rateLimit(30), async (req, res) => {
+  const user = requireFinancialAdministrator(req, res);
+  if (!user) return;
+  try { res.status(200).json({ edges: await getFinancialTopology(), retrievedAt: new Date().toISOString() }); }
+  catch { res.status(503).json({ error: "financial_topology_unavailable" }); }
+});
+
+app.get("/api/deliveries/:id/tracking", rateLimit(60), async (req, res) => {
+  const user = requireAuthenticatedOperator(req, res);
+  if (!user || !user.tenantId) return;
+  try { const location = await getLatestDeliveryLocation({ deliveryId: `${req.params.id ?? ""}`.trim(), tenantId: Number(user.tenantId) }); res.status(200).json({ location, retrievedAt: new Date().toISOString() }); }
+  catch { res.status(503).json({ error: "delivery_tracking_unavailable" }); }
 });
 
 app.get("/api/auth/security", async (req, res) => {
