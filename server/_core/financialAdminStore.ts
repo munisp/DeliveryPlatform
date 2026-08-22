@@ -79,8 +79,14 @@ export async function updateFinancialAdminSettings(input: Omit<FinancialAdminSet
 }
 
 export async function listFinancialAlertDeliveryReceipts() {
-  const result = await requirePool().query(`SELECT alert_id, webhook_host, status, detail, routed_at, completed_at FROM financial_alert_delivery_receipts ORDER BY routed_at DESC LIMIT 100`);
-  return result.rows.map((row) => ({ alertId: String(row.alert_id), webhookHost: String(row.webhook_host), status: String(row.status), detail: row.detail ? String(row.detail) : null, routedAt: new Date(row.routed_at).toISOString(), completedAt: row.completed_at ? new Date(row.completed_at).toISOString() : null }));
+  const result = await requirePool().query(`SELECT alert_id, webhook_host, status, detail, routed_at, completed_at, 0::int AS retry_attempt, NULL::timestamptz AS retry_at FROM financial_alert_delivery_receipts ORDER BY routed_at DESC LIMIT 100`);
+  return result.rows.map((row) => ({ alertId: String(row.alert_id), webhookHost: String(row.webhook_host), status: String(row.status), detail: row.detail ? String(row.detail) : null, routedAt: new Date(row.routed_at).toISOString(), completedAt: row.completed_at ? new Date(row.completed_at).toISOString() : null, retryAttempt: Number(row.retry_attempt), retryAt: row.retry_at ? new Date(row.retry_at).toISOString() : null }));
+}
+
+export async function recordFinancialAlertDeliveryReceipt(input: { alertId: string; webhookHost: string; status: "queued" | "delivered" | "failed"; detail: string | null; retryAttempt: number }) {
+  const delayMinutes = input.status === "failed" ? Math.min(60, 2 ** Math.min(6, Math.max(0, input.retryAttempt))) : 0;
+  await requirePool().query(`INSERT INTO financial_alert_delivery_receipts (alert_id, webhook_host, status, detail, routed_at, completed_at) VALUES ($1, $2, $3, $4, NOW(), CASE WHEN $3 = 'queued' THEN NULL ELSE NOW() END)`, [input.alertId, input.webhookHost, input.status, input.detail, input.retryAttempt]);
+  return { retryAttempt: input.retryAttempt, retryAt: delayMinutes ? new Date(Date.now() + delayMinutes * 60_000).toISOString() : null };
 }
 
 export async function getFinancialDatabaseEvidence(): Promise<FinancialDatabaseEvidence> {

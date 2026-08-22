@@ -56,7 +56,7 @@ import {
 import { authenticateOperator, createOperatorSecuritySession, ensureExternalOperator, ensureOperatorAuthStore, isOperatorSecuritySessionActive, listOperatorSecurityLoginActivity, listOperatorSecuritySessions, revokeOperatorSecuritySession, revokeOtherOperatorSecuritySessions } from "./operatorAuthStore";
 import { recordOperationalEvent } from "./operationalEvents";
 import { consumeRateLimit, getRateLimiterStatus } from "./rateLimiter";
-import { getFilteredFinancialAdminSnapshot, getFinancialAdminAlerts, getFinancialDatabaseEvidence, getFinancialAdminSettings, listFinancialAlertDeliveryReceipts, listFinancialDependencyHealthHistory, recordFinancialAdminAlertAction, recordFinancialDependencyHealth, updateFinancialAdminSettings } from "./financialAdminStore";
+import { getFilteredFinancialAdminSnapshot, getFinancialAdminAlerts, getFinancialDatabaseEvidence, getFinancialAdminSettings, listFinancialAlertDeliveryReceipts, listFinancialDependencyHealthHistory, recordFinancialAdminAlertAction, recordFinancialAlertDeliveryReceipt, recordFinancialDependencyHealth, updateFinancialAdminSettings } from "./financialAdminStore";
 import { getAlertActionHistory, getAlertEscalations } from "./financialAdminStore";
 import coverageBaseline from "../../assurance/CODE_COVERAGE_BASELINE.json";
 import coverageHistory from "../../assurance/CODE_COVERAGE_HISTORY.json";
@@ -722,6 +722,19 @@ app.get("/api/admin/finance/alert-delivery-receipts", rateLimit(30), async (req,
   if (!user) return;
   try { res.status(200).json({ receipts: await listFinancialAlertDeliveryReceipts(), retrievedAt: new Date().toISOString() }); }
   catch { res.status(503).json({ error: "financial_alert_receipts_unavailable" }); }
+});
+
+app.post("/api/internal/finance/alert-delivery-receipts", rateLimit(60), async (req, res) => {
+  const expectedToken = `${process.env.FINANCE_ROUTING_RECEIPT_TOKEN ?? ""}`.trim();
+  if (!expectedToken || req.header("X-Internal-Service-Token") !== expectedToken) { res.status(401).json({ error: "unauthorized_receipt_source" }); return; }
+  const alertId = `${req.body?.alertId ?? ""}`.trim();
+  const webhookHost = `${req.body?.webhookHost ?? ""}`.trim().toLowerCase();
+  const status = `${req.body?.status ?? ""}`.trim();
+  const detail = `${req.body?.detail ?? ""}`.trim().slice(0, 500) || null;
+  const retryAttempt = Number(req.body?.retryAttempt ?? 0);
+  if (!/^(reconciliation-\d+|dependency-(tigerbeetle|temporal)|database-tls|migration-age)$/.test(alertId) || !/^[a-z0-9.-]+$/.test(webhookHost) || !["queued", "delivered", "failed"].includes(status) || !Number.isInteger(retryAttempt) || retryAttempt < 0 || retryAttempt > 10) { res.status(400).json({ error: "invalid_delivery_receipt" }); return; }
+  try { res.status(202).json(await recordFinancialAlertDeliveryReceipt({ alertId, webhookHost, status: status as "queued" | "delivered" | "failed", detail, retryAttempt })); }
+  catch { res.status(503).json({ error: "receipt_persistence_unavailable" }); }
 });
 
 app.post("/api/admin/finance/alerts/:id/actions", rateLimit(10), async (req, res) => {
