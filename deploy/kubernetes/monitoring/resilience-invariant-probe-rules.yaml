@@ -1,0 +1,71 @@
+# Requires Prometheus Operator, kube-state-metrics, and a ServiceMonitor for the receiver /metrics endpoint.
+# These rules cover only the isolated resilience-test namespace and never authorize fault execution or breaker closure.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: deliveryplatform-resilience-invariant-probe
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: deliveryplatform
+    prometheus: platform
+    resilience.delivery-platform.io/environment: non-production
+spec:
+  groups:
+    - name: deliveryplatform.resilience-invariant-probe
+      rules:
+        - alert: ResilienceInvariantProbeFailed
+          expr: max by (namespace, job_name) (kube_job_status_failed{namespace="resilience-test",job_name=~"resilience-invariant-.*"}) > 0
+          for: 0m
+          labels:
+            severity: critical
+            service: deliveryplatform-resilience
+            namespace: resilience-test
+            circuit_breaker: open
+            resilience.delivery-platform.io/environment: non-production
+          annotations:
+            summary: "Resilience invariant probe {{ $labels.job_name }} failed"
+            description: "The isolated PostgreSQL probe detected a queue, offer, assignment, ledger, verification, or webhook-processing anomaly. Stop the active TestRun, clear Toxiproxy, delete PodChaos, open the resilience circuit breaker, and start the P0 incident procedure."
+            runbook_url: "https://REPLACE_WITH_RUNBOOK_HOST/resilience-invariant-probe"
+        - alert: ResilienceInvariantProbeStalled
+          expr: (time() - max by (namespace, job_name) (kube_job_status_start_time{namespace="resilience-test",job_name=~"resilience-invariant-.*"}) > 2100) and on (namespace, job_name) (max by (namespace, job_name) (kube_job_status_succeeded{namespace="resilience-test",job_name=~"resilience-invariant-.*"}) == 0) and on (namespace, job_name) (max by (namespace, job_name) (kube_job_status_failed{namespace="resilience-test",job_name=~"resilience-invariant-.*"}) == 0)
+          for: 1m
+          labels:
+            severity: critical
+            service: deliveryplatform-resilience
+            namespace: resilience-test
+            circuit_breaker: open
+            resilience.delivery-platform.io/environment: non-production
+          annotations:
+            summary: "Resilience invariant probe {{ $labels.job_name }} exceeded its 35-minute window"
+            description: "The isolated invariant Job has neither succeeded nor failed after its bounded window. Stop the active TestRun, clear injected faults, open the resilience circuit breaker, preserve artifacts, and investigate queue drain, database availability, and Job status."
+            runbook_url: "https://REPLACE_WITH_RUNBOOK_HOST/resilience-invariant-probe"
+        - alert: ResilienceInvariantProbeMissing
+          expr: kube_job_status_succeeded{namespace="resilience-test",job_name=~"resilience-invariant-.*"} == 0 unless on (namespace, job_name) kube_job_status_failed{namespace="resilience-test",job_name=~"resilience-invariant-.*"} > 0
+          for: 45m
+          labels:
+            severity: warning
+            service: deliveryplatform-resilience
+            namespace: resilience-test
+            circuit_breaker: review
+            resilience.delivery-platform.io/environment: non-production
+          annotations:
+            summary: "Resilience invariant probe {{ $labels.job_name }} has not reported success"
+            description: "Review whether the generated Job is pending, unscheduled, blocked on image pull, or missing metric scrape coverage. Do not close the circuit breaker based on this alert alone."
+            runbook_url: "https://REPLACE_WITH_RUNBOOK_HOST/resilience-invariant-probe"
+    - name: deliveryplatform.resilience-circuit-breaker-receiver
+      rules:
+        - record: resilience:circuit_breaker_patch_failures_10m
+          expr: sum by (alertname) (increase(resilience_circuit_breaker_patch_failures_total[10m]))
+        - alert: ResilienceCircuitBreakerPatchFailureEscalation
+          expr: resilience:circuit_breaker_patch_failures_10m >= 3
+          for: 0m
+          labels:
+            severity: critical
+            service: deliveryplatform-resilience
+            namespace: resilience-test
+            circuit_breaker: manual_intervention_required
+            resilience.delivery-platform.io/environment: non-production
+          annotations:
+            summary: "Circuit-breaker receiver failed to open the breaker after three attempts"
+            description: "Investigate receiver authentication, NetworkPolicy, service-account RBAC, Kubernetes API availability, and the ConfigMap state. The receiver must not retry by broadening privileges or close the breaker."
+            runbook_url: "https://REPLACE_WITH_RUNBOOK_HOST/resilience-circuit-breaker-receiver"

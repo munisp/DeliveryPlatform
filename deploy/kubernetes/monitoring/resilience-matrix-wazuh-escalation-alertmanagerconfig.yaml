@@ -1,0 +1,58 @@
+apiVersion: monitoring.coreos.com/v1alpha1
+kind: AlertmanagerConfig
+metadata:
+  name: resilience-matrix-wazuh-escalation
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: deliveryplatform-resilience-testing
+    alertmanagerConfig: enabled
+spec:
+  route:
+    receiver: resilience-matrix-wazuh-fanout
+    groupBy: ["alertname", "change_id"]
+    groupWait: 0s
+    groupInterval: 5m
+    repeatInterval: 30m
+    matchers:
+      - name: alertname
+        matchType: "="
+        value: ResilienceCircuitBreakerPatchFailureEscalation
+      - name: severity
+        matchType: "="
+        value: critical
+      - name: namespace
+        matchType: "="
+        value: resilience-test
+  receivers:
+    - name: resilience-matrix-wazuh-fanout
+      webhookConfigs:
+        - url: https://matrix-escalation-bridge.resilience-test.svc:8443/v1/alerts
+          sendResolved: false
+          maxAlerts: 10
+          httpConfig:
+            authorization:
+              type: Bearer
+              credentials:
+                name: matrix-escalation-bridge-auth
+                key: token
+            tlsConfig:
+              serverName: matrix-escalation-bridge.resilience-test.svc
+              ca:
+                configMap:
+                  name: matrix-escalation-bridge-ca
+                  key: ca.crt
+        - url: https://wazuh-escalation-bridge.resilience-test.svc:8443/v1/alerts
+          sendResolved: false
+          maxAlerts: 10
+          httpConfig:
+            authorization:
+              type: Bearer
+              credentials:
+                name: wazuh-escalation-bridge-auth
+                key: token
+            tlsConfig:
+              serverName: wazuh-escalation-bridge.resilience-test.svc
+              ca:
+                configMap:
+                  name: wazuh-escalation-bridge-ca
+                  key: ca.crt

@@ -1,0 +1,196 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: resilience-circuit-breaker-alert-receiver
+  namespace: resilience-test
+  labels:
+    app.kubernetes.io/name: resilience-circuit-breaker-alert-receiver
+    resilience.delivery-platform.io/environment: non-production
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: resilience-circuit-breaker-alert-receiver
+  namespace: resilience-test
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["resilience-validation-circuit-breaker"]
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: resilience-circuit-breaker-alert-receiver
+  namespace: resilience-test
+subjects:
+  - kind: ServiceAccount
+    name: resilience-circuit-breaker-alert-receiver
+    namespace: resilience-test
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: resilience-circuit-breaker-alert-receiver
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: resilience-circuit-breaker-alert-receiver
+  namespace: resilience-test
+  labels:
+    app.kubernetes.io/name: resilience-circuit-breaker-alert-receiver
+spec:
+  selector:
+    app.kubernetes.io/name: resilience-circuit-breaker-alert-receiver
+  ports:
+    - name: https
+      port: 8443
+      targetPort: https
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: resilience-circuit-breaker-alert-receiver
+  namespace: resilience-test
+  labels:
+    app.kubernetes.io/name: resilience-circuit-breaker-alert-receiver
+    resilience.delivery-platform.io/environment: non-production
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: resilience-circuit-breaker-alert-receiver
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: resilience-circuit-breaker-alert-receiver
+        resilience.delivery-platform.io/environment: non-production
+    spec:
+      serviceAccountName: resilience-circuit-breaker-alert-receiver
+      automountServiceAccountToken: true
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: receiver
+          image: REPLACE_WITH_IMMUTABLE_RECEIVER_DIGEST
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: https
+              containerPort: 8443
+          env:
+            - name: ALERTMANAGER_WEBHOOK_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: resilience-circuit-breaker-alert-receiver
+                  key: token
+            - name: TLS_CERT_FILE
+              value: /var/run/receiver-tls/tls.crt
+            - name: TLS_KEY_FILE
+              value: /var/run/receiver-tls/tls.key
+          volumeMounts:
+            - name: tls
+              mountPath: /var/run/receiver-tls
+              readOnly: true
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          resources:
+            requests: { cpu: 25m, memory: 64Mi }
+            limits: { cpu: 250m, memory: 128Mi }
+          readinessProbe:
+            httpGet: { path: /readyz, port: https, scheme: HTTPS }
+          livenessProbe:
+            httpGet: { path: /healthz, port: https, scheme: HTTPS }
+      volumes:
+        - name: tls
+          secret:
+            secretName: resilience-circuit-breaker-alert-receiver-tls
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: resilience-circuit-breaker-alert-receiver
+  namespace: monitoring
+  labels:
+    prometheus: platform
+    app.kubernetes.io/part-of: deliveryplatform-resilience-testing
+spec:
+  namespaceSelector:
+    matchNames: ["resilience-test"]
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: resilience-circuit-breaker-alert-receiver
+  endpoints:
+    - port: https
+      path: /metrics
+      scheme: https
+      interval: 30s
+      tlsConfig:
+        serverName: resilience-circuit-breaker-alert-receiver.resilience-test.svc
+        ca:
+          configMap:
+            name: resilience-circuit-breaker-alert-receiver-ca
+            key: ca.crt
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: resilience-circuit-breaker-alert-receiver-ingress
+  namespace: resilience-test
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: resilience-circuit-breaker-alert-receiver
+  policyTypes: ["Ingress", "Egress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: alertmanager
+      ports:
+        - protocol: TCP
+          port: 8443
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+      ports:
+        - protocol: TCP
+          port: 8443
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: default
+      ports:
+        - protocol: TCP
+          port: 443
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: resilience-circuit-breaker-alert-receiver
+  namespace: resilience-test
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: resilience-circuit-breaker-alert-receiver
