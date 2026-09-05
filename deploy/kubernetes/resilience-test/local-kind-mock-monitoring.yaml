@@ -1,0 +1,119 @@
+# Local kind fixture only. These minimal CRDs validate manifest plumbing; they do not implement Prometheus or Alertmanager behavior.
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: servicemonitors.monitoring.coreos.com
+  labels:
+    resilience.delivery-platform.io/local-fixture: "true"
+spec:
+  group: monitoring.coreos.com
+  scope: Namespaced
+  names:
+    plural: servicemonitors
+    singular: servicemonitor
+    kind: ServiceMonitor
+    shortNames: [sm]
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          x-kubernetes-preserve-unknown-fields: true
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: prometheusrules.monitoring.coreos.com
+  labels:
+    resilience.delivery-platform.io/local-fixture: "true"
+spec:
+  group: monitoring.coreos.com
+  scope: Namespaced
+  names:
+    plural: prometheusrules
+    singular: prometheusrule
+    kind: PrometheusRule
+    shortNames: [promrule]
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          x-kubernetes-preserve-unknown-fields: true
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: alertmanagerconfigs.monitoring.coreos.com
+  labels:
+    resilience.delivery-platform.io/local-fixture: "true"
+spec:
+  group: monitoring.coreos.com
+  scope: Namespaced
+  names:
+    plural: alertmanagerconfigs
+    singular: alertmanagerconfig
+    kind: AlertmanagerConfig
+    shortNames: [amcfg]
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          x-kubernetes-preserve-unknown-fields: true
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: monitoring
+  labels:
+    kubernetes.io/metadata.name: monitoring
+    resilience.delivery-platform.io/local-fixture: "true"
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: mock-monitoring-controller
+  namespace: monitoring
+automountServiceAccountToken: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mock-monitoring-controller
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: mock-monitoring-controller
+    resilience.delivery-platform.io/local-fixture: "true"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: mock-monitoring-controller
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: mock-monitoring-controller
+    spec:
+      serviceAccountName: mock-monitoring-controller
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: controller
+          image: registry.k8s.io/pause:3.9
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          resources:
+            requests: { cpu: 5m, memory: 16Mi }
+            limits: { cpu: 25m, memory: 32Mi }

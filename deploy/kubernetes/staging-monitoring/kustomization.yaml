@@ -1,0 +1,10 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - namespace.yaml
+  - prometheus-alertmanager.yaml
+  - kube-state-metrics.yaml
+  - external-secrets.yaml
+commonLabels:
+  app.kubernetes.io/part-of: deliveryplatform-resilience-monitoring
+  resilience.delivery-platform.io/environment: non-production

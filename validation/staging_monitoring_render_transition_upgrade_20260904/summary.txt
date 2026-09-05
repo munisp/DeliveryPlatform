@@ -1,0 +1,5 @@
+KUSTOMIZE_STAGING_MONITORING_RENDER=PASS
+cluster_id=staging-render-only
+storage_class=staging-render-only
+runbook_host=runbooks.staging-render-only.invalid
+rendered_file=validation/staging_monitoring_render_transition_upgrade_20260904/rendered-staging-resilience.yaml

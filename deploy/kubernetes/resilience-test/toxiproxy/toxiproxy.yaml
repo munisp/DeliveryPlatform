@@ -1,0 +1,86 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payment-provider-toxiproxy
+  namespace: resilience-test
+  labels:
+    app.kubernetes.io/name: payment-provider-toxiproxy
+    app.kubernetes.io/part-of: delivery-platform-resilience-testing
+    resilience.delivery-platform.io/environment: non-production
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: payment-provider-toxiproxy
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: payment-provider-toxiproxy
+        app.kubernetes.io/part-of: delivery-platform-resilience-testing
+        resilience.delivery-platform.io/environment: non-production
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: toxiproxy
+          image: shopify/toxiproxy:2.12.0
+          imagePullPolicy: IfNotPresent
+          args: ["-host", "0.0.0.0"]
+          ports:
+            - name: control
+              containerPort: 8474
+            - name: provider
+              containerPort: 8666
+          readinessProbe:
+            httpGet:
+              path: /version
+              port: control
+            initialDelaySeconds: 2
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /version
+              port: control
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              cpu: "250m"
+              memory: "256Mi"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: payment-provider-toxiproxy
+  namespace: resilience-test
+  labels:
+    app.kubernetes.io/name: payment-provider-toxiproxy
+    app.kubernetes.io/part-of: delivery-platform-resilience-testing
+    resilience.delivery-platform.io/environment: non-production
+spec:
+  selector:
+    app.kubernetes.io/name: payment-provider-toxiproxy
+  ports:
+    - name: control
+      port: 8474
+      targetPort: control
+    - name: provider
+      port: 8666
+      targetPort: provider

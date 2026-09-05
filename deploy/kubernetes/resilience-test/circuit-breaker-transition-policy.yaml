@@ -1,0 +1,78 @@
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: resilience-circuit-breaker-transition-policy
+  labels:
+    app.kubernetes.io/part-of: deliveryplatform-resilience-testing
+    resilience.delivery-platform.io/environment: non-production
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["UPDATE"]
+        resources: ["configmaps"]
+  validations:
+    - expression: "!(object.metadata.namespace == 'resilience-test' && object.metadata.name == 'resilience-validation-circuit-breaker') || (oldObject.data.state in ['closed', 'open', 'half_open'] && object.data.state in ['closed', 'open', 'half_open'])"
+      message: "circuit-breaker state must be closed, open, or half_open"
+    - expression: "!(object.metadata.namespace == 'resilience-test' && object.metadata.name == 'resilience-validation-circuit-breaker' && object.data.state in ['half_open', 'closed'] && object.data.state != oldObject.data.state) || request.userInfo.username == 'system:serviceaccount:resilience-test:resilience-circuit-breaker-operator'"
+      message: "only the dedicated resilience operator may transition the breaker to half_open or closed"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: resilience-circuit-breaker-transition-policy
+  labels:
+    app.kubernetes.io/part-of: deliveryplatform-resilience-testing
+    resilience.delivery-platform.io/environment: non-production
+spec:
+  policyName: resilience-circuit-breaker-transition-policy
+  validationActions: ["Deny", "Audit"]
+  matchResources:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: resilience-test
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: resilience-circuit-breaker-operator
+  namespace: resilience-test
+  labels:
+    app.kubernetes.io/name: resilience-circuit-breaker-operator
+    resilience.delivery-platform.io/environment: non-production
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: resilience-circuit-breaker-operator
+  namespace: resilience-test
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["resilience-validation-circuit-breaker"]
+    verbs: ["get", "patch"]
+  - apiGroups: ["k6.io"]
+    resources: ["testruns"]
+    resourceNames: ["ride-payment-ingress"]
+    verbs: ["get", "delete"]
+  - apiGroups: ["chaos-mesh.org"]
+    resources: ["podchaos"]
+    resourceNames: ["resilience-matching-worker-pod-kill"]
+    verbs: ["get", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: resilience-circuit-breaker-operator
+  namespace: resilience-test
+subjects:
+  - kind: ServiceAccount
+    name: resilience-circuit-breaker-operator
+    namespace: resilience-test
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: resilience-circuit-breaker-operator

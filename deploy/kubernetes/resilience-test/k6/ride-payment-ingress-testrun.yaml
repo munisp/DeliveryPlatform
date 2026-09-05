@@ -1,0 +1,111 @@
+apiVersion: k6.io/v1alpha1
+kind: TestRun
+metadata:
+  name: ride-payment-ingress
+  namespace: resilience-test
+  labels:
+    app.kubernetes.io/name: ride-payment-ingress
+    app.kubernetes.io/part-of: delivery-platform-resilience-testing
+    resilience.delivery-platform.io/environment: non-production
+spec:
+  parallelism: 3
+  separate: true
+  script:
+    configMap:
+      name: ride-payment-ingress-script
+      file: ride_payment_ingress.js
+  runner:
+    serviceAccountName: resilience-k6-runner
+    env:
+      - name: TARGET_ENV
+        valueFrom:
+          configMapKeyRef:
+            name: resilience-k6-run-config
+            key: TARGET_ENV
+      - name: MATCHING_BASE_URL
+        valueFrom:
+          configMapKeyRef:
+            name: resilience-k6-run-config
+            key: MATCHING_BASE_URL
+      - name: PAYMENT_BASE_URL
+        valueFrom:
+          configMapKeyRef:
+            name: resilience-k6-run-config
+            key: PAYMENT_BASE_URL
+      - name: RUN_ID
+        valueFrom:
+          configMapKeyRef:
+            name: resilience-k6-run-config
+            key: RUN_ID
+      - name: TRIP_ID_PREFIX
+        valueFrom:
+          configMapKeyRef:
+            name: resilience-k6-run-config
+            key: TRIP_ID_PREFIX
+      - name: PAYMENT_REFERENCE_PREFIX
+        valueFrom:
+          configMapKeyRef:
+            name: resilience-k6-run-config
+            key: PAYMENT_REFERENCE_PREFIX
+      - name: PAYMENT_EVENT_PREFIX
+        valueFrom:
+          configMapKeyRef:
+            name: resilience-k6-run-config
+            key: PAYMENT_EVENT_PREFIX
+      - name: TRIP_OFFSET
+        valueFrom:
+          configMapKeyRef:
+            name: resilience-k6-run-config
+            key: TRIP_OFFSET
+      - name: PAYMENT_OFFSET
+        valueFrom:
+          configMapKeyRef:
+            name: resilience-k6-run-config
+            key: PAYMENT_OFFSET
+      - name: MATCH_RATE_PER_SECOND
+        valueFrom:
+          configMapKeyRef:
+            name: resilience-k6-run-config
+            key: MATCH_RATE_PER_SECOND
+      - name: MATCH_DURATION
+        valueFrom:
+          configMapKeyRef:
+            name: resilience-k6-run-config
+            key: MATCH_DURATION
+      - name: PAYMENT_RATE_PER_SECOND
+        valueFrom:
+          configMapKeyRef:
+            name: resilience-k6-run-config
+            key: PAYMENT_RATE_PER_SECOND
+      - name: PAYMENT_DURATION
+        valueFrom:
+          configMapKeyRef:
+            name: resilience-k6-run-config
+            key: PAYMENT_DURATION
+      - name: PRE_ALLOCATED_VUS
+        valueFrom:
+          configMapKeyRef:
+            name: resilience-k6-run-config
+            key: PRE_ALLOCATED_VUS
+      - name: MAX_VUS
+        valueFrom:
+          configMapKeyRef:
+            name: resilience-k6-run-config
+            key: MAX_VUS
+      - name: INTERNAL_SERVICE_TOKEN
+        valueFrom:
+          secretKeyRef:
+            name: resilience-k6-credentials
+            key: internal-service-token
+      - name: WEBHOOK_SECRET
+        valueFrom:
+          secretKeyRef:
+            name: resilience-k6-credentials
+            key: payment-webhook-secret
+    resources:
+      requests:
+        cpu: "500m"
+        memory: "512Mi"
+      limits:
+        cpu: "2"
+        memory: "2Gi"

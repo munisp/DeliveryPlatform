@@ -1,0 +1,1098 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  labels:
+    app.kubernetes.io/part-of: deliveryplatform-resilience-monitoring
+    kubernetes.io/metadata.name: monitoring
+    resilience.delivery-platform.io/environment: non-production
+  name: monitoring
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  labels:
+    app.kubernetes.io/part-of: deliveryplatform-resilience-monitoring
+    kubernetes.io/metadata.name: resilience-test
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/warn: restricted
+    resilience.delivery-platform.io/environment: non-production
+  name: resilience-test
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  labels:
+    app.kubernetes.io/part-of: deliveryplatform-resilience-monitoring
+    resilience.delivery-platform.io/environment: non-production
+  name: alertmanager-platform
+  namespace: monitoring
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  labels:
+    app.kubernetes.io/part-of: deliveryplatform-resilience-monitoring
+    resilience.delivery-platform.io/environment: non-production
+  name: kube-state-metrics
+  namespace: monitoring
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  labels:
+    app.kubernetes.io/part-of: deliveryplatform-resilience-monitoring
+    resilience.delivery-platform.io/environment: non-production
+  name: prometheus-platform
+  namespace: monitoring
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/part-of: deliveryplatform-resilience-monitoring
+    resilience.delivery-platform.io/environment: non-production
+  name: kube-state-metrics-readonly
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  - secrets
+  - nodes
+  - pods
+  - services
+  - resourcequotas
+  - replicationcontrollers
+  - limitranges
+  - persistentvolumeclaims
+  - persistentvolumes
+  - namespaces
+  verbs:
+  - list
+  - watch
+- apiGroups:
+  - apps
+  resources:
+  - daemonsets
+  - deployments
+  - replicasets
+  - statefulsets
+  verbs:
+  - list
+  - watch
+- apiGroups:
+  - batch
+  resources:
+  - cronjobs
+  - jobs
+  verbs:
+  - list
+  - watch
+- apiGroups:
+  - autoscaling
+  resources:
+  - horizontalpodautoscalers
+  verbs:
+  - list
+  - watch
+- apiGroups:
+  - policy
+  resources:
+  - poddisruptionbudgets
+  verbs:
+  - list
+  - watch
+- apiGroups:
+  - networking.k8s.io
+  resources:
+  - networkpolicies
+  - ingresses
+  verbs:
+  - list
+  - watch
+- apiGroups:
+  - storage.k8s.io
+  resources:
+  - storageclasses
+  - volumeattachments
+  verbs:
+  - list
+  - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/part-of: deliveryplatform-resilience-monitoring
+    resilience.delivery-platform.io/environment: non-production
+  name: prometheus-platform-discovery
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - nodes
+  - nodes/metrics
+  - services
+  - endpoints
+  - pods
+  - namespaces
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - discovery.k8s.io
+  resources:
+  - endpointslices
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - networking.k8s.io
+  resources:
+  - ingresses
+  verbs:
+  - get
+  - list
+  - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  labels:
+    app.kubernetes.io/part-of: deliveryplatform-resilience-monitoring
+    resilience.delivery-platform.io/environment: non-production
+  name: kube-state-metrics-readonly
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kube-state-metrics-readonly
+subjects:
+- kind: ServiceAccount
+  name: kube-state-metrics
+  namespace: monitoring
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  labels:
+    app.kubernetes.io/part-of: deliveryplatform-resilience-monitoring
+    resilience.delivery-platform.io/environment: non-production
+  name: prometheus-platform-discovery
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: prometheus-platform-discovery
+subjects:
+- kind: ServiceAccount
+  name: prometheus-platform
+  namespace: monitoring
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app.kubernetes.io/name: kube-state-metrics
+    app.kubernetes.io/part-of: deliveryplatform-resilience-monitoring
+    prometheus: platform
+    resilience.delivery-platform.io/environment: non-production
+  name: kube-state-metrics
+  namespace: monitoring
+spec:
+  ports:
+  - name: http
+    port: 8080
+    targetPort: http
+  selector:
+    app.kubernetes.io/name: kube-state-metrics
+    app.kubernetes.io/part-of: deliveryplatform-resilience-monitoring
+    resilience.delivery-platform.io/environment: non-production
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app.kubernetes.io/name: kube-state-metrics
+    app.kubernetes.io/part-of: deliveryplatform-resilience-monitoring
+    resilience.delivery-platform.io/environment: non-production
+  name: kube-state-metrics
+  namespace: monitoring
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kube-state-metrics
+      app.kubernetes.io/part-of: deliveryplatform-resilience-monitoring
+      resilience.delivery-platform.io/environment: non-production
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kube-state-metrics
+        app.kubernetes.io/part-of: deliveryplatform-resilience-monitoring
+        resilience.delivery-platform.io/environment: non-production
+    spec:
+      automountServiceAccountToken: true
+      containers:
+      - args:
+        - --resources=jobs,pods,namespaces
+        - --metric-labels-allowlist=jobs=[app.kubernetes.io/name]
+        image: registry.invalid/deliveryplatform/kube-state-metrics@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+        livenessProbe:
+          httpGet:
+            path: /livez
+            port: http
+        name: kube-state-metrics
+        ports:
+        - containerPort: 8080
+          name: http
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: http
+        resources:
+          limits:
+            cpu: 200m
+            memory: 256Mi
+          requests:
+            cpu: 25m
+            memory: 64Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      serviceAccountName: kube-state-metrics
+---
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  labels:
+    app.kubernetes.io/part-of: deliveryplatform-resilience-monitoring
+    resilience.delivery-platform.io/environment: non-production
+  name: matrix-escalation-bridge-auth
+  namespace: monitoring
+spec:
+  data:
+  - remoteRef:
+      key: deliveryplatform/staging/resilience/matrix-escalation-bridge
+      property: token
+    secretKey: token
+  refreshInterval: 1h
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: platform-staging-secrets
+  target:
+    creationPolicy: Owner
+    name: matrix-escalation-bridge-auth
+    template:
+      type: Opaque
+---
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  labels:
+    app.kubernetes.io/part-of: deliveryplatform-resilience-monitoring
+    resilience.delivery-platform.io/environment: non-production
+  name: wazuh-escalation-bridge-auth
+  namespace: monitoring
+spec:
+  data:
+  - remoteRef:
+      key: deliveryplatform/staging/resilience/wazuh-escalation-bridge
+      property: token
+    secretKey: token
+  refreshInterval: 1h
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: platform-staging-secrets
+  target:
+    creationPolicy: Owner
+    name: wazuh-escalation-bridge-auth
+    template:
+      type: Opaque
+---
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  labels:
+    app.kubernetes.io/part-of: deliveryplatform-resilience-monitoring
+    resilience.delivery-platform.io/environment: non-production
+  name: resilience-circuit-breaker-alert-receiver
+  namespace: resilience-test
+spec:
+  data:
+  - remoteRef:
+      key: deliveryplatform/staging/resilience/circuit-breaker-alert-receiver
+      property: token
+    secretKey: token
+  refreshInterval: 1h
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: platform-staging-secrets
+  target:
+    creationPolicy: Owner
+    name: resilience-circuit-breaker-alert-receiver
+    template:
+      type: Opaque
+---
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  labels:
+    app.kubernetes.io/part-of: deliveryplatform-resilience-monitoring
+    resilience.delivery-platform.io/environment: non-production
+  name: resilience-circuit-breaker-alert-receiver-tls
+  namespace: resilience-test
+spec:
+  data:
+  - remoteRef:
+      key: deliveryplatform/staging/resilience/circuit-breaker-alert-receiver-tls
+      property: tls_crt
+    secretKey: tls.crt
+  - remoteRef:
+      key: deliveryplatform/staging/resilience/circuit-breaker-alert-receiver-tls
+      property: tls_key
+    secretKey: tls.key
+  refreshInterval: 1h
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: platform-staging-secrets
+  target:
+    creationPolicy: Owner
+    name: resilience-circuit-breaker-alert-receiver-tls
+    template:
+      type: kubernetes.io/tls
+---
+apiVersion: monitoring.coreos.com/v1
+kind: Alertmanager
+metadata:
+  labels:
+    app.kubernetes.io/instance: platform
+    app.kubernetes.io/name: alertmanager
+    app.kubernetes.io/part-of: deliveryplatform-resilience-monitoring
+    resilience.delivery-platform.io/environment: non-production
+  name: platform
+  namespace: monitoring
+spec:
+  alertmanagerConfigNamespaceSelector:
+    matchLabels:
+      kubernetes.io/metadata.name: monitoring
+  alertmanagerConfigSelector:
+    matchLabels:
+      alertmanagerConfig: enabled
+  image: registry.invalid/deliveryplatform/alertmanager@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+  replicas: 2
+  serviceAccountName: alertmanager-platform
+  storage:
+    volumeClaimTemplate:
+      spec:
+        accessModes:
+        - ReadWriteOnce
+        resources:
+          requests:
+            storage: 5Gi
+        storageClassName: staging-render-only
+---
+apiVersion: monitoring.coreos.com/v1
+kind: Prometheus
+metadata:
+  labels:
+    app.kubernetes.io/instance: platform
+    app.kubernetes.io/name: prometheus
+    app.kubernetes.io/part-of: deliveryplatform-resilience-monitoring
+    resilience.delivery-platform.io/environment: non-production
+  name: platform
+  namespace: monitoring
+spec:
+  alerting:
+    alertmanagers:
+    - name: alertmanager-operated
+      namespace: monitoring
+      port: web
+  enableAdminAPI: false
+  externalLabels:
+    cluster: staging-render-only
+    environment: staging
+  image: registry.invalid/deliveryplatform/prometheus@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  replicas: 2
+  retention: 7d
+  retentionSize: 20GB
+  ruleNamespaceSelector:
+    matchLabels:
+      kubernetes.io/metadata.name: monitoring
+  ruleSelector:
+    matchLabels:
+      prometheus: platform
+  serviceAccountName: prometheus-platform
+  serviceMonitorNamespaceSelector:
+    matchLabels:
+      resilience.delivery-platform.io/environment: non-production
+  serviceMonitorSelector:
+    matchLabels:
+      prometheus: platform
+  storage:
+    volumeClaimTemplate:
+      spec:
+        accessModes:
+        - ReadWriteOnce
+        resources:
+          requests:
+            storage: 20Gi
+        storageClassName: staging-render-only
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  labels:
+    app.kubernetes.io/part-of: deliveryplatform-resilience-monitoring
+    prometheus: platform
+    resilience.delivery-platform.io/environment: non-production
+  name: kube-state-metrics
+  namespace: monitoring
+spec:
+  endpoints:
+  - interval: 30s
+    path: /metrics
+    port: http
+  namespaceSelector:
+    matchNames:
+    - monitoring
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kube-state-metrics
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  labels:
+    app.kubernetes.io/part-of: deliveryplatform-resilience-monitoring
+    resilience.delivery-platform.io/environment: non-production
+  name: monitoring-resilience-egress
+  namespace: monitoring
+spec:
+  egress:
+  - ports:
+    - port: 8443
+      protocol: TCP
+    to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: resilience-test
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: resilience-circuit-breaker-alert-receiver
+          app.kubernetes.io/part-of: deliveryplatform-resilience-monitoring
+          resilience.delivery-platform.io/environment: non-production
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: resilience-test
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: matrix-escalation-bridge
+          app.kubernetes.io/part-of: deliveryplatform-resilience-monitoring
+          resilience.delivery-platform.io/environment: non-production
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: resilience-test
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: wazuh-escalation-bridge
+          app.kubernetes.io/part-of: deliveryplatform-resilience-monitoring
+          resilience.delivery-platform.io/environment: non-production
+  - ports:
+    - port: 8080
+      protocol: TCP
+    to:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: kube-state-metrics
+          app.kubernetes.io/part-of: deliveryplatform-resilience-monitoring
+          resilience.delivery-platform.io/environment: non-production
+  - ports:
+    - port: 53
+      protocol: UDP
+    to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kube-system
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/part-of: deliveryplatform-resilience-monitoring
+          k8s-app: kube-dns
+          resilience.delivery-platform.io/environment: non-production
+  podSelector:
+    matchExpressions:
+    - key: app.kubernetes.io/name
+      operator: In
+      values:
+      - prometheus
+      - alertmanager
+  policyTypes:
+  - Egress
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/part-of: deliveryplatform
+    prometheus: platform
+  name: deliveryplatform-availability
+  namespace: monitoring
+spec:
+  groups:
+  - name: deliveryplatform.node-failure
+    rules:
+    - alert: DeliveryPlatformNodeNotReady
+      annotations:
+        runbook_url: https://runbooks.staging-render-only.invalid/node-failure
+        summary: Kubernetes node {{ $labels.node }} is not Ready
+      expr: kube_node_status_condition{condition="Ready",status="true"} == 0
+      for: 10m
+      labels:
+        service: kubernetes
+        severity: critical
+    - alert: DeliveryPlatformNodePressure
+      annotations:
+        runbook_url: https://runbooks.staging-render-only.invalid/node-failure
+        summary: Kubernetes node {{ $labels.node }} reports {{ $labels.condition }}
+      expr: max by (node, condition) (kube_node_status_condition{condition=~"MemoryPressure|DiskPressure|PIDPressure",status="true"})
+        == 1
+      for: 10m
+      labels:
+        service: kubernetes
+        severity: warning
+  - name: deliveryplatform.workload-availability
+    rules:
+    - alert: DeliveryPlatformDeploymentUnavailable
+      annotations:
+        runbook_url: https://runbooks.staging-render-only.invalid/node-failure
+        summary: Deployment {{ $labels.deployment }} has unavailable replicas
+      expr: kube_deployment_status_replicas_available{namespace="switchos"} < kube_deployment_spec_replicas{namespace="switchos"}
+      for: 10m
+      labels:
+        service: deliveryplatform
+        severity: critical
+    - alert: DeliveryPlatformPDBExhausted
+      annotations:
+        runbook_url: https://runbooks.staging-render-only.invalid/node-failure
+        summary: PDB {{ $labels.poddisruptionbudget }} has no voluntary-disruption
+          headroom
+      expr: kube_poddisruptionbudget_status_current_healthy{namespace="switchos"}
+        <= kube_poddisruptionbudget_status_desired_healthy{namespace="switchos"}
+      for: 5m
+      labels:
+        service: deliveryplatform
+        severity: warning
+    - alert: DeliveryPlatformHPAMaxedOut
+      annotations:
+        runbook_url: https://runbooks.staging-render-only.invalid/node-failure
+        summary: HPA {{ $labels.horizontalpodautoscaler }} is at its maximum replica
+          count
+      expr: kube_horizontalpodautoscaler_status_current_replicas{namespace="switchos"}
+        >= kube_horizontalpodautoscaler_spec_max_replicas{namespace="switchos"}
+      for: 15m
+      labels:
+        service: deliveryplatform
+        severity: warning
+    - alert: DeliveryPlatformContainerRestartStorm
+      annotations:
+        runbook_url: https://runbooks.staging-render-only.invalid/node-failure
+        summary: Container {{ $labels.container }} is restarting repeatedly
+      expr: sum by (namespace, pod, container) (increase(kube_pod_container_status_restarts_total{namespace="switchos"}[15m]))
+        >= 3
+      for: 5m
+      labels:
+        service: deliveryplatform
+        severity: warning
+  - name: deliveryplatform.secret-synchronization
+    rules:
+    - alert: DeliveryPlatformExternalSecretNotReady
+      annotations:
+        runbook_url: https://runbooks.staging-render-only.invalid/node-failure
+        summary: ExternalSecret {{ $labels.name }} is not synchronized
+      expr: externalsecret_status_condition{namespace="switchos",condition="Ready",status="false"}
+        == 1
+      for: 10m
+      labels:
+        service: deliveryplatform
+        severity: critical
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/part-of: deliveryplatform
+    prometheus: platform
+    resilience.delivery-platform.io/environment: non-production
+  name: deliveryplatform-resilience-invariant-probe
+  namespace: monitoring
+spec:
+  groups:
+  - name: deliveryplatform.resilience-invariant-probe
+    rules:
+    - alert: ResilienceInvariantProbeFailed
+      annotations:
+        description: The isolated PostgreSQL probe detected a queue, offer, assignment,
+          ledger, verification, or webhook-processing anomaly. Stop the active TestRun,
+          clear Toxiproxy, delete PodChaos, open the resilience circuit breaker, and
+          start the P0 incident procedure.
+        runbook_url: https://runbooks.staging-render-only.invalid/resilience-invariant-probe
+        summary: Resilience invariant probe {{ $labels.job_name }} failed
+      expr: max by (namespace, job_name) (kube_job_status_failed{namespace="resilience-test",job_name=~"resilience-invariant-.*"})
+        > 0
+      for: 0m
+      labels:
+        circuit_breaker: open
+        namespace: resilience-test
+        resilience.delivery-platform.io/environment: non-production
+        service: deliveryplatform-resilience
+        severity: critical
+    - alert: ResilienceInvariantProbeStalled
+      annotations:
+        description: The isolated invariant Job has neither succeeded nor failed after
+          its bounded window. Stop the active TestRun, clear injected faults, open
+          the resilience circuit breaker, preserve artifacts, and investigate queue
+          drain, database availability, and Job status.
+        runbook_url: https://runbooks.staging-render-only.invalid/resilience-invariant-probe
+        summary: Resilience invariant probe {{ $labels.job_name }} exceeded its 35-minute
+          window
+      expr: (time() - max by (namespace, job_name) (kube_job_status_start_time{namespace="resilience-test",job_name=~"resilience-invariant-.*"})
+        > 2100) and on (namespace, job_name) (max by (namespace, job_name) (kube_job_status_succeeded{namespace="resilience-test",job_name=~"resilience-invariant-.*"})
+        == 0) and on (namespace, job_name) (max by (namespace, job_name) (kube_job_status_failed{namespace="resilience-test",job_name=~"resilience-invariant-.*"})
+        == 0)
+      for: 1m
+      labels:
+        circuit_breaker: open
+        namespace: resilience-test
+        resilience.delivery-platform.io/environment: non-production
+        service: deliveryplatform-resilience
+        severity: critical
+    - alert: ResilienceInvariantProbeMissing
+      annotations:
+        description: Review whether the generated Job is pending, unscheduled, blocked
+          on image pull, or missing metric scrape coverage. Do not close the circuit
+          breaker based on this alert alone.
+        runbook_url: https://runbooks.staging-render-only.invalid/resilience-invariant-probe
+        summary: Resilience invariant probe {{ $labels.job_name }} has not reported
+          success
+      expr: kube_job_status_succeeded{namespace="resilience-test",job_name=~"resilience-invariant-.*"}
+        == 0 unless on (namespace, job_name) kube_job_status_failed{namespace="resilience-test",job_name=~"resilience-invariant-.*"}
+        > 0
+      for: 45m
+      labels:
+        circuit_breaker: review
+        namespace: resilience-test
+        resilience.delivery-platform.io/environment: non-production
+        service: deliveryplatform-resilience
+        severity: warning
+  - name: deliveryplatform.resilience-circuit-breaker-receiver
+    rules:
+    - expr: sum by (alertname) (increase(resilience_circuit_breaker_patch_failures_total[10m]))
+      record: resilience:circuit_breaker_patch_failures_10m
+    - alert: ResilienceCircuitBreakerPatchFailureEscalation
+      annotations:
+        description: Investigate receiver authentication, NetworkPolicy, service-account
+          RBAC, Kubernetes API availability, and the ConfigMap state. The receiver
+          must not retry by broadening privileges or close the breaker.
+        runbook_url: https://runbooks.staging-render-only.invalid/resilience-circuit-breaker-receiver
+        summary: Circuit-breaker receiver failed to open the breaker after three attempts
+      expr: resilience:circuit_breaker_patch_failures_10m >= 3
+      for: 0m
+      labels:
+        circuit_breaker: manual_intervention_required
+        namespace: resilience-test
+        resilience.delivery-platform.io/environment: non-production
+        service: deliveryplatform-resilience
+        severity: critical
+---
+apiVersion: monitoring.coreos.com/v1alpha1
+kind: AlertmanagerConfig
+metadata:
+  labels:
+    alertmanagerConfig: enabled
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/part-of: deliveryplatform-resilience-testing
+  name: resilience-circuit-breaker
+  namespace: monitoring
+spec:
+  receivers:
+  - name: resilience-circuit-breaker-open
+    webhookConfigs:
+    - httpConfig:
+        authorization:
+          credentials:
+            key: token
+            name: resilience-circuit-breaker-alert-receiver-auth
+          type: Bearer
+        tlsConfig:
+          ca:
+            configMap:
+              key: ca.crt
+              name: resilience-circuit-breaker-alert-receiver-ca
+          serverName: resilience-circuit-breaker-alert-receiver.resilience-test.svc
+      maxAlerts: 10
+      sendResolved: false
+      url: https://resilience-circuit-breaker-alert-receiver.resilience-test.svc:8443/v1/alertmanager/open
+  route:
+    groupBy:
+    - alertname
+    - resilience_run_id
+    - change_id
+    groupInterval: 5m
+    groupWait: 10s
+    matchers:
+    - matchType: =
+      name: severity
+      value: critical
+    - matchType: =
+      name: namespace
+      value: resilience-test
+    - matchType: =
+      name: circuit_breaker
+      value: open
+    receiver: resilience-circuit-breaker-open
+    repeatInterval: 4h
+---
+apiVersion: monitoring.coreos.com/v1alpha1
+kind: AlertmanagerConfig
+metadata:
+  labels:
+    alertmanagerConfig: enabled
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/part-of: deliveryplatform-resilience-testing
+  name: resilience-matrix-wazuh-escalation
+  namespace: monitoring
+spec:
+  receivers:
+  - name: resilience-matrix-wazuh-fanout
+    webhookConfigs:
+    - httpConfig:
+        authorization:
+          credentials:
+            key: token
+            name: matrix-escalation-bridge-auth
+          type: Bearer
+        tlsConfig:
+          ca:
+            configMap:
+              key: ca.crt
+              name: matrix-escalation-bridge-ca
+          serverName: matrix-escalation-bridge.resilience-test.svc
+      maxAlerts: 10
+      sendResolved: false
+      url: https://matrix-escalation-bridge.resilience-test.svc:8443/v1/alerts
+    - httpConfig:
+        authorization:
+          credentials:
+            key: token
+            name: wazuh-escalation-bridge-auth
+          type: Bearer
+        tlsConfig:
+          ca:
+            configMap:
+              key: ca.crt
+              name: wazuh-escalation-bridge-ca
+          serverName: wazuh-escalation-bridge.resilience-test.svc
+      maxAlerts: 10
+      sendResolved: false
+      url: https://wazuh-escalation-bridge.resilience-test.svc:8443/v1/alerts
+  route:
+    groupBy:
+    - alertname
+    - change_id
+    groupInterval: 5m
+    groupWait: 0s
+    matchers:
+    - matchType: =
+      name: alertname
+      value: ResilienceCircuitBreakerPatchFailureEscalation
+    - matchType: =
+      name: severity
+      value: critical
+    - matchType: =
+      name: namespace
+      value: resilience-test
+    receiver: resilience-matrix-wazuh-fanout
+    repeatInterval: 30m
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: resilience-circuit-breaker-alert-receiver
+  namespace: resilience-test
+  labels:
+    app.kubernetes.io/name: resilience-circuit-breaker-alert-receiver
+    resilience.delivery-platform.io/environment: non-production
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: resilience-circuit-breaker-alert-receiver
+  namespace: resilience-test
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["resilience-validation-circuit-breaker"]
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: resilience-circuit-breaker-alert-receiver
+  namespace: resilience-test
+subjects:
+  - kind: ServiceAccount
+    name: resilience-circuit-breaker-alert-receiver
+    namespace: resilience-test
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: resilience-circuit-breaker-alert-receiver
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: resilience-circuit-breaker-alert-receiver
+  namespace: resilience-test
+  labels:
+    app.kubernetes.io/name: resilience-circuit-breaker-alert-receiver
+spec:
+  selector:
+    app.kubernetes.io/name: resilience-circuit-breaker-alert-receiver
+  ports:
+    - name: https
+      port: 8443
+      targetPort: https
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: resilience-circuit-breaker-alert-receiver
+  namespace: resilience-test
+  labels:
+    app.kubernetes.io/name: resilience-circuit-breaker-alert-receiver
+    resilience.delivery-platform.io/environment: non-production
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: resilience-circuit-breaker-alert-receiver
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: resilience-circuit-breaker-alert-receiver
+        resilience.delivery-platform.io/environment: non-production
+    spec:
+      serviceAccountName: resilience-circuit-breaker-alert-receiver
+      automountServiceAccountToken: true
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: receiver
+          image: registry.invalid/deliveryplatform/resilience-circuit-breaker-alert-receiver@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: https
+              containerPort: 8443
+          env:
+            - name: ALERTMANAGER_WEBHOOK_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: resilience-circuit-breaker-alert-receiver
+                  key: token
+            - name: TLS_CERT_FILE
+              value: /var/run/receiver-tls/tls.crt
+            - name: TLS_KEY_FILE
+              value: /var/run/receiver-tls/tls.key
+          volumeMounts:
+            - name: tls
+              mountPath: /var/run/receiver-tls
+              readOnly: true
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          resources:
+            requests: { cpu: 25m, memory: 64Mi }
+            limits: { cpu: 250m, memory: 128Mi }
+          readinessProbe:
+            httpGet: { path: /readyz, port: https, scheme: HTTPS }
+          livenessProbe:
+            httpGet: { path: /healthz, port: https, scheme: HTTPS }
+      volumes:
+        - name: tls
+          secret:
+            secretName: resilience-circuit-breaker-alert-receiver-tls
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: resilience-circuit-breaker-alert-receiver
+  namespace: monitoring
+  labels:
+    prometheus: platform
+    app.kubernetes.io/part-of: deliveryplatform-resilience-testing
+spec:
+  namespaceSelector:
+    matchNames: ["resilience-test"]
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: resilience-circuit-breaker-alert-receiver
+  endpoints:
+    - port: https
+      path: /metrics
+      scheme: https
+      interval: 30s
+      tlsConfig:
+        serverName: resilience-circuit-breaker-alert-receiver.resilience-test.svc
+        ca:
+          configMap:
+            name: resilience-circuit-breaker-alert-receiver-ca
+            key: ca.crt
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: resilience-circuit-breaker-alert-receiver-ingress
+  namespace: resilience-test
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: resilience-circuit-breaker-alert-receiver
+  policyTypes: ["Ingress", "Egress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: alertmanager
+      ports:
+        - protocol: TCP
+          port: 8443
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+      ports:
+        - protocol: TCP
+          port: 8443
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: default
+      ports:
+        - protocol: TCP
+          port: 443
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: resilience-circuit-breaker-alert-receiver
+  namespace: resilience-test
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: resilience-circuit-breaker-alert-receiver
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: resilience-circuit-breaker-transition-policy
+  labels:
+    app.kubernetes.io/part-of: deliveryplatform-resilience-testing
+    resilience.delivery-platform.io/environment: non-production
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["UPDATE"]
+        resources: ["configmaps"]
+  validations:
+    - expression: "!(object.metadata.namespace == 'resilience-test' && object.metadata.name == 'resilience-validation-circuit-breaker') || (oldObject.data.state in ['closed', 'open', 'half_open'] && object.data.state in ['closed', 'open', 'half_open'])"
+      message: "circuit-breaker state must be closed, open, or half_open"
+    - expression: "!(object.metadata.namespace == 'resilience-test' && object.metadata.name == 'resilience-validation-circuit-breaker' && object.data.state in ['half_open', 'closed'] && object.data.state != oldObject.data.state) || request.userInfo.username == 'system:serviceaccount:resilience-test:resilience-circuit-breaker-operator'"
+      message: "only the dedicated resilience operator may transition the breaker to half_open or closed"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: resilience-circuit-breaker-transition-policy
+  labels:
+    app.kubernetes.io/part-of: deliveryplatform-resilience-testing
+    resilience.delivery-platform.io/environment: non-production
+spec:
+  policyName: resilience-circuit-breaker-transition-policy
+  validationActions: ["Deny", "Audit"]
+  matchResources:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: resilience-test
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: resilience-circuit-breaker-operator
+  namespace: resilience-test
+  labels:
+    app.kubernetes.io/name: resilience-circuit-breaker-operator
+    resilience.delivery-platform.io/environment: non-production
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: resilience-circuit-breaker-operator
+  namespace: resilience-test
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["resilience-validation-circuit-breaker"]
+    verbs: ["get", "patch"]
+  - apiGroups: ["k6.io"]
+    resources: ["testruns"]
+    resourceNames: ["ride-payment-ingress"]
+    verbs: ["get", "delete"]
+  - apiGroups: ["chaos-mesh.org"]
+    resources: ["podchaos"]
+    resourceNames: ["resilience-matching-worker-pod-kill"]
+    verbs: ["get", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: resilience-circuit-breaker-operator
+  namespace: resilience-test
+subjects:
+  - kind: ServiceAccount
+    name: resilience-circuit-breaker-operator
+    namespace: resilience-test
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: resilience-circuit-breaker-operator
