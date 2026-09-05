@@ -48,14 +48,19 @@ require_command sudo
 "$PG_BIN/pg_isready" -q || { printf 'local PostgreSQL server is unavailable\n' >&2; exit 1; }
 
 for role in "$INGESTOR_ROLE" "$REVIEWER_ROLE"; do
-  present="$(sudo -u postgres psql -At -d postgres -c "SELECT 1 FROM pg_roles WHERE rolname = '${role}'" || true)"
+  present="$(sudo -u postgres psql -X -At -v ON_ERROR_STOP=1 -d postgres -c "SELECT 1 FROM pg_roles WHERE rolname = '${role}'" || true)"
   if [[ -z "$present" ]]; then
-    sudo -u postgres psql -v ON_ERROR_STOP=1 -d postgres -c "CREATE ROLE ${role} NOLOGIN" >/dev/null
+    sudo -u postgres psql -X -v ON_ERROR_STOP=1 -d postgres -c "CREATE ROLE ${role} NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS INHERIT" >/dev/null
     if [[ "$role" == "$INGESTOR_ROLE" ]]; then
       created_ingestor_role=true
     else
       created_reviewer_role=true
     fi
+  else
+    unsafe_attributes="$(sudo -u postgres psql -X -At -v ON_ERROR_STOP=1 -d postgres -c "SELECT COUNT(*) FROM pg_roles WHERE rolname = '${role}' AND (rolcanlogin OR rolsuper OR rolcreaterole OR rolcreatedb OR rolreplication OR rolbypassrls)")"
+    [[ "$unsafe_attributes" == "0" ]] || { printf 'existing settlement role has unsafe attributes: %s\n' "$role" >&2; exit 1; }
+    role_memberships="$(sudo -u postgres psql -X -At -v ON_ERROR_STOP=1 -d postgres -c "SELECT COUNT(*) FROM pg_auth_members AS membership JOIN pg_roles AS member_role ON member_role.oid = membership.member JOIN pg_roles AS granted_role ON granted_role.oid = membership.roleid WHERE member_role.rolname = '${role}' OR granted_role.rolname = '${role}'")"
+    [[ "$role_memberships" == "0" ]] || { printf 'existing settlement role has unexpected membership: %s\n' "$role" >&2; exit 1; }
   fi
 done
 
