@@ -1,0 +1,7 @@
+{
+  "passed": true,
+  "evidence_count": 11,
+  "eligible_before_expiry": true,
+  "eligible_after_expiry": false,
+  "presence_after_expiry": "compliance_suspended"
+}

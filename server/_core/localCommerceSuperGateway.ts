@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { ENV } from "./env";
 import {
   getBusinessTravelSummary,
@@ -836,5 +837,5 @@ function shouldSampleTrace(traceId: string) {
 }
 
 function generateTraceId(prefix: string) {
-  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  return `${prefix}-${randomUUID()}`;
 }

@@ -1,0 +1,1 @@
+{"trip_id":"20000000-0000-0000-0000-000000000005","zone_id":"20000000-0000-0000-0000-000000000001","city_code":"LAG","request_id":"20000000-0000-0000-0000-000000000007","idempotency_key":"surge-quote-integration-0001","base_fare_kobo":10000,"demand_count":30,"supply_count":10,"market_source_version":1,"h3_cell":"8928308280fffff","quote_ttl_seconds":300}

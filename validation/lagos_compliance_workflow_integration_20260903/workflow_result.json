@@ -1,0 +1,13 @@
+{
+  "passed": true,
+  "evidence_count": 11,
+  "eligibility_before_expiry": {
+    "driver_user_id": 101,
+    "eligible": true,
+    "eligible_until": "2026-10-04T13:03:13.873946+00:00",
+    "exclusion_code": null,
+    "policy_version": "lagos-private-beta-v1",
+    "version": 17,
+    "presence_state": "offline"
+  }
+}

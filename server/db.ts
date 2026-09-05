@@ -1,5 +1,5 @@
 import { and, desc, eq, ilike, or, sql } from "drizzle-orm";
-import { createHash } from "node:crypto";
+import { createHash, randomInt, randomUUID } from "node:crypto";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 import { 
@@ -76,6 +76,12 @@ export async function getFinancialAdminSnapshot(): Promise<FinancialAdminSnapsho
 }
 
 // Lazily create the drizzle instance so local tooling can run without a DB.
+export async function getPool(): Promise<Pool> {
+  await getDb();
+  if (!_pool) throw new DatabaseUnavailableError("postgres_pool");
+  return _pool;
+}
+
 export async function getDb() {
   if (!_db && ENV.databaseUrl) {
     try {
@@ -3760,7 +3766,7 @@ export async function redeemPoints(userId: number, rewardId: number, idempotency
       [userId, -reward.points_cost, `Redeemed: ${reward.reward_name}`],
     );
 
-    const voucherCode = `REWARD-${Date.now()}-${Math.random().toString(36).substr(2, 9).toUpperCase()}`;
+    const voucherCode = `REWARD-${Date.now()}-${randomUUID().replace(/-/g, "").toUpperCase()}`;
     const expiresAt = new Date();
     expiresAt.setDate(expiresAt.getDate() + 30);
 
@@ -4080,7 +4086,7 @@ export async function generateReferralCode(userId: number) {
   if (!_pool) return null;
 
   // Generate a unique 8-character code
-  const code = Math.random().toString(36).substring(2, 10).toUpperCase();
+  const code = randomUUID().replace(/-/g, "").slice(0, 8).toUpperCase();
 
   const result = await _pool.query<any>(
     'UPDATE users SET referral_code = $1 WHERE id = $2 RETURNING referral_code',
@@ -5299,7 +5305,7 @@ export async function assignVariantToUser(campaignId: number, userId: number): P
   }
 
   // Select variant based on traffic allocation
-  const random = Math.random() * 100;
+  const random = randomInt(0, 10_000) / 100;
   let cumulativeAllocation = 0;
   let selectedVariant = variants[0];
 
@@ -6963,9 +6969,17 @@ export async function getCheckoutSummary(limit = 6) {
   if (!_pool) throw new DatabaseUnavailableError("checkout_summary");
   const [membershipResult, rewardsResult, orderResult, merchantResult, transactionResult] = await Promise.all([
     _pool.query<any>(`
-      SELECT plan_name, status, monthly_price, cashback_rate, delivery_fee_discount, savings_ytd, renewal_at
-      FROM consumer_memberships
-      ORDER BY renewal_at ASC NULLS LAST
+      SELECT
+        COALESCE(plan.plan_name, 'Unassigned membership') AS plan_name,
+        membership.status,
+        COALESCE(plan.monthly_price, 0) AS monthly_price,
+        COALESCE(plan.cashback_rate, 0) AS cashback_rate,
+        COALESCE(plan.delivery_fee_discount, 0) AS delivery_fee_discount,
+        membership.savings_ytd,
+        membership.renewal_at
+      FROM consumer_memberships AS membership
+      LEFT JOIN membership_plans AS plan ON plan.id = membership.plan_id
+      ORDER BY membership.renewal_at ASC NULLS LAST
       LIMIT $1
     `, [limit]),
     _pool.query<any>(`
@@ -6989,7 +7003,7 @@ export async function getCheckoutSummary(limit = 6) {
     _pool.query<any>(`
       SELECT type, status, amount, created_at
       FROM transactions
-      WHERE type IN ('payment', 'refund', 'chargeback')
+      WHERE type::text IN ('payment', 'refund', 'chargeback')
       ORDER BY created_at DESC NULLS LAST
       LIMIT $1
     `, [Math.max(limit, 10)]),
@@ -7687,7 +7701,6 @@ export async function getMultiVerticalCommerceSummary() {
 
 export async function getMobilityOverviewSummary(limit = 8) {
   await getDb();
-  throw new Error("VERIFIED_DATA_UNAVAILABLE:mobility_overview");
   if (!_pool) return null;
 
   const [orderResult, driverResult, providerResult] = await Promise.all([
@@ -7756,7 +7769,6 @@ export async function getMobilityOverviewSummary(limit = 8) {
 
 export async function getRiderAppSummary(limit = 6) {
   await getDb();
-  throw new Error("VERIFIED_DATA_UNAVAILABLE:rider_app");
   if (!_pool) return null;
 
   const [orderResult, providerResult] = await Promise.all([
@@ -7809,7 +7821,6 @@ export async function getRiderAppSummary(limit = 6) {
 
 export async function getDriverMobilitySummary(limit = 8) {
   await getDb();
-  throw new Error("VERIFIED_DATA_UNAVAILABLE:driver_mobility_summary");
   if (!_pool) return null;
 
   const [driverResult, orderResult] = await Promise.all([
@@ -7860,7 +7871,6 @@ export async function getDriverMobilitySummary(limit = 8) {
 
 export async function getBusinessTravelSummary(limit = 8) {
   await getDb();
-  throw new Error("VERIFIED_DATA_UNAVAILABLE:business_travel");
   if (!_pool) return null;
 
   const [userResult, orderResult] = await Promise.all([
@@ -7912,7 +7922,6 @@ export async function getBusinessTravelSummary(limit = 8) {
 
 export async function getFreightSummary(limit = 8) {
   await getDb();
-  throw new Error("VERIFIED_DATA_UNAVAILABLE:freight");
   if (!_pool) return null;
 
   const [providerResult, orderResult] = await Promise.all([
@@ -7959,7 +7968,6 @@ export async function getFreightSummary(limit = 8) {
 
 export async function getHealthcareTransportSummary(limit = 8) {
   await getDb();
-  throw new Error("VERIFIED_DATA_UNAVAILABLE:healthcare_transport");
   if (!_pool) return null;
 
   const [providerResult, orderResult] = await Promise.all([
@@ -8005,7 +8013,6 @@ export async function getHealthcareTransportSummary(limit = 8) {
 
 export async function getMerchantChannelsSummary(limit = 8) {
   await getDb();
-  throw new Error("VERIFIED_DATA_UNAVAILABLE:merchant_channels_summary");
   if (!_pool) return null;
 
   const [providerResult, campaignResult] = await Promise.all([
@@ -8060,7 +8067,6 @@ export async function getMerchantChannelsSummary(limit = 8) {
 
 export async function getPhoneOrderingSummary(limit = 8) {
   await getDb();
-  throw new Error("VERIFIED_DATA_UNAVAILABLE:phone_ordering_summary");
   if (!_pool) return null;
 
   const [providerResult, ticketResult] = await Promise.all([
@@ -8104,7 +8110,6 @@ export async function getPhoneOrderingSummary(limit = 8) {
 
 export async function getTablesideOrderingSummary(limit = 8) {
   await getDb();
-  throw new Error("VERIFIED_DATA_UNAVAILABLE:tableside_ordering_summary");
   if (!_pool) return null;
 
   const providerResult = await _pool.query<any>(`
@@ -8136,7 +8141,6 @@ export async function getTablesideOrderingSummary(limit = 8) {
 
 export async function getWhiteLabelAppsSummary(limit = 8) {
   await getDb();
-  throw new Error("VERIFIED_DATA_UNAVAILABLE:white_label_apps_summary");
   if (!_pool) return null;
 
   const providerResult = await _pool.query<any>(`

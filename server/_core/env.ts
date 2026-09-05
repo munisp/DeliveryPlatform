@@ -222,6 +222,7 @@ export const ENV = {
   retailForecastServiceUrl: process.env.RETAIL_FORECAST_SERVICE_URL ?? "http://127.0.0.1:8115",
   procurementPlannerServiceUrl: process.env.PROCUREMENT_PLANNER_SERVICE_URL ?? "http://127.0.0.1:8116",
   inventoryControlServiceUrl: process.env.INVENTORY_CONTROL_SERVICE_URL ?? "http://127.0.0.1:8117",
+  complianceReviewServiceUrl: process.env.COMPLIANCE_REVIEW_SERVICE_URL ?? "http://127.0.0.1:8125",
   localCommerceWorkspaceCacheTtlMs: parseInteger(process.env.LOCAL_COMMERCE_WORKSPACE_CACHE_TTL_MS, 15000),
   localCommercePlanCacheTtlMs: parseInteger(process.env.LOCAL_COMMERCE_PLAN_CACHE_TTL_MS, 5000),
   localCommerceEnableAsyncEnrichment: parseBoolean(process.env.LOCAL_COMMERCE_ENABLE_ASYNC_ENRICHMENT, true),

@@ -1,0 +1,20 @@
+{
+  "passed": true,
+  "suite": "logistics-microservice-integration",
+  "services": {
+    "compliance_review": {
+      "passed": true,
+      "evidence_count": 11,
+      "eligible_before_expiry": true,
+      "eligible_after_expiry": false,
+      "presence_after_expiry": "compliance_suspended"
+    },
+    "dispatch_optimizer_route_planning": {
+      "passed": true,
+      "route_plan_id": "c19a7045-b499-4946-8852-56a82cd6c70b",
+      "stops": 3,
+      "total_distance_m": 3592.94,
+      "first_stop_kind": "pickup"
+    }
+  }
+}

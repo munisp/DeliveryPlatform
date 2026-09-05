@@ -1,0 +1,10 @@
+{
+  "passed": true,
+  "quote_id": "498285e8-eca2-4f5a-8ee7-d8e811c2e21b",
+  "surge_multiplier_bps": 14000,
+  "quoted_total_kobo": 14000,
+  "idempotency_verified": true,
+  "allocation_count": 4,
+  "outbox_event_count": 1,
+  "market_snapshot_count": 1
+}
