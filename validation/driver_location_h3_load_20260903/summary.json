@@ -1,0 +1,93 @@
+{
+  "expected_driver_count": 10000,
+  "location_updates": {
+    "operation": "driver_location_ingest",
+    "requests": 10000,
+    "http_status": {
+      "202": 10000
+    },
+    "transport_errors": 0,
+    "outcomes": {
+      "projected": 10000
+    },
+    "min_ms": 1411.437,
+    "mean_ms": 13605.712,
+    "p50_ms": 15012.564,
+    "p90_ms": 17626.305,
+    "p95_ms": 17912.15,
+    "p99_ms": 18063.253,
+    "max_ms": 18180.373,
+    "sample_max_request_ms": 18180.373
+  },
+  "h3_spatial_queries": {
+    "operation": "h3_spatial_candidate_query",
+    "requests": 10000,
+    "http_status": {
+      "200": 10000
+    },
+    "transport_errors": 0,
+    "outcomes": {
+      "1": 102,
+      "10": 30,
+      "11": 42,
+      "12": 24,
+      "13": 39,
+      "14": 25,
+      "15": 28,
+      "16": 19,
+      "17": 32,
+      "18": 29,
+      "19": 31,
+      "2": 93,
+      "20": 17,
+      "21": 26,
+      "22": 29,
+      "23": 30,
+      "24": 32,
+      "25": 23,
+      "26": 19,
+      "27": 41,
+      "28": 32,
+      "29": 30,
+      "3": 90,
+      "30": 25,
+      "31": 17,
+      "32": 8713,
+      "4": 82,
+      "5": 85,
+      "6": 53,
+      "7": 62,
+      "8": 47,
+      "9": 53
+    },
+    "min_ms": 625.059,
+    "mean_ms": 6391.616,
+    "p50_ms": 5964.343,
+    "p90_ms": 11791.92,
+    "p95_ms": 12454.314,
+    "p99_ms": 13199.625,
+    "max_ms": 16175.604,
+    "sample_max_request_ms": 16175.604
+  },
+  "durable_state": {
+    "accepted_location_events": 10000,
+    "rejected_location_events": 0,
+    "total_location_events": 10000,
+    "h3_projection_records": 10000
+  },
+  "redis_state": {
+    "geo_available_members": 10000,
+    "h3_available_member_total": 10000
+  },
+  "postgresql": {
+    "commits_delta": 78936,
+    "rollbacks_delta": 0,
+    "deadlocks_delta": 0,
+    "blocks_read_delta": 7,
+    "blocks_hit_delta": 19304699,
+    "max_lock_waiters": 0,
+    "max_active_sessions": 53
+  },
+  "passed": true,
+  "failures": []
+}

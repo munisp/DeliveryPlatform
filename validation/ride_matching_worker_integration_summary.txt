@@ -1,0 +1,9 @@
+presence_response={"driver_user_id":98001,"pg_version":1,"projected":true}
+match_response={"trip_id":"20000000-0000-0000-0000-000000000041","match_attempt_id":"c1a2f3e7-16e8-478d-8dd1-a21badae8d7e","state":"driver_offered","candidate_count":1,"offer_ids":["60b643c1-b8b6-40a4-b929-3e80aea2b851"],"algorithm_version":"geodesic_eta_fairness_v1"}
+trip_state=driver_offered
+pending_offers=1
+driver_presence_state=offer_pending
+available_geo_members_after_offer=0
+driver_h3_cell=89589c984c7ffff
+trip_h3_cell=89589c984c7ffff
+h3_projection_records=1

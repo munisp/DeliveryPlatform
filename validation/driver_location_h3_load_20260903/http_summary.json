@@ -1,0 +1,74 @@
+{
+  "generated_at": "2026-09-03T20:11:48.906Z",
+  "location_updates": {
+    "requested": 10000,
+    "logical_concurrency": 10000,
+    "transport_socket_cap": 512,
+    "elapsed_ms": 18523.267,
+    "throughput_per_second": 539.862,
+    "min_ms": 1411.437,
+    "p50_ms": 15012.564,
+    "p90_ms": 17626.305,
+    "p95_ms": 17912.15,
+    "p99_ms": 18063.253,
+    "max_ms": 18180.373,
+    "status_counts": {
+      "202": 10000
+    },
+    "outcome_counts": {
+      "projected": 10000
+    },
+    "transport_errors": 0
+  },
+  "h3_spatial_queries": {
+    "requested": 10000,
+    "logical_concurrency": 10000,
+    "transport_socket_cap": 512,
+    "elapsed_ms": 16281.817,
+    "throughput_per_second": 614.182,
+    "min_ms": 625.059,
+    "p50_ms": 5964.343,
+    "p90_ms": 11791.92,
+    "p95_ms": 12454.314,
+    "p99_ms": 13199.625,
+    "max_ms": 16175.604,
+    "status_counts": {
+      "200": 10000
+    },
+    "outcome_counts": {
+      "1": 102,
+      "2": 93,
+      "3": 90,
+      "4": 82,
+      "5": 85,
+      "6": 53,
+      "7": 62,
+      "8": 47,
+      "9": 53,
+      "10": 30,
+      "11": 42,
+      "12": 24,
+      "13": 39,
+      "14": 25,
+      "15": 28,
+      "16": 19,
+      "17": 32,
+      "18": 29,
+      "19": 31,
+      "20": 17,
+      "21": 26,
+      "22": 29,
+      "23": 30,
+      "24": 32,
+      "25": 23,
+      "26": 19,
+      "27": 41,
+      "28": 32,
+      "29": 30,
+      "30": 25,
+      "31": 17,
+      "32": 8713
+    },
+    "transport_errors": 0
+  }
+}
