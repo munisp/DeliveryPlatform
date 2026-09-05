@@ -1,0 +1,46 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: go-services-runtime-config
+  namespace: switchos
+  labels:
+    app.kubernetes.io/part-of: deliveryplatform
+data:
+  BIND_HOST: "0.0.0.0"
+  KAFKA_BROKERS: "kafka.switchos.svc.cluster.local:9092"
+  KAFKA_INVENTORY_TOPIC: "inventory-events"
+  KAFKA_LOCAL_COMMERCE_TOPIC: "local-commerce-events"
+  KAFKA_NOTIFICATION_TOPIC: "notification-events"
+  FLUVIO_KAFKA_BROKERS: "fluvio.switchos.svc.cluster.local:9092"
+  FLUVIO_INVENTORY_TOPIC: "inventory-events"
+  FLUVIO_LOCAL_COMMERCE_TOPIC: "local-commerce-events"
+  DAPR_HTTP_PORT: "3500"
+  DAPR_PUBSUB_NAME: "switchos-bus"
+  DAPR_INVENTORY_TOPIC: "inventory-events"
+  DAPR_LOCAL_COMMERCE_TOPIC: "local-commerce-events"
+  DAPR_FUNDS_TOPIC: "funds-events"
+  TEMPORAL_ADDRESS: "temporal-frontend.switchos.svc.cluster.local:7233"
+  TEMPORAL_NAMESPACE: "switchos"
+  TEMPORAL_TASK_QUEUE: "switchos-workflows"
+  TEMPORAL_BRIDGE_URL: "http://temporal-bridge.switchos.svc.cluster.local:8080"
+  LONGCAT_CORE_URL: "http://central-app.switchos.svc.cluster.local:3005"
+  LONGCAT_SPEECH_SERVICE_URL: "http://speech-runtime.switchos.svc.cluster.local:8105"
+  LONGCAT_TELEPHONY_MODE: "asterisk-audiosocket"
+  LONGCAT_AUDIOSOCKET_ADDR: "asterisk.switchos.svc.cluster.local:9104"
+  MOJALOOP_SERVICE_MODE: "http"
+  MOJALOOP_SWITCH_URL: "http://mojaloop-switch.switchos.svc.cluster.local:4001"
+  MOJALOOP_PARTICIPANT_ID: "switchos"
+  TIGERBEETLE_ADDRESSES: "tigerbeetle.switchos.svc.cluster.local:3000"
+  TIGERBEETLE_CLUSTER_ID: "0"
+  MATCH_RADIUS_METERS: "1500"
+  MATCH_CANDIDATE_LIMIT: "25"
+  MATCH_OFFER_WAVE_SIZE: "1"
+  MATCH_OFFER_TTL_SECONDS: "20"
+  MATCH_MIN_LOCATION_INTEGRITY: "70"
+  MATCH_AVERAGE_SPEED_MPS: "8"
+  MATCH_REAPER_INTERVAL_SECONDS: "2"
+  MATCH_H3_RESOLUTION: "9"
+  MATCH_REQUIRE_DEVICE_INTEGRITY: "true"
+  DB_MAX_OPEN_CONNS: "32"
+  DB_MAX_IDLE_CONNS: "8"
+  REDIS_POOL_SIZE: "128"

@@ -42,7 +42,7 @@ if ! command -v go >/dev/null 2>&1; then
   exit 1
 fi
 
-python3 -m pip install --break-system-packages faster-whisper ctranslate2 fastapi uvicorn requests python-dateutil
+python3 -m pip install --break-system-packages -r "$SWITCHOS_ROOT/services/python/requirements.txt"
 
 if [[ ! -x /usr/local/bin/piper ]]; then
   ARCHIVE=/tmp/piper_linux_x86_64.tar.gz

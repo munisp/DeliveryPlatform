@@ -1,0 +1,206 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: central-app
+  namespace: switchos
+  labels:
+    app.kubernetes.io/name: central-app
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  replicas: 3
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: central-app
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: central-app
+        app.kubernetes.io/part-of: deliveryplatform
+    spec:
+      serviceAccountName: central-app
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: central-app
+                topologyKey: kubernetes.io/hostname
+      containers:
+        - name: central-app
+          image: ghcr.io/munisp/deliveryplatform-central-app:REPLACE_WITH_IMMUTABLE_TAG
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 3005
+          envFrom:
+            - configMapRef:
+                name: central-app-runtime-config
+            - secretRef:
+                name: central-app-secrets
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "768Mi"
+            limits:
+              cpu: "2"
+              memory: "1536Mi"
+          startupProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            failureThreshold: 36
+            periodSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: central-app
+  namespace: switchos
+spec:
+  selector:
+    app.kubernetes.io/name: central-app
+  ports:
+    - name: http
+      port: 3005
+      targetPort: http
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: central-app
+  namespace: switchos
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: central-app
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: central-app
+  namespace: switchos
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: central-app
+  minReplicas: 3
+  maxReplicas: 10
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 65
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: central-app-restrict-ingress
+  namespace: switchos
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: central-app
+  policyTypes: ["Ingress", "Egress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: switchos
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/component: go-service
+      ports:
+        - protocol: TCP
+          port: 3005
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: switchos
+      ports:
+        - protocol: TCP
+          port: 5432
+        - protocol: TCP
+          port: 6379
+        - protocol: TCP
+          port: 9092
+        - protocol: TCP
+          port: 3476
+        - protocol: TCP
+          port: 8181
+        - protocol: TCP
+          port: 8090
+        - protocol: TCP
+          port: 8099
+        - protocol: TCP
+          port: 8104
+        - protocol: TCP
+          port: 8105
+        - protocol: TCP
+          port: 8112
+        - protocol: TCP
+          port: 8113
+        - protocol: TCP
+          port: 8114
+        - protocol: TCP
+          port: 8115
+        - protocol: TCP
+          port: 8116
+        - protocol: TCP
+          port: 8117
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - protocol: TCP
+          port: 443

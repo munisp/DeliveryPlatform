@@ -24,14 +24,14 @@ type gatewayService struct {
 }
 
 type planRequest struct {
-	City              string                 `json:"city"`
-	CustomerSegment   string                 `json:"customer_segment"`
-	Categories        []string               `json:"categories"`
-	Request           string                 `json:"request"`
-	MembershipSummary map[string]any         `json:"membership_summary"`
-	Allocation        map[string]any         `json:"allocation"`
-	Forecast          map[string]any         `json:"forecast"`
-	PayloadMetrics    map[string]any         `json:"payload_metrics"`
+	City              string         `json:"city"`
+	CustomerSegment   string         `json:"customer_segment"`
+	Categories        []string       `json:"categories"`
+	Request           string         `json:"request"`
+	MembershipSummary map[string]any `json:"membership_summary"`
+	Allocation        map[string]any `json:"allocation"`
+	Forecast          map[string]any `json:"forecast"`
+	PayloadMetrics    map[string]any `json:"payload_metrics"`
 }
 
 type planStep struct {
@@ -68,12 +68,22 @@ type envelope struct {
 }
 
 func main() {
-	databaseURL := getenv("DATABASE_URL", "postgresql://ubuntu:ubuntu@127.0.0.1:5432/switchos?sslmode=disable")
+	databaseURL := strings.TrimSpace(os.Getenv("DATABASE_URL"))
+	if databaseURL == "" {
+		log.Fatal("DATABASE_URL must be explicitly configured")
+	}
+	internalServiceToken := strings.TrimSpace(os.Getenv("INTERNAL_SERVICE_TOKEN"))
+	if len(internalServiceToken) < 32 {
+		log.Fatal("INTERNAL_SERVICE_TOKEN must be explicitly configured with at least 32 characters")
+	}
 	service := &gatewayService{
-		db: openDB(databaseURL),
-		httpClient: &http.Client{Timeout: 5 * time.Second},
-		internalServiceToken: getenv("INTERNAL_SERVICE_TOKEN", "switchos-internal-dev-token-change-before-production"),
+		db:                   openDB(databaseURL),
+		httpClient:           &http.Client{Timeout: 5 * time.Second},
+		internalServiceToken: internalServiceToken,
 		serviceName:          "switchos-local-commerce-gateway",
+	}
+	if err := service.db.Ping(); err != nil {
+		log.Fatalf("ping database: %v", err)
 	}
 	if err := service.ensureSchema(); err != nil {
 		log.Fatalf("ensure schema: %v", err)
@@ -159,7 +169,7 @@ func (s *gatewayService) logisticsControlTowerHandler(w http.ResponseWriter, r *
 		RecentPlanCount: recentPlanCount,
 		Middleware:      middleware,
 		Metrics: map[string]any{
-			"trace_id": traceID,
+			"trace_id":               traceID,
 			"evaluated_window_hours": 6,
 		},
 		Recommendations: recommendations,
@@ -227,11 +237,11 @@ func (s *gatewayService) planHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	responseMetrics := map[string]any{
 		"trace_id": traceID,
-		"payload": payloadMetrics,
+		"payload":  payloadMetrics,
 		"timings_ms": map[string]any{
-			"store_event": roundDurationMs(storeDuration),
+			"store_event":   roundDurationMs(storeDuration),
 			"publish_total": publishMetrics.TotalDurationMs,
-			"total": roundDurationMs(time.Since(startedAt)),
+			"total":         roundDurationMs(time.Since(startedAt)),
 		},
 		"middleware_publish": publishMetrics.ByTarget,
 	}
@@ -368,9 +378,9 @@ func (s *gatewayService) publishToKafkaCompatible(brokersRaw string, topic strin
 	writer := &kafka.Writer{Addr: kafka.TCP(brokers...), Topic: topic, RequiredAcks: kafka.RequireAll, Balancer: &kafka.LeastBytes{}}
 	defer writer.Close()
 	err := writer.WriteMessages(ctx, kafka.Message{
-		Key:   []byte(evt.EventID),
-		Value: body,
-		Time:  time.Now().UTC(),
+		Key:     []byte(evt.EventID),
+		Value:   body,
+		Time:    time.Now().UTC(),
 		Headers: []kafka.Header{{Key: "event-type", Value: []byte(evt.EventType)}, {Key: "broker", Value: []byte(brokerName)}},
 	})
 	return roundDurationMs(time.Since(startedAt)), err
@@ -405,9 +415,9 @@ func (s *gatewayService) publishToTemporal(evt envelope) (float64, error) {
 
 func (s *gatewayService) middlewareStatus() map[string]any {
 	return map[string]any{
-		"dapr": map[string]any{"configured": getenv("DAPR_HTTP_PORT", "") != "" && getenv("DAPR_PUBSUB_NAME", "") != "" && getenv("DAPR_LOCAL_COMMERCE_TOPIC", "") != ""},
-		"kafka": map[string]any{"configured": getenv("KAFKA_BROKERS", "") != "" && getenv("KAFKA_LOCAL_COMMERCE_TOPIC", "") != ""},
-		"fluvio": map[string]any{"configured": getenv("FLUVIO_KAFKA_BROKERS", "") != "" && getenv("FLUVIO_LOCAL_COMMERCE_TOPIC", "") != ""},
+		"dapr":     map[string]any{"configured": getenv("DAPR_HTTP_PORT", "") != "" && getenv("DAPR_PUBSUB_NAME", "") != "" && getenv("DAPR_LOCAL_COMMERCE_TOPIC", "") != ""},
+		"kafka":    map[string]any{"configured": getenv("KAFKA_BROKERS", "") != "" && getenv("KAFKA_LOCAL_COMMERCE_TOPIC", "") != ""},
+		"fluvio":   map[string]any{"configured": getenv("FLUVIO_KAFKA_BROKERS", "") != "" && getenv("FLUVIO_LOCAL_COMMERCE_TOPIC", "") != ""},
 		"temporal": map[string]any{"configured": getenv("TEMPORAL_TASK_QUEUE", "") != "" || getenv("TEMPORAL_BRIDGE_URL", "") != ""},
 	}
 }
@@ -523,11 +533,11 @@ func summarizeRequestPayload(request planRequest) map[string]any {
 	forecastKeys := len(request.Forecast)
 	allocationKeys := len(request.Allocation)
 	return map[string]any{
-		"request_chars": requestChars,
-		"category_count": categories,
-		"membership_keys": membershipKeys,
-		"forecast_keys": forecastKeys,
-		"allocation_keys": allocationKeys,
+		"request_chars":            requestChars,
+		"category_count":           categories,
+		"membership_keys":          membershipKeys,
+		"forecast_keys":            forecastKeys,
+		"allocation_keys":          allocationKeys,
 		"provided_payload_metrics": request.PayloadMetrics,
 	}
 }

@@ -1,0 +1,6 @@
+FROM postgis/postgis:16-3.4-alpine
+COPY drizzle /migrations
+COPY deploy/kubernetes/pricing-dispatch/apply-migrations.sh /usr/local/bin/apply-migrations
+RUN chmod 0555 /usr/local/bin/apply-migrations
+USER 999:999
+ENTRYPOINT ["/usr/local/bin/apply-migrations"]

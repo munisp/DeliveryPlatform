@@ -2,7 +2,7 @@ from pathlib import Path
 
 from PIL import Image
 
-PROJECT_ROOT = Path("/home/ubuntu/switchos_mobile_native")
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SOURCE = PROJECT_ROOT / "assets/images/icon.png"
 TARGETS = {
     "assets/images/icon.png": 768,

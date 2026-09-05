@@ -1,0 +1,29 @@
+# Template only. Validate hostname, TLS certificate, ingress class, and provider callback allowlist
+# with the selected CBN-licensed payment provider before applying this resource.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ride-payment-webhook
+  namespace: switchos
+  annotations:
+    deliveryplatform.io/template-only: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "1m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "15"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "15"
+spec:
+  ingressClassName: REPLACE_WITH_INGRESS_CLASS
+  tls:
+    - hosts:
+        - REPLACE_WITH_PAYMENT_WEBHOOK_HOST
+      secretName: REPLACE_WITH_PAYMENT_WEBHOOK_TLS_SECRET
+  rules:
+    - host: REPLACE_WITH_PAYMENT_WEBHOOK_HOST
+      http:
+        paths:
+          - path: /webhooks/payments
+            pathType: Exact
+            backend:
+              service:
+                name: ride-payment-webhook
+                port:
+                  name: http

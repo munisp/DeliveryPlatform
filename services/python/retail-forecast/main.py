@@ -1,19 +1,37 @@
 from __future__ import annotations
 
+import hmac
+import logging
 import math
 import os
+import sys
 import time
+import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
+
+SERVICE_ROOT = Path(__file__).resolve().parents[1]
+if str(SERVICE_ROOT) not in sys.path:
+    sys.path.insert(0, str(SERVICE_ROOT))
 
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
 
-INTERNAL_SERVICE_TOKEN = os.getenv("INTERNAL_SERVICE_TOKEN", "switchos-internal-dev-token-change-before-production")
+from durable_run_store import DurableRunStore
+
+INTERNAL_SERVICE_TOKEN = os.getenv("INTERNAL_SERVICE_TOKEN", "").strip()
+logger = logging.getLogger("switchos.retail_forecast")
 APP_VERSION = "2026-07-09-logistics-resilience-wave"
 TRACE_ENABLED = os.getenv("LOCAL_COMMERCE_ENABLE_TRACING", "true").strip().lower() == "true"
 
 app = FastAPI(title="switchos-retail-forecast", version=APP_VERSION)
+execution_store = DurableRunStore("retail-forecast")
+
+
+@app.on_event("startup")
+async def startup() -> None:
+    execution_store.initialize()
 
 
 class DemandPoint(BaseModel):
@@ -159,6 +177,10 @@ class HealthResponse(BaseModel):
 
 @app.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
+    try:
+        execution_store.check()
+    except RuntimeError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
     return HealthResponse(
         status="healthy",
         service="switchos-retail-forecast",
@@ -176,6 +198,12 @@ def forecast(request: ForecastRequest, x_internal_service_token: str | None = He
     response = _forecast_request(request, trace_id=trace_id)
     response.metrics.request_duration_ms = round((time.perf_counter() - started) * 1000, 2)
     _trace("forecast.complete", response.metrics.model_dump())
+    execution_store.record(
+        "forecast",
+        trace_id,
+        {"merchant_id": request.merchant_id, "city": request.city, "planning_horizon_hours": request.planning_horizon_hours, "sku_count": len(request.skus)},
+        {"recommendation_count": len(response.recommendations), "high_risk_count": sum(1 for item in response.recommendations if item.stockout_risk in {"critical", "elevated"})},
+    )
     return response
 
 
@@ -203,6 +231,12 @@ def forecast_batch(request: BatchForecastRequest, x_internal_service_token: str 
         ),
     )
     _trace("forecast.batch_complete", response.metrics.model_dump())
+    execution_store.record(
+        "forecast_batch",
+        trace_id,
+        {"batch_size": len(request.requests), "sku_count": response.metrics.sku_count},
+        {"forecast_count": len(response.forecasts), "demand_points": response.metrics.demand_points},
+    )
     return response
 
 
@@ -251,13 +285,19 @@ def network_health(request: NetworkHealthRequest, x_internal_service_token: str 
         ),
     )
     _trace("network_health.complete", response.metrics.model_dump())
+    execution_store.record(
+        "network_health",
+        trace_id,
+        {"city": request.city, "planning_horizon_hours": request.planning_horizon_hours, "node_count": len(request.nodes)},
+        {"resilience_band": response.resilience_band, "critical_nodes": response.critical_nodes, "constrained_nodes": response.constrained_nodes},
+    )
     return response
 
 
 def _require_internal_token(provided: str | None) -> None:
     if not INTERNAL_SERVICE_TOKEN:
-        return
-    if provided != INTERNAL_SERVICE_TOKEN:
+        raise HTTPException(status_code=503, detail="internal authentication is not configured")
+    if not provided or not hmac.compare_digest(provided, INTERNAL_SERVICE_TOKEN):
         raise HTTPException(status_code=401, detail="invalid internal service token")
 
 
@@ -410,10 +450,9 @@ def _service_buffer_multiplier(service_level: float) -> float:
 
 
 def _trace(event: str, payload: dict[str, Any]) -> None:
-    if not TRACE_ENABLED:
-        return
-    print(f"[retail-forecast-trace] {event} {payload}")
+    if TRACE_ENABLED:
+        logger.info("retail_forecast_event=%s payload=%s", event, payload)
 
 
 def _trace_id() -> str:
-    return f"rf-{int(time.time() * 1000)}"
+    return f"rf-{uuid.uuid4()}"

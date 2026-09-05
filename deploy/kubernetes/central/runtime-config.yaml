@@ -1,0 +1,46 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: central-app-runtime-config
+  namespace: switchos
+  labels:
+    app.kubernetes.io/part-of: deliveryplatform
+data:
+  NODE_ENV: "production"
+  BIND_HOST: "0.0.0.0"
+  PORT: "3005"
+  VITE_APP_ID: "switchos-operator-dashboard"
+  PUBLIC_APP_ORIGIN: "https://REPLACE_WITH_PUBLIC_APP_HOST"
+  ALLOWED_ORIGINS: "https://REPLACE_WITH_PUBLIC_APP_HOST"
+  OAUTH_SERVER_URL: "https://REPLACE_WITH_AUTH_HOST"
+  OIDC_ISSUER_URL: "https://REPLACE_WITH_AUTH_HOST/realms/switchos"
+  OIDC_AUDIENCE: "switchos-operator-dashboard"
+  OIDC_CLIENT_ID: "switchos-operator-dashboard"
+  OIDC_REDIRECT_PATH: "/api/auth/oidc/callback"
+  OIDC_POST_LOGOUT_PATH: "/portal"
+  ENABLE_EXTERNAL_OIDC: "true"
+  REQUIRE_MFA_FOR_PRIVILEGED_ACTIONS: "true"
+  ENABLE_SELF_SERVICE_SIGNUP: "false"
+  PERMIFY_ENDPOINT: "http://permify.switchos.svc.cluster.local:3476"
+  OPA_ENDPOINT: "http://opa.switchos.svc.cluster.local:8181"
+  REDIS_URL: "redis://redis.switchos.svc.cluster.local:6379"
+  KAFKA_BROKERS: "kafka.switchos.svc.cluster.local:9092"
+  KAFKA_OPERATIONAL_EVENTS_TOPIC: "operational-events"
+  KAFKA_CLIENT_ID: "switchos-central-app"
+  OPENSEARCH_URL: "https://opensearch.switchos.svc.cluster.local:9200"
+  APISIX_ADMIN_URL: "http://apisix-admin.switchos.svc.cluster.local:9180"
+  APISIX_CONTROL_URL: "http://apisix-control.switchos.svc.cluster.local:8006"
+  DISPATCH_OPTIMIZER_URL: "http://dispatch-optimizer.switchos.svc.cluster.local:8090"
+  MOJALOOP_SERVICE_URL: "http://mojaloop.switchos.svc.cluster.local:8086"
+  TIGERBEETLE_SERVICE_URL: "http://tigerbeetle.switchos.svc.cluster.local:8087"
+  LAKEHOUSE_SERVICE_URL: "http://lakehouse.switchos.svc.cluster.local:8007"
+  NOTIFICATION_DISPATCHER_URL: "http://notification-dispatcher.switchos.svc.cluster.local:8099"
+  LONGCAT_VOICE_GATEWAY_URL: "http://voice-gateway.switchos.svc.cluster.local:8104"
+  LONGCAT_SPEECH_SERVICE_URL: "http://speech-runtime.switchos.svc.cluster.local:8105"
+  VERTICAL_PROVISIONING_URL: "http://vertical-provisioning.switchos.svc.cluster.local:8112"
+  INTAKE_ORCHESTRATOR_URL: "http://intake-orchestrator.switchos.svc.cluster.local:8113"
+  LOCAL_COMMERCE_GATEWAY_URL: "http://local-commerce-gateway.switchos.svc.cluster.local:8114"
+  RETAIL_FORECAST_SERVICE_URL: "http://retail-forecast.switchos.svc.cluster.local:8115"
+  PROCUREMENT_PLANNER_SERVICE_URL: "http://procurement-planner.switchos.svc.cluster.local:8116"
+  INVENTORY_CONTROL_SERVICE_URL: "http://inventory-control.switchos.svc.cluster.local:8117"
+  COMPLIANCE_REVIEW_SERVICE_URL: "http://compliance-review.switchos.svc.cluster.local:8125"
