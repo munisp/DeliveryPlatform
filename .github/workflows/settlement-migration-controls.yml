@@ -46,7 +46,7 @@ jobs:
       POSTGRES_URL: postgresql://postgres:postgres@127.0.0.1:5432/deliveryplatform
       SETTLEMENT_VALIDATION_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/deliveryplatform
       MIGRATION_VALIDATION_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/deliveryplatform
-      EVIDENCE_DIR: ${{ runner.temp }}/settlement-migration-controls
+      EVIDENCE_DIR: ${{ github.workspace }}/.ci-evidence/settlement-migration-controls
 
     steps:
       - name: Checkout repository
