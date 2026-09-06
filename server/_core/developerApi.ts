@@ -336,6 +336,38 @@ export async function createPublicFieldServiceWorkOrder(input: {
   }
 }
 
+export async function listPublicFieldServiceWorkOrders(input: {
+  rawApiKey: string;
+  limit: number;
+  updatedBefore: string | null;
+}) {
+  const identity = await authenticateDeveloperApiKey(
+    input.rawApiKey,
+    "field_service:read",
+  );
+  const result = await database().query<{
+    id: string;
+    reference: string;
+    state: string;
+    priority: string;
+    scheduled_start_at: string | null;
+    scheduled_end_at: string | null;
+    updated_at: string;
+  }>(
+    `SELECT * FROM developer.public_list_field_service_work_orders($1::uuid,$2,$3::timestamptz)`,
+    [identity.apiClientId, input.limit, input.updatedBefore],
+  );
+  return result.rows.map((row) => ({
+    id: row.id,
+    reference: row.reference,
+    state: row.state,
+    priority: row.priority,
+    scheduled_start_at: row.scheduled_start_at,
+    scheduled_end_at: row.scheduled_end_at,
+    updated_at: row.updated_at,
+  }));
+}
+
 export async function getPublicFieldServiceWorkOrder(input: {
   rawApiKey: string;
   workOrderId: string;

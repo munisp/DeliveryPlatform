@@ -6,6 +6,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 MIGRATION="$ROOT_DIR/drizzle/0044_field_service_operations.sql"
+EXTENSION_MIGRATION="$ROOT_DIR/drizzle/0047_field_service_proof_and_public_collection.sql"
 RUN_ID="${FIELD_SERVICE_TEST_RUN_ID:-fs_${$}_$(date +%s)}"
 DB_NAME="field_service_validation_${RUN_ID//[^a-zA-Z0-9_]/_}"
 ROLE_API="field_service_api"
@@ -82,6 +83,8 @@ CREATE TABLE public.service_providers (
   status public.provider_status NOT NULL DEFAULT 'active'
 );
 CREATE TABLE public.orders (id serial PRIMARY KEY);
+CREATE SCHEMA developer;
+CREATE TABLE developer.api_client (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), provider_id integer NOT NULL, state text NOT NULL DEFAULT 'active');
 INSERT INTO public.users (id, open_id, name, role) VALUES
   (1, 'field-admin', 'Field Admin', 'admin'),
   (2, 'field-tech', 'Field Tech', 'user'),
@@ -92,6 +95,7 @@ INSERT INTO public.service_providers (id, name, business_name, email, phone, sta
 SQL
 
 sudo -u postgres psql -X -d "$DB_NAME" -v ON_ERROR_STOP=1 < "$MIGRATION" >/dev/null
+sudo -u postgres psql -X -d "$DB_NAME" -v ON_ERROR_STOP=1 < "$EXTENSION_MIGRATION" >/dev/null
 
 sudo -u postgres psql -X -d "$DB_NAME" -v ON_ERROR_STOP=1 <<'SQL'
 SET ROLE field_service_api;
@@ -117,6 +121,10 @@ SELECT field_service.schedule_work_order(:'work_order_id'::uuid, 1, clock_timest
 SELECT field_service.assign_work_order(:'work_order_id'::uuid, 1, 2, 'fs-assign-0001');
 SELECT field_service.advance_work_order(:'work_order_id'::uuid, 2, 'depart', 'leaving depot', 'fs-depart-0001');
 SELECT field_service.advance_work_order(:'work_order_id'::uuid, 2, 'arrive', 'arrived at site', 'fs-arrive-0001');
+SELECT field_service.record_work_order_proof(:'work_order_id'::uuid,2,'arrival','field-service/arrival-001.jpg','image/jpeg',repeat('b',64),'fs-arrival-proof-0001') AS arrival_proof_id \gset
+SELECT field_service.record_work_order_proof(:'work_order_id'::uuid,2,'arrival','field-service/arrival-001.jpg','image/jpeg',repeat('b',64),'fs-arrival-proof-0001') AS repeated_arrival_proof_id \gset
+SELECT field_service.record_work_order_proof(:'work_order_id'::uuid,2,'customer_signature','field-service/signature-001.png','image/png',repeat('c',64),'fs-signature-proof-0001') AS signature_proof_id \gset
+SELECT CASE WHEN :'arrival_proof_id' = :'repeated_arrival_proof_id' THEN 'idempotent_proof=PASS' ELSE 'idempotent_proof=FAIL' END;
 SELECT field_service.complete_work_order(:'work_order_id'::uuid, 2, 'Breaker inspected and repaired.', 'field-service/proof-001.jpg', 'image/jpeg', repeat('a', 64), 'fs-complete-0001');
 SELECT field_service.complete_work_order(:'work_order_id'::uuid, 2, 'Breaker inspected and repaired.', 'field-service/proof-001.jpg', 'image/jpeg', repeat('a', 64), 'fs-complete-0001') AS idempotent_complete;
 RESET ROLE;
@@ -132,7 +140,7 @@ SELECT concat_ws('|',
 SQL
 )"
 printf 'field_service_lifecycle=%s\n' "$lifecycle_summary"
-[ "$lifecycle_summary" = 'completed|6|1|6' ]
+[ "$lifecycle_summary" = 'completed|8|3|8' ]
 
 if sudo -u postgres psql -X -d "$DB_NAME" -v ON_ERROR_STOP=1 <<'SQL' >/dev/null 2>&1
 SET ROLE field_service_api;
@@ -163,7 +171,8 @@ fi
 
 sudo -u postgres psql -X -d "$DB_NAME" -v ON_ERROR_STOP=1 -At <<'SQL' | grep -qx 'field_service_security=PASS'
 SELECT CASE WHEN
-  NOT has_function_privilege('public', 'field_service.create_work_order(integer,integer,uuid,text,text,text,numeric,numeric,field_service.work_order_priority,timestamp with time zone,timestamp with time zone,integer,integer,text,timestamp with time zone)', 'EXECUTE')
+  NOT has_function_privilege('public', 'field_service.record_work_order_proof(uuid,integer,text,text,text,text,text,timestamp with time zone)', 'EXECUTE')
+  AND NOT has_function_privilege('public', 'field_service.create_work_order(integer,integer,uuid,text,text,text,numeric,numeric,field_service.work_order_priority,timestamp with time zone,timestamp with time zone,integer,integer,text,timestamp with time zone)', 'EXECUTE')
   AND (SELECT array_to_string(proconfig, ',') FROM pg_proc WHERE oid = 'field_service.create_work_order(integer,integer,uuid,text,text,text,numeric,numeric,field_service.work_order_priority,timestamp with time zone,timestamp with time zone,integer,integer,text,timestamp with time zone)'::regprocedure) = 'search_path=pg_catalog, field_service'
   AND (SELECT prosecdef FROM pg_proc WHERE oid = 'field_service.create_work_order(integer,integer,uuid,text,text,text,numeric,numeric,field_service.work_order_priority,timestamp with time zone,timestamp with time zone,integer,integer,text,timestamp with time zone)'::regprocedure)
 THEN 'field_service_security=PASS' ELSE 'field_service_security=FAIL' END;

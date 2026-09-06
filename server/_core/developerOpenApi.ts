@@ -98,6 +98,17 @@ export const developerOpenApi = {
           updated_at: { type: "string", format: "date-time" },
         },
       },
+      WorkOrderCollection: {
+        type: "object",
+        required: ["workOrders"],
+        properties: {
+          workOrders: {
+            type: "array",
+            maxItems: 100,
+            items: { $ref: "#/components/schemas/WorkOrderSummary" },
+          },
+        },
+      },
       Error: {
         type: "object",
         required: ["error"],
@@ -107,6 +118,45 @@ export const developerOpenApi = {
   },
   paths: {
     "/api/v1/field-service/work-orders": {
+      get: {
+        operationId: "listFieldServiceWorkOrders",
+        summary:
+          "List privacy-minimized work-order status for the API client provider",
+        parameters: [
+          {
+            name: "limit",
+            in: "query",
+            required: false,
+            schema: { type: "integer", minimum: 1, maximum: 100, default: 50 },
+          },
+          {
+            name: "updatedBefore",
+            in: "query",
+            required: false,
+            schema: { type: "string", format: "date-time" },
+          },
+        ],
+        responses: {
+          "200": {
+            description: "Provider-scoped work orders",
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/WorkOrderCollection" },
+              },
+            },
+          },
+          "400": {
+            description: "Invalid query",
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/Error" },
+              },
+            },
+          },
+          "401": { description: "Invalid API key" },
+          "403": { description: "Scope or provider denied" },
+        },
+      },
       post: {
         operationId: "createFieldServiceWorkOrder",
         summary: "Create a provider-scoped field-service work order",

@@ -38,7 +38,7 @@ concurrency:
 jobs:
   application-controls:
     name: Application type, build, and unit controls
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, linux, x64, deliveryplatform-ci]
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
@@ -56,7 +56,7 @@ jobs:
 
   database-lifecycle-controls:
     name: Field, developer, and commerce database controls
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, linux, x64, deliveryplatform-ci]
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
@@ -67,7 +67,7 @@ jobs:
 
   medusa-core-controls:
     name: Medusa core reproducibility and production audit
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, linux, x64, deliveryplatform-ci]
     timeout-minutes: 25
     defaults:
       run:

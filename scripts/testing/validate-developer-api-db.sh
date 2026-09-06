@@ -41,6 +41,7 @@ INSERT INTO public.service_providers (id,name,business_name,email,phone,status) 
 SQL
 sudo -u postgres psql -X -d "$DB_NAME" -v ON_ERROR_STOP=1 < "$ROOT_DIR/drizzle/0044_field_service_operations.sql" >/dev/null
 sudo -u postgres psql -X -d "$DB_NAME" -v ON_ERROR_STOP=1 < "$ROOT_DIR/drizzle/0045_developer_api_platform.sql" >/dev/null
+sudo -u postgres psql -X -d "$DB_NAME" -v ON_ERROR_STOP=1 < "$ROOT_DIR/drizzle/0047_field_service_proof_and_public_collection.sql" >/dev/null
 
 sudo -u postgres psql -X -d "$DB_NAME" -v ON_ERROR_STOP=1 <<'SQL'
 SET ROLE field_service_api;
@@ -57,6 +58,7 @@ SELECT * FROM developer.begin_idempotent_request(:'api_key_id'::uuid,'api-create
 SELECT field_service.create_work_order(1,1,:'area_id'::uuid,'Inspect meter','Inspect customer meter.','1 Test Street, Lagos',6.5,3.4,'normal'::field_service.work_order_priority,NULL,NULL,NULL,:owner_user_id,'api-create-0001') AS work_order_id \gset
 SELECT developer.complete_idempotent_request(:'api_key_id'::uuid,'api-create-0001',201::smallint,jsonb_build_object('id',:'work_order_id'::uuid,'status','requested'));
 SELECT detail->>'state' AS public_state FROM (SELECT developer.public_field_service_work_order(:'api_client_id'::uuid, :'work_order_id'::uuid) AS detail) AS public_view;
+SELECT count(*) AS provider_scoped_collection_count FROM developer.public_list_field_service_work_orders(:'api_client_id'::uuid,50,NULL);
 SELECT developer.publish_field_service_outbox(10) AS published_count;
 SELECT * FROM developer.claim_webhook_deliveries(10) \gset
 SELECT developer.complete_webhook_delivery(:'delivery_id'::uuid,true,202,NULL) AS delivery_state;
@@ -86,6 +88,7 @@ SELECT CASE WHEN
   AND (SELECT count(*) FROM developer.api_idempotency_record) = 1
   AND (SELECT count(*) FROM developer.webhook_endpoint) = 1
   AND (SELECT count(*) FROM developer.webhook_delivery WHERE state = 'delivered'::developer.webhook_delivery_state) = 1
+  AND (SELECT count(*) FROM developer.public_list_field_service_work_orders((SELECT id FROM developer.api_client LIMIT 1),50,NULL)) = 1
 THEN 'developer_api_security=PASS' ELSE 'developer_api_security=FAIL' END;
 SQL
 

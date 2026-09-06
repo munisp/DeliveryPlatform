@@ -235,6 +235,30 @@ export async function completeWorkOrder(input: {
   return one(result.rows, "work_order_state").state;
 }
 
+export async function recordWorkOrderProof(input: {
+  workOrderId: string;
+  technicianUserId: number;
+  kind: "arrival" | "customer_signature" | "equipment_serial";
+  objectKey: string;
+  contentType: "image/jpeg" | "image/png" | "image/heic" | "application/pdf";
+  sha256Hex: string;
+  idempotencyKey: string;
+}) {
+  const result = await database().query<{ id: string }>(
+    `SELECT field_service.record_work_order_proof($1::uuid,$2,$3,$4,$5,$6,$7) AS id`,
+    [
+      input.workOrderId,
+      input.technicianUserId,
+      input.kind,
+      input.objectKey,
+      input.contentType,
+      input.sha256Hex,
+      input.idempotencyKey,
+    ],
+  );
+  return one(result.rows, "work_order_proof").id;
+}
+
 export async function cancelWorkOrder(input: {
   workOrderId: string;
   actorUserId: number;

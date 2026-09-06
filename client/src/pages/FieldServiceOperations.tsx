@@ -46,6 +46,17 @@ export default function FieldServiceOperations() {
     workOrderId: "",
     reason: "",
   });
+  const [proof, setProof] = useState({
+    workOrderId: "",
+    kind: "arrival" as "arrival" | "customer_signature" | "equipment_serial",
+    objectKey: "",
+    contentType: "image/jpeg" as
+      | "image/jpeg"
+      | "image/png"
+      | "image/heic"
+      | "application/pdf",
+    sha256Hex: "",
+  });
   const [notice, setNotice] = useState<string | null>(null);
 
   const workOrders = trpc.fieldService.listWorkOrders.useQuery({
@@ -68,6 +79,10 @@ export default function FieldServiceOperations() {
   });
   const cancelMutation = trpc.fieldService.cancelWorkOrder.useMutation({
     onSuccess: () => refresh("Work order cancelled."),
+    onError: (error) => setNotice(error.message),
+  });
+  const proofMutation = trpc.fieldService.recordWorkOrderProof.useMutation({
+    onSuccess: () => refresh("Immutable work-order proof recorded."),
     onError: (error) => setNotice(error.message),
   });
 
@@ -109,6 +124,14 @@ export default function FieldServiceOperations() {
       workOrderId: assignment.workOrderId,
       technicianUserId: Number(assignment.technicianUserId),
       idempotencyKey: idempotency("field-assignment"),
+    });
+  };
+
+  const submitProof = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    proofMutation.mutate({
+      ...proof,
+      idempotencyKey: idempotency("field-proof"),
     });
   };
 
@@ -344,6 +367,72 @@ export default function FieldServiceOperations() {
                     {assignMutation.isPending
                       ? "Assigning…"
                       : "Assign technician"}
+                  </button>
+                </form>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader>
+                <CardTitle>Technician proof</CardTitle>
+                <CardDescription>
+                  Assigned technicians record arrival, signature, or equipment
+                  evidence through an immutable database function.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <form onSubmit={submitProof} className="space-y-3">
+                  <input
+                    className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100"
+                    placeholder="Work-order UUID"
+                    value={proof.workOrderId}
+                    onChange={(event) =>
+                      setProof({ ...proof, workOrderId: event.target.value })
+                    }
+                    required
+                  />
+                  <select
+                    className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100"
+                    value={proof.kind}
+                    onChange={(event) =>
+                      setProof({
+                        ...proof,
+                        kind: event.target.value as typeof proof.kind,
+                      })
+                    }
+                  >
+                    <option value="arrival">Arrival photo</option>
+                    <option value="customer_signature">
+                      Customer signature
+                    </option>
+                    <option value="equipment_serial">Equipment serial</option>
+                  </select>
+                  <input
+                    className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100"
+                    placeholder="Object storage key"
+                    value={proof.objectKey}
+                    onChange={(event) =>
+                      setProof({ ...proof, objectKey: event.target.value })
+                    }
+                    required
+                  />
+                  <input
+                    className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 font-mono text-slate-100"
+                    placeholder="SHA-256 hex"
+                    pattern="[a-f0-9]{64}"
+                    value={proof.sha256Hex}
+                    onChange={(event) =>
+                      setProof({ ...proof, sha256Hex: event.target.value })
+                    }
+                    required
+                  />
+                  <button
+                    className="rounded-md bg-cyan-500 px-4 py-2 text-sm font-medium text-slate-950 disabled:opacity-60"
+                    type="submit"
+                    disabled={proofMutation.isPending}
+                  >
+                    {proofMutation.isPending
+                      ? "Recording…"
+                      : "Record immutable proof"}
                   </button>
                 </form>
               </CardContent>

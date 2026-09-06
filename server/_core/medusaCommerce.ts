@@ -48,7 +48,7 @@ function storeSecrets() {
   return values;
 }
 
-function validSignature(
+export function verifyMedusaWebhookSignature(
   rawBody: Buffer,
   header: string | undefined,
   secret: string,
@@ -99,7 +99,10 @@ export async function ingestMedusaWebhook(input: {
   if (!payload || typeof payload !== "object" || Array.isArray(payload))
     throw new MedusaCommerceError("medusa_event_json_invalid");
   const secret = storeSecrets().get(input.storeId);
-  if (!secret || !validSignature(input.rawBody, input.signature, secret))
+  if (
+    !secret ||
+    !verifyMedusaWebhookSignature(input.rawBody, input.signature, secret)
+  )
     throw new MedusaCommerceError("medusa_event_signature_invalid");
   const result = await database().query<{ id: string }>(
     `SELECT commerce.ingest_medusa_event_for_store($1,$2,$3,$4::jsonb,public.digest($5,'sha256')) AS id`,
