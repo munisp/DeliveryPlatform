@@ -5,6 +5,9 @@ import { Link, Route, Switch } from "wouter";
 import DashboardLayout from "@/components/DashboardLayout";
 import Analytics from "@/pages/Analytics";
 import DriverMobility from "@/pages/DriverMobility";
+import FieldServiceOperations from "@/pages/FieldServiceOperations";
+import DeveloperPlatform from "@/pages/DeveloperPlatform";
+import CommerceFulfillment from "@/pages/CommerceFulfillment";
 import LogisticsControlTower from "@/pages/LogisticsControlTower";
 import TablesideCommerce from "@/pages/TablesideCommerce";
 import WhiteLabelApps from "@/pages/WhiteLabelApps";
@@ -48,6 +51,21 @@ const quickLinks = [
     title: "Analytics",
     href: "/analytics",
     description: "Lakehouse-backed marketplace analytics, supply hotspots, and operator response visibility.",
+  },
+  {
+    title: "Commerce Fulfillment",
+    href: "/commerce-fulfillment",
+    description: "Review signed Medusa order handoffs and progress retail or food delivery fulfillment.",
+  },
+  {
+    title: "Developer Platform",
+    href: "/developer-platform",
+    description: "Issue provider-scoped API keys, register signed webhooks, and manage external integration access.",
+  },
+  {
+    title: "Field Service",
+    href: "/field-service",
+    description: "Schedule service work, assign qualified technicians, and follow immutable job-completion evidence.",
   },
   {
     title: "Logistics Control Tower",
@@ -394,6 +412,9 @@ export default function App() {
       <Route path="/dashboard" component={DashboardPage} />
       <Route path="/analytics" component={Analytics} />
       <Route path="/driver-mobility" component={DriverMobility} />
+      <Route path="/field-service" component={FieldServiceOperations} />
+      <Route path="/developer-platform" component={DeveloperPlatform} />
+      <Route path="/commerce-fulfillment" component={CommerceFulfillment} />
       <Route path="/logistics-control-tower" component={LogisticsControlTower} />
       <Route path="/tableside-commerce" component={TablesideCommerce} />
       <Route path="/white-label-apps" component={WhiteLabelApps} />

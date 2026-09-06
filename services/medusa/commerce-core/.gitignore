@@ -1,0 +1,6 @@
+node_modules/
+.medusa/
+.env
+.env.*
+*.token
+*.before-regenerate

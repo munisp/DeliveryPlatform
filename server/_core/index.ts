@@ -59,6 +59,10 @@ import { consumeRateLimit, getRateLimiterStatus } from "./rateLimiter";
 import { getFilteredFinancialAdminSnapshot, getFinancialAdminAlerts, getFinancialDatabaseEvidence, getFinancialAdminSettings, listFinancialAlertDeliveryReceipts, listFinancialDependencyHealthHistory, recordFinancialAdminAlertAction, recordFinancialAlertDeliveryReceipt, recordFinancialDependencyHealth, updateFinancialAdminSettings } from "./financialAdminStore";
 import { getAlertActionHistory, getAlertEscalations } from "./financialAdminStore";
 import { getFinancialTopology, getLatestDeliveryLocation, recordDeliveryLocation, recordProofOfDelivery } from "./deliveryTrackingStore";
+import { createPublicFieldServiceWorkOrder, getPublicFieldServiceWorkOrder, isDeveloperApiError } from "./developerApi";
+import { startDeveloperWebhookDispatcher } from "./developerWebhookDispatcher";
+import { developerOpenApi } from "./developerOpenApi";
+import { ingestMedusaWebhook, MedusaCommerceError } from "./medusaCommerce";
 import coverageBaseline from "../../assurance/CODE_COVERAGE_BASELINE.json";
 import coverageHistory from "../../assurance/CODE_COVERAGE_HISTORY.json";
 import playwrightExecutions from "../../assurance/PLAYWRIGHT_EXECUTION_HISTORY.json";
@@ -147,7 +151,7 @@ function applyCors(req: express.Request, res: express.Response) {
   if (origin && isAllowedOrigin(origin)) {
     res.setHeader("Access-Control-Allow-Origin", origin);
     res.setHeader("Access-Control-Allow-Credentials", "true");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With, X-API-Key, Idempotency-Key");
     res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
     res.setHeader("Vary", "Origin");
   }
@@ -237,6 +241,25 @@ app.use((req, res, next) => {
     return;
   }
   next();
+});
+
+app.post("/api/internal/commerce/medusa-events", express.raw({ type: "application/json", limit: ENV.apiBodyLimit }), rateLimit(120), async (req, res) => {
+  const storeId = `${req.header("X-Medusa-Store-Id") ?? ""}`.trim();
+  const eventId = `${req.header("X-Medusa-Event-Id") ?? ""}`.trim();
+  const eventType = `${req.header("X-Medusa-Event-Type") ?? ""}`.trim();
+  const rawBody = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+  try {
+    const event = await ingestMedusaWebhook({ storeId, eventId, eventType, rawBody, signature: req.header("X-Medusa-Signature") });
+    await recordOperationalEvent({ eventType: "commerce.medusa_event.received", route: req.path, outcome: "success", payload: { eventId, eventType, storeId, eventRecordId: event.id } });
+    res.status(202).json({ accepted: true, eventId: event.id });
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : "medusa_event_ingestion_failed";
+    await recordOperationalEvent({ eventType: "commerce.medusa_event.received", route: req.path, outcome: "failure", payload: { eventId, eventType, storeId, reason } });
+    if (error instanceof MedusaCommerceError && reason.includes("signature")) { res.status(401).json({ error: "medusa_event_signature_invalid" }); return; }
+    if (error instanceof MedusaCommerceError && (reason.includes("identity") || reason.includes("type") || reason.includes("json"))) { res.status(400).json({ error: "medusa_event_invalid" }); return; }
+    if (error instanceof MedusaCommerceError && reason.includes("disabled")) { res.status(404).json({ error: "medusa_event_ingress_unavailable" }); return; }
+    res.status(503).json({ error: "medusa_event_unavailable" });
+  }
 });
 
 app.use(express.json({ limit: ENV.apiBodyLimit }));
@@ -572,6 +595,36 @@ function requireAuthenticatedOperator(req: express.Request, res: express.Respons
   return user;
 }
 
+function readDeveloperApiKey(req: express.Request, res: express.Response) {
+  const apiKey = `${req.header("X-API-Key") ?? ""}`.trim();
+  if (!apiKey) { res.status(401).json({ error: "developer_api_key_required" }); return null; }
+  return apiKey;
+}
+
+function parseDeveloperWorkOrder(body: unknown) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) throw new Error("developer_api_payload_invalid");
+  const source = body as Record<string, unknown>;
+  const text = (name: string, minimum: number, maximum: number) => { const value = typeof source[name] === "string" ? source[name].trim() : ""; if (value.length < minimum || value.length > maximum) throw new Error("developer_api_payload_invalid"); return value; };
+  const positiveInteger = (name: string) => { const value = source[name]; if (!Number.isInteger(value) || (value as number) <= 0) throw new Error("developer_api_payload_invalid"); return value as number; };
+  const nullableNumber = (name: string, minimum: number, maximum: number) => { const value = source[name]; if (value === null || value === undefined) return null; if (typeof value !== "number" || !Number.isFinite(value) || value < minimum || value > maximum) throw new Error("developer_api_payload_invalid"); return value; };
+  const nullableTimestamp = (name: string) => { const value = source[name]; if (value === null || value === undefined) return null; if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T/.test(value) || Number.isNaN(Date.parse(value))) throw new Error("developer_api_payload_invalid"); return value; };
+  const priorityCandidate = source.priority ?? "normal";
+  if (priorityCandidate !== "low" && priorityCandidate !== "normal" && priorityCandidate !== "high" && priorityCandidate !== "urgent") throw new Error("developer_api_payload_invalid");
+  const serviceAreaId = text("serviceAreaId", 36, 36); if (!/^[0-9a-f-]{36}$/i.test(serviceAreaId)) throw new Error("developer_api_payload_invalid");
+  return { customerId: positiveInteger("customerId"), serviceAreaId, title: text("title", 3, 180), description: text("description", 3, 5000), serviceAddress: text("serviceAddress", 3, 500), latitude: nullableNumber("latitude", -90, 90), longitude: nullableNumber("longitude", -180, 180), priority: priorityCandidate as "low" | "normal" | "high" | "urgent", scheduledStartAt: nullableTimestamp("scheduledStartAt"), scheduledEndAt: nullableTimestamp("scheduledEndAt"), sourceOrderId: source.sourceOrderId === null || source.sourceOrderId === undefined ? null : positiveInteger("sourceOrderId") };
+}
+
+function developerApiFailure(res: express.Response, error: unknown) {
+  const message = error instanceof Error ? error.message : "developer_api_unavailable";
+  if (message.includes("authentication") || message.includes("key_malformed") || message.includes("key_required")) { res.status(401).json({ error: "developer_api_authentication_failed" }); return; }
+  if (message.includes("scope denied") || message.includes("provider_scope_required")) { res.status(403).json({ error: "developer_api_scope_denied" }); return; }
+  if (message.includes("not found")) { res.status(404).json({ error: "developer_resource_not_found" }); return; }
+  if (message.includes("idempotency key was reused")) { res.status(409).json({ error: "idempotency_key_conflict" }); return; }
+  if (message.includes("idempotent request is in progress")) { res.status(409).json({ error: "idempotency_request_in_progress" }); return; }
+  if (isDeveloperApiError(error)) { res.status(400).json({ error: "developer_api_request_invalid" }); return; }
+  res.status(503).json({ error: "developer_api_unavailable" });
+}
+
 function requireFinancialAdministrator(req: express.Request, res: express.Response): SessionUser | null {
   const user = requireAuthenticatedOperator(req, res);
   if (!user) return null;
@@ -865,6 +918,36 @@ app.get("/api/admin/finance/topology", rateLimit(30), async (req, res) => {
   if (!user) return;
   try { res.status(200).json({ edges: await getFinancialTopology(), retrievedAt: new Date().toISOString() }); }
   catch { res.status(503).json({ error: "financial_topology_unavailable" }); }
+});
+
+app.get("/api/v1/openapi.json", rateLimit(30), (_req, res) => { res.status(200).json(developerOpenApi); });
+
+app.post("/api/v1/field-service/work-orders", rateLimit(60), async (req, res) => {
+  const rawApiKey = readDeveloperApiKey(req, res); if (!rawApiKey) return;
+  const idempotencyKey = `${req.header("Idempotency-Key") ?? ""}`.trim();
+  if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/.test(idempotencyKey)) { res.status(400).json({ error: "idempotency_key_required" }); return; }
+  try {
+    const outcome = await createPublicFieldServiceWorkOrder({ rawApiKey, idempotencyKey, ...parseDeveloperWorkOrder(req.body) });
+    await recordOperationalEvent({ eventType: "developer.field_service.work_order.created", route: req.path, outcome: "success", payload: { workOrderId: outcome.body.id, status: outcome.status } });
+    res.status(outcome.status).json(outcome.body);
+  } catch (error) {
+    await recordOperationalEvent({ eventType: "developer.field_service.work_order.created", route: req.path, outcome: "failure", payload: { error: error instanceof Error ? error.message : "unknown_error" } });
+    developerApiFailure(res, error);
+  }
+});
+
+app.get("/api/v1/field-service/work-orders/:id", rateLimit(120), async (req, res) => {
+  const rawApiKey = readDeveloperApiKey(req, res); if (!rawApiKey) return;
+  const workOrderId = `${req.params.id ?? ""}`.trim();
+  if (!/^[0-9a-f-]{36}$/i.test(workOrderId)) { res.status(400).json({ error: "invalid_work_order_id" }); return; }
+  try {
+    const workOrder = await getPublicFieldServiceWorkOrder({ rawApiKey, workOrderId });
+    await recordOperationalEvent({ eventType: "developer.field_service.work_order.read", route: req.path, outcome: "success", payload: { workOrderId } });
+    res.status(200).json(workOrder);
+  } catch (error) {
+    await recordOperationalEvent({ eventType: "developer.field_service.work_order.read", route: req.path, outcome: "failure", payload: { workOrderId, error: error instanceof Error ? error.message : "unknown_error" } });
+    developerApiFailure(res, error);
+  }
 });
 
 app.get("/api/deliveries/:id/tracking", rateLimit(60), async (req, res) => {
@@ -1452,6 +1535,10 @@ app.post("/api/internal/longcat/voice/close", rateLimit(60), async (req, res) =>
     res.status(500).json({ error: error instanceof Error ? error.message : "longcat_close_failed" });
   }
 });
+
+const stopDeveloperWebhookDispatcher = startDeveloperWebhookDispatcher();
+process.once("SIGTERM", () => stopDeveloperWebhookDispatcher());
+process.once("SIGINT", () => stopDeveloperWebhookDispatcher());
 
 app.listen(ENV.port, ENV.bindHost, () => {
   console.log(`[SwitchOS] Operator edge listening on http://${ENV.bindHost}:${ENV.port}`);

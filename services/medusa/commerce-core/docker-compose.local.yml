@@ -1,0 +1,52 @@
+services:
+  postgres:
+    image: postgis/postgis:16-3.4
+    environment:
+      POSTGRES_DB: ${MEDUSA_POSTGRES_DB:?required}
+      POSTGRES_USER: ${MEDUSA_POSTGRES_USER:?required}
+      POSTGRES_PASSWORD: ${MEDUSA_POSTGRES_PASSWORD:?required}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${MEDUSA_POSTGRES_USER} -d ${MEDUSA_POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    volumes: ["medusa-postgres:/var/lib/postgresql/data"]
+    networks: [medusa-internal]
+  redis:
+    image: redis:7.4.2-alpine
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${MEDUSA_REDIS_PASSWORD:?required}"]
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a ${MEDUSA_REDIS_PASSWORD} ping | grep -qx PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    volumes: ["medusa-redis:/data"]
+    networks: [medusa-internal]
+  medusa:
+    build: .
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    environment:
+      MEDUSA_DATABASE_URL: postgresql://${MEDUSA_POSTGRES_USER}:${MEDUSA_POSTGRES_PASSWORD}@postgres:5432/${MEDUSA_POSTGRES_DB}
+      MEDUSA_REDIS_URL: redis://:${MEDUSA_REDIS_PASSWORD}@redis:6379
+      MEDUSA_STORE_CORS: ${MEDUSA_STORE_CORS:?required}
+      MEDUSA_ADMIN_CORS: ${MEDUSA_ADMIN_CORS:?required}
+      MEDUSA_AUTH_CORS: ${MEDUSA_AUTH_CORS:?required}
+      MEDUSA_JWT_SECRET: ${MEDUSA_JWT_SECRET:?required}
+      MEDUSA_COOKIE_SECRET: ${MEDUSA_COOKIE_SECRET:?required}
+      MEDUSA_STORE_ID: ${MEDUSA_STORE_ID:?required}
+      DELIVERYPLATFORM_MEDUSA_INGRESS_URL: ${DELIVERYPLATFORM_MEDUSA_INGRESS_URL:?required}
+      DELIVERYPLATFORM_MEDUSA_WEBHOOK_SECRET: ${DELIVERYPLATFORM_MEDUSA_WEBHOOK_SECRET:?required}
+    ports: ["127.0.0.1:9000:9000"]
+    read_only: true
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=128m"]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    networks: [medusa-internal, deliveryplatform-egress]
+volumes:
+  medusa-postgres: {}
+  medusa-redis: {}
+networks:
+  medusa-internal: { internal: true }
+  deliveryplatform-egress: { name: ${DELIVERYPLATFORM_EGRESS_NETWORK:?required}, external: true }
