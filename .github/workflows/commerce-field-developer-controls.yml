@@ -1,0 +1,92 @@
+name: Commerce, Field Service, and Developer API Controls
+
+on:
+  pull_request:
+    paths:
+      - "drizzle/0044_field_service_operations.sql"
+      - "drizzle/0045_developer_api_platform.sql"
+      - "drizzle/0046_medusa_commerce_fulfillment.sql"
+      - "scripts/testing/validate-field-service-db.sh"
+      - "scripts/testing/validate-developer-api-db.sh"
+      - "scripts/testing/validate-medusa-commerce-db.sh"
+      - "scripts/testing/run-db-harness-in-postgis-container.sh"
+      - "server/_core/fieldService.ts"
+      - "server/_core/developerApi.ts"
+      - "server/_core/developerOpenApi.ts"
+      - "server/_core/developerWebhookDispatcher.ts"
+      - "server/_core/commerceFulfillment.ts"
+      - "server/_core/medusaCommerce.ts"
+      - "server/_core/index.ts"
+      - "server/_core/env.ts"
+      - "server/_core/trpc.ts"
+      - "server/routers.ts"
+      - "client/src/App.tsx"
+      - "client/src/pages/FieldServiceOperations.tsx"
+      - "client/src/pages/DeveloperPlatform.tsx"
+      - "client/src/pages/CommerceFulfillment.tsx"
+      - "services/medusa/commerce-core/**"
+      - ".github/workflows/commerce-field-developer-controls.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: commerce-field-developer-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  application-controls:
+    name: Application type, build, and unit controls
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.12.0
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+      - run: pnpm run check
+      - run: pnpm run build
+      - run: pnpm exec vitest run --exclude 'tests/e2e/**' --exclude 'mobile/switchos-native/**'
+
+  database-lifecycle-controls:
+    name: Field, developer, and commerce database controls
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - run: chmod 0755 scripts/testing/run-db-harness-in-postgis-container.sh scripts/testing/validate-field-service-db.sh scripts/testing/validate-developer-api-db.sh scripts/testing/validate-medusa-commerce-db.sh
+      - run: scripts/testing/run-db-harness-in-postgis-container.sh --harness scripts/testing/validate-field-service-db.sh
+      - run: scripts/testing/run-db-harness-in-postgis-container.sh --harness scripts/testing/validate-developer-api-db.sh
+      - run: scripts/testing/run-db-harness-in-postgis-container.sh --harness scripts/testing/validate-medusa-commerce-db.sh
+
+  medusa-core-controls:
+    name: Medusa core reproducibility and production audit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: services/medusa/commerce-core
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.12.0
+          cache: npm
+          cache-dependency-path: services/medusa/commerce-core/package-lock.json
+      - run: npm ci --ignore-scripts
+      - run: |
+          export MEDUSA_DATABASE_URL='postgres://medusa:medusa@127.0.0.1:5432/medusa'
+          export MEDUSA_REDIS_URL='redis://:medusa@127.0.0.1:6379'
+          export MEDUSA_STORE_CORS='https://store.example.test'
+          export MEDUSA_ADMIN_CORS='https://admin.example.test'
+          export MEDUSA_AUTH_CORS='https://admin.example.test'
+          export MEDUSA_JWT_SECRET='0123456789abcdef0123456789abcdef'
+          export MEDUSA_COOKIE_SECRET='abcdef0123456789abcdef0123456789'
+          npm run build
+      - run: npm audit --omit=dev --audit-level=high

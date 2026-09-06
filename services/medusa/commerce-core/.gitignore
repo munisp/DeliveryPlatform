@@ -2,5 +2,6 @@ node_modules/
 .medusa/
 .env
 .env.*
+!.env.example
 *.token
 *.before-regenerate
