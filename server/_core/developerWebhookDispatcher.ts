@@ -9,7 +9,9 @@ type ClaimedDelivery = {
   event_id: string;
   event_type: string;
   payload: Record<string, unknown>;
+  created_at: string | Date;
   attempt_count: number;
+  claim_token: string;
 };
 
 let pool: Pool | null = null;
@@ -78,7 +80,7 @@ async function resolveDelivery(
   const body = JSON.stringify({
     id: delivery.event_id,
     type: delivery.event_type,
-    created_at: new Date().toISOString(),
+    created_at: new Date(delivery.created_at).toISOString(),
     data: delivery.payload,
   });
   const signature = createHmac("sha256", secret).update(body).digest("hex");
@@ -132,8 +134,14 @@ export async function dispatchDeveloperWebhooks(limit = 25) {
     for (const delivery of claimed.rows) {
       const result = await resolveDelivery(delivery, secrets);
       await db.query(
-        `SELECT developer.complete_webhook_delivery($1::uuid,$2,$3,$4)`,
-        [delivery.delivery_id, result.success, result.status, result.error],
+        `SELECT developer.complete_webhook_delivery($1::uuid,$2::uuid,$3,$4,$5)`,
+        [
+          delivery.delivery_id,
+          delivery.claim_token,
+          result.success,
+          result.status,
+          result.error,
+        ],
       );
       if (result.success) delivered += 1;
       else retried += 1;

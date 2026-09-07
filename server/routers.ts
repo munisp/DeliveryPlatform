@@ -60,6 +60,36 @@ import {
   upsertTechnician,
 } from "./_core/fieldService";
 import {
+  declineTransparentDriverOffer,
+  listTransparentDriverOffers,
+  setDriverDispatchFairnessPolicy,
+  setDriverOfferEconomicsPolicy,
+} from "./_core/driverDispatchFairness";
+import {
+  activateVehicleAsset,
+  createFleetProvider,
+  createVehicleOffer,
+  listVehicleAccessContracts,
+  listVehicleAccessOffers,
+  recordAssetEvidence,
+  recordVehicleInspection,
+  registerVehicleAsset,
+  requestVehicleAccess,
+  transitionVehicleAccessContract,
+  upsertWorkerVehicleEligibility,
+} from "./_core/vehicleAccess";
+import {
+  decideVerificationCase,
+  enqueueVerificationProcessing,
+  getVerificationChecks,
+  listVerificationCases,
+  recordVerificationConsent,
+  recordVerificationEvidence,
+  recordVerificationProviderCheck,
+  startVerificationCase,
+  withdrawVerificationConsent,
+} from "./_core/stakeholderVerification";
+import {
   createDeveloperApiClient,
   createDeveloperApiKey,
   createDeveloperWebhookEndpoint,
@@ -558,6 +588,451 @@ export const appRouter = router({
       )
       .mutation(({ ctx, input }) =>
         cancelWorkOrder({ actorUserId: ctx.user!.id, ...input }),
+      ),
+  }),
+
+  driverDispatchFairness: router({
+    listMyOffers: authenticatedProcedure.query(({ ctx }) =>
+      listTransparentDriverOffers(ctx.user!.id),
+    ),
+    declineOffer: authenticatedProcedure
+      .input(
+        z.object({
+          offerId: z.string().uuid(),
+          reason: z.enum([
+            "pickup_distance_unprofitable",
+            "pickup_time_unprofitable",
+            "fare_insufficient",
+            "destination_unsuitable",
+            "safety_preference",
+            "vehicle_constraint",
+            "other",
+          ]),
+          idempotencyKey: z
+            .string()
+            .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
+        }),
+      )
+      .mutation(({ ctx, input }) =>
+        declineTransparentDriverOffer({ driverUserId: ctx.user!.id, ...input }),
+      ),
+    setEconomicsPolicy: protectedProcedure
+      .input(
+        z.object({
+          zoneId: z.string().uuid(),
+          version: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{2,63}$/),
+          driverTimeFloorKoboPerMin: z.number().int().min(1).max(1000000),
+          driverDistanceFloorKoboPerKm: z.number().int().min(1).max(10000000),
+          fuelCostIndexBp: z.number().int().min(5000).max(30000),
+          maintenanceCostIndexBp: z.number().int().min(5000).max(30000),
+          pickupSubsidyKoboPerKm: z.number().int().min(0).max(10000000),
+          maxPickupSubsidyKobo: z.number().int().min(0).max(1000000000),
+          platformVariableCostKobo: z.number().int().min(0).max(1000000000),
+          platformContributionTargetKobo: z
+            .number()
+            .int()
+            .min(0)
+            .max(1000000000),
+          effectiveFrom: z.string().datetime(),
+        }),
+      )
+      .mutation(({ ctx, input }) =>
+        setDriverOfferEconomicsPolicy({ actorUserId: ctx.user!.id, ...input }),
+      ),
+    setPolicy: protectedProcedure
+      .input(
+        z.object({
+          zoneId: z.string().uuid(),
+          version: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{2,63}$/),
+          platformCommissionBp: z.number().int().min(0).max(1500),
+          maxPickupDistanceM: z.number().int().min(250).max(5000),
+          maxPickupEtaS: z.number().int().min(60).max(1200),
+          effectiveFrom: z.string().datetime(),
+        }),
+      )
+      .mutation(({ ctx, input }) =>
+        setDriverDispatchFairnessPolicy({
+          actorUserId: ctx.user!.id,
+          ...input,
+        }),
+      ),
+  }),
+  stakeholderVerification: router({
+    listCases: authenticatedProcedure
+      .input(
+        z
+          .object({ limit: z.number().int().min(1).max(100).optional() })
+          .optional(),
+      )
+      .query(({ ctx, input }) =>
+        listVerificationCases(ctx.user!.id, input?.limit ?? 50),
+      ),
+    getChecks: authenticatedProcedure
+      .input(z.object({ caseId: z.string().uuid() }))
+      .query(({ ctx, input }) =>
+        getVerificationChecks(ctx.user!.id, input.caseId),
+      ),
+    startCase: authenticatedProcedure
+      .input(
+        z.object({
+          subjectType: z.enum([
+            "driver",
+            "vehicle_asset",
+            "field_technician",
+            "merchant",
+            "fleet_provider",
+            "operator",
+          ]),
+          subjectKey: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{1,127}$/),
+          jurisdiction: z.string().regex(/^[A-Z]{2}(-[A-Z0-9]{1,12})?$/),
+          purpose: z.string().regex(/^[a-z][a-z0-9_.-]{2,63}$/),
+          idempotencyKey: z
+            .string()
+            .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
+        }),
+      )
+      .mutation(({ ctx, input }) =>
+        startVerificationCase({
+          actorUserId: ctx.user!.id,
+          subjectUserId: ctx.user!.id,
+          ...input,
+        }),
+      ),
+    recordConsent: authenticatedProcedure
+      .input(
+        z.object({
+          caseId: z.string().uuid(),
+          consentVersion: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/),
+          disclosureDigestHex: z.string().regex(/^[a-f0-9]{64}$/),
+          expiresAt: z.string().datetime(),
+          idempotencyKey: z
+            .string()
+            .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
+        }),
+      )
+      .mutation(({ ctx, input }) =>
+        recordVerificationConsent({ actorUserId: ctx.user!.id, ...input }),
+      ),
+    withdrawConsent: authenticatedProcedure
+      .input(
+        z.object({
+          caseId: z.string().uuid(),
+          idempotencyKey: z
+            .string()
+            .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
+        }),
+      )
+      .mutation(({ ctx, input }) =>
+        withdrawVerificationConsent({ actorUserId: ctx.user!.id, ...input }),
+      ),
+    recordEvidence: authenticatedProcedure
+      .input(
+        z.object({
+          caseId: z.string().uuid(),
+          evidenceKind: z.string().regex(/^[a-z][a-z0-9_.-]{2,63}$/),
+          objectKey: z
+            .string()
+            .regex(/^[A-Za-z0-9][A-Za-z0-9._/-]+$/)
+            .max(512),
+          contentType: z.enum([
+            "application/pdf",
+            "image/jpeg",
+            "image/png",
+            "image/heic",
+            "video/mp4",
+          ]),
+          sha256Hex: z.string().regex(/^[a-f0-9]{64}$/),
+          captureMetadata: z.record(z.string(), z.unknown()),
+          idempotencyKey: z
+            .string()
+            .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
+        }),
+      )
+      .mutation(({ ctx, input }) =>
+        recordVerificationEvidence({ actorUserId: ctx.user!.id, ...input }),
+      ),
+    enqueueProcessing: authenticatedProcedure
+      .input(
+        z.object({
+          caseId: z.string().uuid(),
+          evidenceId: z.string().uuid(),
+          processor: z.enum([
+            "paddleocr",
+            "docling",
+            "vlm_document",
+            "liveness",
+            "document_forensics",
+          ]),
+          idempotencyKey: z
+            .string()
+            .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
+        }),
+      )
+      .mutation(({ ctx, input }) =>
+        enqueueVerificationProcessing({ actorUserId: ctx.user!.id, ...input }),
+      ),
+    recordProviderCheck: protectedProcedure
+      .input(
+        z.object({
+          caseId: z.string().uuid(),
+          checkType: z.enum([
+            "identity_document",
+            "liveness",
+            "driving_licence",
+            "criminal_record",
+            "sanctions",
+            "vehicle_registry",
+            "commercial_insurance",
+            "technician_credential",
+            "beneficial_owner",
+            "operator_recertification",
+          ]),
+          providerKey: z.string().regex(/^[a-z][a-z0-9_-]{2,63}$/),
+          state: z.enum([
+            "passed",
+            "failed",
+            "manual_review",
+            "unavailable",
+            "expired",
+          ]),
+          providerReference: z.string().min(3).max(200).nullable().optional(),
+          responseDigestHex: z
+            .string()
+            .regex(/^[a-f0-9]{64}$/)
+            .nullable()
+            .optional(),
+          expiresAt: z.string().datetime().nullable().optional(),
+          detailCode: z
+            .string()
+            .regex(/^[a-z][a-z0-9_.-]{2,95}$/)
+            .nullable()
+            .optional(),
+          idempotencyKey: z
+            .string()
+            .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
+        }),
+      )
+      .mutation(({ ctx, input }) =>
+        recordVerificationProviderCheck({
+          actorUserId: ctx.user!.id,
+          ...input,
+        }),
+      ),
+    decideCase: protectedProcedure
+      .input(
+        z.object({
+          caseId: z.string().uuid(),
+          decision: z.enum(["verify", "reject", "suspend", "expire"]),
+          reason: z.string().trim().min(3).max(1000),
+          expiresAt: z.string().datetime().nullable().optional(),
+          idempotencyKey: z
+            .string()
+            .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
+        }),
+      )
+      .mutation(({ ctx, input }) =>
+        decideVerificationCase({ actorUserId: ctx.user!.id, ...input }),
+      ),
+  }),
+  vehicleAccess: router({
+    listOffers: authenticatedProcedure
+      .input(
+        z
+          .object({ limit: z.number().int().min(1).max(100).optional() })
+          .optional(),
+      )
+      .query(({ input }) => listVehicleAccessOffers(input?.limit ?? 50)),
+    listContracts: authenticatedProcedure
+      .input(
+        z
+          .object({ limit: z.number().int().min(1).max(100).optional() })
+          .optional(),
+      )
+      .query(({ ctx, input }) =>
+        listVehicleAccessContracts({
+          actorUserId: ctx.user!.id,
+          limit: input?.limit ?? 50,
+        }),
+      ),
+    requestContract: authenticatedProcedure
+      .input(
+        z.object({
+          offerId: z.string().uuid(),
+          startsAt: z.string().datetime(),
+          endsAt: z.string().datetime(),
+          idempotencyKey: z
+            .string()
+            .trim()
+            .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
+        }),
+      )
+      .mutation(({ ctx, input }) =>
+        requestVehicleAccess({ workerUserId: ctx.user!.id, ...input }),
+      ),
+    recordInspection: authenticatedProcedure
+      .input(
+        z.object({
+          contractId: z.string().uuid(),
+          kind: z.enum(["handover", "return"]),
+          objectKey: z.string().trim().min(3).max(512),
+          contentType: z.enum([
+            "image/jpeg",
+            "image/png",
+            "image/heic",
+            "application/pdf",
+          ]),
+          sha256Hex: z.string().regex(/^[a-f0-9]{64}$/),
+          odometerKm: z.number().int().min(0).max(5000000),
+          idempotencyKey: z
+            .string()
+            .trim()
+            .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
+        }),
+      )
+      .mutation(({ ctx, input }) =>
+        recordVehicleInspection({ actorUserId: ctx.user!.id, ...input }),
+      ),
+    transition: authenticatedProcedure
+      .input(
+        z.object({
+          contractId: z.string().uuid(),
+          action: z.enum(["begin_return", "cancel"]),
+          reason: z.string().trim().min(3).max(1000).nullable(),
+          idempotencyKey: z
+            .string()
+            .trim()
+            .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
+        }),
+      )
+      .mutation(({ ctx, input }) =>
+        transitionVehicleAccessContract({
+          actorUserId: ctx.user!.id,
+          ...input,
+        }),
+      ),
+    createProvider: protectedProcedure
+      .input(
+        z.object({
+          displayName: z.string().trim().min(2).max(160),
+          legalName: z.string().trim().min(2).max(255),
+        }),
+      )
+      .mutation(({ ctx, input }) =>
+        createFleetProvider({ actorUserId: ctx.user!.id, ...input }),
+      ),
+    verifyWorkerEligibility: protectedProcedure
+      .input(
+        z.object({
+          workerUserId: z.number().int().positive(),
+          allowedWorkCategories: z
+            .array(
+              z.enum(["ride_hailing", "delivery", "courier", "field_service"]),
+            )
+            .min(1)
+            .max(4),
+          expiresAt: z.string().datetime(),
+        }),
+      )
+      .mutation(({ ctx, input }) =>
+        upsertWorkerVehicleEligibility({ actorUserId: ctx.user!.id, ...input }),
+      ),
+    registerAsset: protectedProcedure
+      .input(
+        z.object({
+          providerId: z.string().uuid(),
+          registrationNumber: z.string().trim().min(3).max(32),
+          vinSha256: z.string().regex(/^[a-f0-9]{64}$/),
+          make: z.string().trim().min(1).max(80),
+          model: z.string().trim().min(1).max(120),
+          manufactureYear: z.number().int().min(1990).max(2100),
+          odometerKm: z.number().int().min(0).max(5000000),
+          passengerCapacity: z.number().int().min(1).max(8),
+          allowedWorkCategories: z
+            .array(
+              z.enum(["ride_hailing", "delivery", "courier", "field_service"]),
+            )
+            .min(1)
+            .max(4),
+        }),
+      )
+      .mutation(({ ctx, input }) =>
+        registerVehicleAsset({ actorUserId: ctx.user!.id, ...input }),
+      ),
+    recordAssetEvidence: protectedProcedure
+      .input(
+        z.object({
+          assetId: z.string().uuid(),
+          kind: z.enum([
+            "registration",
+            "roadworthiness",
+            "commercial_cover",
+            "ownership_authority",
+            "inspection",
+          ]),
+          objectKey: z.string().trim().min(3).max(512),
+          sha256Hex: z.string().regex(/^[a-f0-9]{64}$/),
+          expiresAt: z.string().datetime().nullable(),
+          idempotencyKey: z
+            .string()
+            .trim()
+            .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
+        }),
+      )
+      .mutation(({ ctx, input }) =>
+        recordAssetEvidence({ actorUserId: ctx.user!.id, ...input }),
+      ),
+    activateAsset: protectedProcedure
+      .input(
+        z.object({
+          assetId: z.string().uuid(),
+          idempotencyKey: z
+            .string()
+            .trim()
+            .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
+        }),
+      )
+      .mutation(({ ctx, input }) =>
+        activateVehicleAsset({ actorUserId: ctx.user!.id, ...input }),
+      ),
+    createOffer: protectedProcedure
+      .input(
+        z.object({
+          providerId: z.string().uuid(),
+          assetId: z.string().uuid(),
+          currency: z.string().regex(/^[A-Z]{3}$/),
+          weeklyPriceMinor: z.number().int().positive().max(1000000000),
+          depositMinor: z.number().int().min(0).max(1000000000),
+          includedKmPerWeek: z.number().int().min(0).max(100000),
+          excessKmPriceMinor: z.number().int().min(0).max(100000000),
+          minimumDays: z.number().int().min(1).max(365),
+        }),
+      )
+      .mutation(({ ctx, input }) =>
+        createVehicleOffer({ actorUserId: ctx.user!.id, ...input }),
+      ),
+    operateTransition: protectedProcedure
+      .input(
+        z.object({
+          contractId: z.string().uuid(),
+          action: z.enum([
+            "approve",
+            "handover",
+            "close",
+            "suspend",
+            "begin_safe_return",
+          ]),
+          reason: z.string().trim().min(3).max(1000).nullable(),
+          idempotencyKey: z
+            .string()
+            .trim()
+            .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
+        }),
+      )
+      .mutation(({ ctx, input }) =>
+        transitionVehicleAccessContract({
+          actorUserId: ctx.user!.id,
+          ...input,
+        }),
       ),
   }),
 

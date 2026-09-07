@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #020617; color: #f8fafc; }
+        .slide-container {
+            width: 1280px;
+            min-height: 720px;
+            background-color: #020617;
+            position: relative;
+            padding-top: 60px;
+            padding-left: 80px;
+            padding-right: 80px;
+            display: flex;
+            flex-direction: column;
+        }
+        .header {
+            margin-bottom: 50px;
+            border-left: 6px solid #22d3ee;
+            padding-left: 24px;
+        }
+        h1 {
+            font-size: 48px;
+            font-weight: 700;
+            line-height: 1.2;
+            color: #f8fafc;
+            letter-spacing: -0.5px;
+        }
+        .content-area {
+            display: flex;
+            gap: 60px;
+            flex: 1;
+            margin-bottom: 80px;
+        }
+        .left-panel {
+            flex: 0 0 350px;
+            background-color: rgba(15, 23, 42, 0.6);
+            border: 1px solid #334155;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 40px;
+            text-align: center;
+        }
+        .left-panel i {
+            font-size: 120px;
+            color: #22d3ee;
+            margin-bottom: 30px;
+        }
+        .left-panel h3 {
+            font-size: 24px;
+            color: #e2e8f0;
+            font-weight: 600;
+        }
+        .right-panel {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            gap: 32px;
+        }
+        .list-item {
+            display: flex;
+            align-items: flex-start;
+            gap: 20px;
+        }
+        .list-icon {
+            color: #38bdf8;
+            font-size: 24px;
+            padding-top: 4px;
+        }
+        .list-text {
+            font-size: 22px;
+            line-height: 1.5;
+            color: #cbd5e1;
+        }
+        .highlight {
+            color: #22d3ee;
+            font-weight: 600;
+        }
+        .code-text {
+            font-family: monospace;
+            color: #38bdf8;
+            background: #0f172a;
+            padding: 2px 6px;
+        }
+        .footer-bar {
+            position: absolute;
+            bottom: 40px;
+            left: 80px;
+            right: 80px;
+            height: 1px;
+            background-color: #1e293b;
+            display: flex;
+            justify-content: space-between;
+            padding-top: 16px;
+            color: #64748b;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <div class="slide-container">
+        <div class="header">
+            <h1>Liveness is a bounded artifact gate today</h1>
+        </div>
+
+        <div class="content-area">
+            <div class="left-panel">
+                <i class="fa-solid fa-user-shield"></i>
+                <h3>Artifact Completeness</h3>
+            </div>
+
+            <div class="right-panel">
+                <div class="list-item">
+                    <div class="list-icon"><i class="fa-solid fa-check-circle"></i></div>
+                    <div class="list-text">
+                        Nonce digest, frame digest format, distinct frames, capture window, and attestation reference are <span class="highlight">checked</span>.
+                    </div>
+                </div>
+                <div class="list-item">
+                    <div class="list-icon"><i class="fa-solid fa-hand-paper"></i></div>
+                    <div class="list-text">
+                        The service returns <span class="code-text">manual_review</span> whether artifact indicators are complete or incomplete.
+                    </div>
+                </div>
+                <div class="list-item">
+                    <div class="list-icon"><i class="fa-solid fa-ban"></i></div>
+                    <div class="list-text">
+                        <span class="highlight">No face match</span>, demographic inference, or automated pass/fail eligibility decision is implemented.
+                    </div>
+                </div>
+                <div class="list-item">
+                    <div class="list-icon"><i class="fa-solid fa-plug"></i></div>
+                    <div class="list-text">
+                        A compliant PAD/liveness provider remains a <span class="highlight">separate, consented integration prerequisite</span>.
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="footer-bar">
+            <span>Next-Generation Stakeholder Verification</span>
+            <span>6</span>
+        </div>
+    </div>
+</body>
+</html>

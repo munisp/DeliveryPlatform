@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Gig-Worker Vehicle Access & Fair Dispatch</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+        .slide-container {
+            width: 1280px;
+            min-height: 720px;
+            background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 100%);
+            color: #ffffff;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            text-align: center;
+            position: relative;
+            overflow: hidden;
+        }
+        .accent-circle {
+            position: absolute;
+            width: 600px;
+            height: 600px;
+            border-radius: 50%;
+            background: radial-gradient(circle, rgba(14, 165, 233, 0.15) 0%, rgba(14, 165, 233, 0) 70%);
+            top: -200px;
+            left: -200px;
+        }
+        .accent-circle-2 {
+            position: absolute;
+            width: 800px;
+            height: 800px;
+            border-radius: 50%;
+            background: radial-gradient(circle, rgba(139, 92, 246, 0.1) 0%, rgba(139, 92, 246, 0) 70%);
+            bottom: -300px;
+            right: -200px;
+        }
+        .content-wrapper {
+            z-index: 10;
+            max-width: 1000px;
+            padding: 40px;
+        }
+        h1 {
+            font-size: 64px;
+            font-weight: 800;
+            line-height: 1.1;
+            margin-bottom: 24px;
+            background: linear-gradient(90deg, #38bdf8, #818cf8);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            letter-spacing: -1px;
+        }
+        h2 {
+            font-size: 32px;
+            font-weight: 400;
+            color: #cbd5e1;
+            line-height: 1.4;
+            margin-bottom: 48px;
+        }
+        .date {
+            font-size: 20px;
+            color: #94a3b8;
+            font-weight: 500;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+        }
+        .logo-placeholder {
+            margin-bottom: 40px;
+            font-size: 32px;
+            color: #38bdf8;
+        }
+    </style>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" rel="stylesheet">
+</head>
+<body>
+    <div class="slide-container">
+        <div class="accent-circle"></div>
+        <div class="accent-circle-2"></div>
+        <div class="content-wrapper">
+            <div class="logo-placeholder"><i class="fa-solid fa-shield-halved"></i></div>
+            <h1>Gig-Worker Vehicle Access &amp; Fair Dispatch</h1>
+            <h2>A clean-room architecture for transparent offers, safe vehicle access, and positive contribution economics</h2>
+            <div class="date">2026-09-07</div>
+        </div>
+    </div>
+</body>
+</html>

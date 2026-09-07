@@ -1,0 +1,27 @@
+flowchart TD
+    A[Start: Quote & Route] --> B{Determine Base Revenue}
+    B -->|E = Gross Fare - Taxes| C[Calculate Required Driver Floor]
+
+    C -->|D_min = TimeRate + DistRate * FuelIndex| D[Calculate Required Platform Target]
+    D -->|P_target = Variable Cost + Target Margin| E{Is Subsidy Required?}
+
+    E -->|E < D_min| F[Allocate Pickup Subsidy S]
+    E -->|E >= D_min| G[S = 0]
+
+    F --> H{Check Subsidy Cap}
+    G --> I[Calculate Max Commission]
+
+    H -->|S <= Max Subsidy| I
+    H -->|S > Max Subsidy| X[Fail: Uneconomic]
+
+    I -->|P_max = min of E+S-D_min and 15pct E| J{Check Equilibrium}
+
+    J -->|P_target <= P_max| K[Set Commission P = P_target]
+    J -->|P_target > P_max| X
+
+    K --> L[Calculate Final Driver Net]
+    L -->|D = E - P + S| M[Issue Transparent Offer]
+
+    style X fill:#7f1d1d,stroke:#ef4444,color:#fca5a5
+    style M fill:#064e3b,stroke:#10b981,color:#a7f3d0
+    style J fill:#1e3a8a,stroke:#3b82f6,color:#bfdbfe

@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #020617; color: #f8fafc; }
+        .slide-container {
+            width: 1280px;
+            min-height: 720px;
+            background-color: #020617;
+            position: relative;
+            padding-top: 60px;
+            padding-left: 80px;
+            padding-right: 80px;
+        }
+        .header {
+            margin-bottom: 40px;
+            border-left: 6px solid #22d3ee;
+            padding-left: 24px;
+        }
+        h1 {
+            font-size: 48px;
+            font-weight: 700;
+            line-height: 1.2;
+            color: #f8fafc;
+            letter-spacing: -0.5px;
+        }
+        .content-grid {
+            display: flex;
+            gap: 40px;
+            align-items: center;
+        }
+        .text-col {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 30px;
+        }
+        .point-item {
+            display: flex;
+            align-items: flex-start;
+            gap: 20px;
+        }
+        .icon-box {
+            color: #22d3ee;
+            font-size: 24px;
+            padding-top: 4px;
+        }
+        .point-text p {
+            font-size: 22px;
+            line-height: 1.5;
+            color: #cbd5e1;
+        }
+        .code-text {
+            font-family: monospace;
+            color: #38bdf8;
+            background: #0f172a;
+            padding: 2px 6px;
+        }
+        .highlight {
+            color: #22d3ee;
+            font-weight: 600;
+        }
+        .image-col {
+            flex: 1;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        .image-wrapper {
+            width: 540px;
+            height: 400px;
+            background-color: #0f172a;
+            border: 1px solid #334155;
+            padding: 20px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        .image-wrapper img {
+            max-width: 100%;
+            max-height: 100%;
+            object-fit: contain;
+        }
+        .footer-bar {
+            position: absolute;
+            bottom: 40px;
+            left: 80px;
+            right: 80px;
+            height: 1px;
+            background-color: #1e293b;
+            display: flex;
+            justify-content: space-between;
+            padding-top: 16px;
+            color: #64748b;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <div class="slide-container">
+        <div class="header">
+            <h1>Provider callbacks are authenticated before persistence</h1>
+        </div>
+
+        <div class="content-grid">
+            <div class="text-col">
+                <div class="point-item">
+                    <div class="icon-box"><i class="fa-solid fa-key"></i></div>
+                    <div class="point-text">
+                        <p>Provider key maps to a configured <span class="highlight">32–4096 byte secret</span>.</p>
+                    </div>
+                </div>
+
+                <div class="point-item">
+                    <div class="icon-box"><i class="fa-solid fa-shield-halved"></i></div>
+                    <div class="point-text">
+                        <p>Go computes <span class="highlight">HMAC-SHA-256</span> over the exact raw body and compares with <span class="code-text">hmac.Equal</span>.</p>
+                    </div>
+                </div>
+
+                <div class="point-item">
+                    <div class="icon-box"><i class="fa-solid fa-triangle-exclamation"></i></div>
+                    <div class="point-text">
+                        <p>Invalid signature yields <span class="code-text">401</span>; malformed body yields <span class="code-text">400</span>; temporary persistence failure yields <span class="code-text">503</span> for safe retry.</p>
+                    </div>
+                </div>
+
+                <div class="point-item">
+                    <div class="icon-box"><i class="fa-solid fa-database"></i></div>
+                    <div class="point-text">
+                        <p>PostgreSQL repeats operator, case, enum, digest, expiry, and <span class="highlight">idempotency checks</span>.</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="image-col">
+                <div class="image-wrapper">
+                    <img src="/home/ubuntu/DeliveryPlatform-commerce-field/validation/diagrams/verification_provider_callback_flow.png" alt="Provider Callback Flow Diagram" />
+                </div>
+            </div>
+        </div>
+
+        <div class="footer-bar">
+            <span>Next-Generation Stakeholder Verification</span>
+            <span>4</span>
+        </div>
+    </div>
+</body>
+</html>

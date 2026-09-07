@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #020617; color: #f8fafc; }
+        .slide-container {
+            width: 1280px;
+            min-height: 720px;
+            background-color: #020617;
+            position: relative;
+            padding-top: 60px;
+            padding-left: 80px;
+            padding-right: 80px;
+        }
+        .header {
+            margin-bottom: 50px;
+            border-left: 6px solid #22d3ee;
+            padding-left: 24px;
+        }
+        h1 {
+            font-size: 44px;
+            font-weight: 700;
+            line-height: 1.2;
+            color: #f8fafc;
+            letter-spacing: -0.5px;
+        }
+        .list-container {
+            display: flex;
+            flex-direction: column;
+            gap: 24px;
+        }
+        .list-row {
+            display: flex;
+            align-items: center;
+            background-color: rgba(15, 23, 42, 0.5);
+            border-left: 4px solid #334155;
+            padding: 20px 24px;
+        }
+        .icon-box {
+            width: 60px;
+            min-width: 60px;
+            height: 60px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            color: #22d3ee;
+            font-size: 28px;
+            margin-right: 24px;
+            background-color: rgba(34, 211, 238, 0.1);
+            border-radius: 8px;
+        }
+        .row-text {
+            font-size: 20px;
+            line-height: 1.5;
+            color: #cbd5e1;
+        }
+        .highlight {
+            color: #22d3ee;
+            font-weight: 600;
+        }
+        .footer-bar {
+            position: absolute;
+            bottom: 40px;
+            left: 80px;
+            right: 80px;
+            height: 1px;
+            background-color: #1e293b;
+            display: flex;
+            justify-content: space-between;
+            padding-top: 16px;
+            color: #64748b;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <div class="slide-container">
+        <div class="header">
+            <h1>Production integration is provider-specific and approval-gated</h1>
+        </div>
+
+        <div class="list-container">
+            <div class="list-row">
+                <div class="icon-box"><i class="fa-solid fa-globe"></i></div>
+                <div class="row-text">
+                    Select <span class="highlight">jurisdiction-supported</span> KYC/KYB, licence, sanctions, records, registry, insurance, credential, and ownership providers.
+                </div>
+            </div>
+
+            <div class="list-row">
+                <div class="icon-box"><i class="fa-solid fa-scale-balanced"></i></div>
+                <div class="row-text">
+                    Establish consent language, lawful basis, retention/deletion, human appeal, and data-processing agreements.
+                </div>
+            </div>
+
+            <div class="list-row">
+                <div class="icon-box"><i class="fa-solid fa-shield-virus"></i></div>
+                <div class="row-text">
+                    Use encrypted <span class="highlight">malware-scanned object storage</span>, callback secret custody, egress allowlists, and separate runtime/DDL identities.
+                </div>
+            </div>
+
+            <div class="list-row">
+                <div class="icon-box"><i class="fa-solid fa-vial-circle-check"></i></div>
+                <div class="row-text">
+                    Validate with provider sandbox tenants before production enablement; <span class="highlight">local synthetic tests are not certification</span>.
+                </div>
+            </div>
+        </div>
+
+        <div class="footer-bar">
+            <span>Next-Generation Stakeholder Verification</span>
+            <span>10</span>
+        </div>
+    </div>
+</body>
+</html>

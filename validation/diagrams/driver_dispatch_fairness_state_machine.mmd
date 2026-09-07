@@ -1,0 +1,26 @@
+flowchart LR
+    A[Ride trip: matching] --> B{Live zone fairness policy?}
+    B -- no --> X[Do not issue opaque offer]
+    B -- yes --> C{Pickup distance and ETA\nwithin policy caps?}
+    C -- no --> Y[Skip candidate\nreason recorded by worker]
+    C -- yes --> D{Driver available, eligible,\nactive, clear, integrity threshold met?}
+    D -- no --> Y
+    D -- yes --> E[Lock presence with\nFOR UPDATE SKIP LOCKED]
+    E --> F[Create pending offer]
+    F --> G[Persist disclosure:\ndestination, route, gross fare, fees,\ncommission, expected proceeds]
+    G --> H{Driver decision}
+    H -- accept --> I{Disclosure exists?}
+    I -- no --> J[Reject acceptance]
+    I -- yes --> K[Existing accepted-trip transition]
+    H -- decline --> L[Lock offer and verify driver ownership]
+    L --> M[Persist reason-coded decline\nand immutable rematch decision]
+    M --> N[Restore driver presence to available]
+    N --> O[Emit one outbox event]
+    O --> P{Other valid offers remain?}
+    P -- no --> Q[Rematch required]
+    P -- yes --> R[No immediate rematch]
+
+    style X fill:#7f1d1d,color:#fff
+    style J fill:#7f1d1d,color:#fff
+    style G fill:#164e63,color:#fff
+    style M fill:#14532d,color:#fff

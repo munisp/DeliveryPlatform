@@ -1,0 +1,112 @@
+# Required pre-apply inputs (substitute through the approved environment renderer)
+# STAGING_FQDN=developer-api.staging.<YOUR_DOMAIN>
+# ACME_CONTACT_EMAIL=<STAGING_CERTIFICATE_CONTACT_EMAIL>
+# INGRESS_CLASS=<APPROVED_INGRESS_CLASS>
+# INGRESS_NAMESPACE=<INGRESS_CONTROLLER_NAMESPACE>
+# INGRESS_APP_LABEL=<INGRESS_CONTROLLER_APP_LABEL>
+#
+# DNS (performed in the authoritative staging DNS service; no credentials in this file):
+# 1. After the ingress controller reports a stable public address, create exactly one:
+#    A     ${STAGING_FQDN} -> <INGRESS_PUBLIC_IPV4>
+#    OR
+#    CNAME ${STAGING_FQDN} -> <INGRESS_PROVIDER_DNS_NAME>.
+# 2. Set a short staging TTL, such as 60 seconds. Do not publish an AAAA record
+#    unless IPv6 HTTPS and HTTP-01 reachability have been verified.
+# 3. Verify authoritative and public resolution before requesting the certificate.
+#
+# HTTP-01 requires that the public CA can reach TCP/80 for this FQDN. For a
+# wildcard certificate or an environment that cannot expose port 80, use a
+# provider-specific DNS-01 Issuer limited to a delegated _acme-challenge zone.
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: deliveryplatform-acme-staging
+  namespace: deliveryplatform-staging
+spec:
+  acme:
+    # Use the CA staging directory for the first issuance. Replace with the
+    # production directory only after the DNS, HTTP-01 solver, and renewal
+    # path have been independently verified.
+    server: https://acme-staging-v02.api.letsencrypt.org/directory
+    email: <STAGING_CERTIFICATE_CONTACT_EMAIL>
+    privateKeySecretRef:
+      name: deliveryplatform-acme-staging-account
+    solvers:
+      - http01:
+          ingress:
+            ingressClassName: <APPROVED_INGRESS_CLASS>
+            serviceType: ClusterIP
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: developer-api-staging-tls
+  namespace: deliveryplatform-staging
+spec:
+  secretName: developer-api-staging-tls
+  issuerRef:
+    name: deliveryplatform-acme-staging
+    kind: Issuer
+  dnsNames:
+    - developer-api.staging.<YOUR_DOMAIN>
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always
+  usages:
+    - digital signature
+    - key encipherment
+    - server auth
+---
+# Default-deny policy exists in the workload template. This additive policy
+# permits only the approved ingress-controller pods to reach temporary
+# cert-manager HTTP-01 solver pods on their declared service port.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: acme-http01-solver-allow-ingress
+  namespace: deliveryplatform-staging
+spec:
+  podSelector:
+    matchLabels:
+      acme.cert-manager.io/http01-solver: "true"
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: <INGRESS_CONTROLLER_NAMESPACE>
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: <INGRESS_CONTROLLER_APP_LABEL>
+---
+# This is the public route only. Probes access /api/health directly; no health,
+# tRPC, operator, Medusa, or internal paths are exposed by this ingress.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: developer-api-staging-public
+  namespace: deliveryplatform-staging
+  labels:
+    app.kubernetes.io/name: developer-api
+    app.kubernetes.io/component: public-api
+    environment: staging
+spec:
+  ingressClassName: <APPROVED_INGRESS_CLASS>
+  tls:
+    - hosts:
+        - developer-api.staging.<YOUR_DOMAIN>
+      secretName: developer-api-staging-tls
+  rules:
+    - host: developer-api.staging.<YOUR_DOMAIN>
+      http:
+        paths:
+          - path: /api/v1
+            pathType: Prefix
+            backend:
+              service:
+                name: developer-api-staging
+                port:
+                  name: http

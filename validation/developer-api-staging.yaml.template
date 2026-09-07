@@ -1,0 +1,238 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: deliveryplatform-staging
+  labels:
+    environment: staging
+    network-zone: deliveryplatform-staging
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: developer-api-staging
+  namespace: deliveryplatform-staging
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: developer-api-staging-config
+  namespace: deliveryplatform-staging
+data:
+  NODE_ENV: production
+  PORT: "3005"
+  BIND_HOST: "0.0.0.0"
+  VITE_APP_ID: switchos-developer-api-staging
+  PUBLIC_APP_ORIGIN: https://developer-api.staging.<YOUR_DOMAIN>
+  ALLOWED_ORIGINS: https://developer-api.staging.<YOUR_DOMAIN>
+  API_BODY_LIMIT: 1mb
+  ENABLE_SELF_SERVICE_SIGNUP: "false"
+  REQUIRE_MFA_FOR_PRIVILEGED_ACTIONS: "true"
+  ENABLE_EXTERNAL_OIDC: "false"
+  ENABLE_DEVELOPER_WEBHOOK_DISPATCH: "false"
+  ENABLE_MEDUSA_EVENT_INGRESS: "false"
+  SESSION_ISSUER: deliveryplatform-staging
+  SESSION_AUDIENCE: developer-api-staging
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: developer-api-staging
+  namespace: deliveryplatform-staging
+  labels:
+    app.kubernetes.io/name: developer-api
+    app.kubernetes.io/component: public-api
+    app.kubernetes.io/part-of: deliveryplatform
+    environment: staging
+spec:
+  replicas: 2
+  revisionHistoryLimit: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: developer-api
+      app.kubernetes.io/component: public-api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: developer-api
+        app.kubernetes.io/component: public-api
+        app.kubernetes.io/part-of: deliveryplatform
+        environment: staging
+    spec:
+      serviceAccountName: developer-api-staging
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: developer-api
+          image: <APPROVED_REGISTRY>/deliveryplatform@sha256:<REVIEWED_IMAGE_DIGEST>
+          imagePullPolicy: IfNotPresent
+          command: ["node", "dist/index.js"]
+          ports:
+            - name: http
+              containerPort: 3005
+          envFrom:
+            - configMapRef:
+                name: developer-api-staging-config
+          env:
+            - name: DATABASE_URL
+              valueFrom: { secretKeyRef: { name: developer-api-runtime-secrets, key: DATABASE_URL } }
+            - name: DATABASE_SSL_CA
+              valueFrom: { secretKeyRef: { name: developer-api-runtime-secrets, key: DATABASE_SSL_CA } }
+            - name: JWT_SECRET
+              valueFrom: { secretKeyRef: { name: developer-api-runtime-secrets, key: JWT_SECRET } }
+            - name: INTERNAL_SERVICE_TOKEN
+              valueFrom: { secretKeyRef: { name: developer-api-runtime-secrets, key: INTERNAL_SERVICE_TOKEN } }
+            - name: BOOTSTRAP_OPERATOR_PASSWORD
+              valueFrom: { secretKeyRef: { name: developer-api-runtime-secrets, key: BOOTSTRAP_OPERATOR_PASSWORD } }
+            - name: OAUTH_SERVER_URL
+              valueFrom: { secretKeyRef: { name: developer-api-runtime-secrets, key: OAUTH_SERVER_URL } }
+            - name: PERMIFY_ENDPOINT
+              valueFrom: { secretKeyRef: { name: developer-api-runtime-secrets, key: PERMIFY_ENDPOINT } }
+            - name: PERMIFY_AUTH_TOKEN
+              valueFrom: { secretKeyRef: { name: developer-api-runtime-secrets, key: PERMIFY_AUTH_TOKEN } }
+            - name: OPA_ENDPOINT
+              valueFrom: { secretKeyRef: { name: developer-api-runtime-secrets, key: OPA_ENDPOINT } }
+            - name: OPA_AUTH_TOKEN
+              valueFrom: { secretKeyRef: { name: developer-api-runtime-secrets, key: OPA_AUTH_TOKEN } }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+          startupProbe:
+            httpGet: { path: /api/health, port: http }
+            periodSeconds: 5
+            failureThreshold: 24
+            timeoutSeconds: 2
+          readinessProbe:
+            httpGet: { path: /api/health, port: http }
+            periodSeconds: 10
+            failureThreshold: 3
+            timeoutSeconds: 2
+          livenessProbe:
+            httpGet: { path: /api/health, port: http }
+            periodSeconds: 20
+            failureThreshold: 3
+            timeoutSeconds: 2
+          resources:
+            requests: { cpu: 250m, memory: 512Mi }
+            limits: { cpu: "1", memory: 1Gi }
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: developer-api-staging
+  namespace: deliveryplatform-staging
+spec:
+  selector:
+    app.kubernetes.io/name: developer-api
+    app.kubernetes.io/component: public-api
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: deliveryplatform-staging
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: developer-api-allow-required-traffic
+  namespace: deliveryplatform-staging
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: developer-api
+      app.kubernetes.io/component: public-api
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 3005
+  egress:
+    # Cluster DNS. Confirm labels and port in the actual cluster.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Dedicated PostgreSQL/Stunnel CIDR only. Replace before apply.
+    - to:
+        - ipBlock: { cidr: <STAGING_POSTGRES_OR_TUNNEL_CIDR> }
+      ports:
+        - protocol: TCP
+          port: 5432
+    # Internal policy and authorization services. Replace labels/ports with cluster inventory.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: identity
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: permify
+      ports:
+        - protocol: TCP
+          port: <PERMIFY_PORT>
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: policy
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: opa
+      ports:
+        - protocol: TCP
+          port: <OPA_PORT>
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: developer-api-staging
+  namespace: deliveryplatform-staging
+  annotations:
+    # Configure TLS, request-size limits, WAF, and rate limits in the installed
+    # gateway/ingress controller policy; do not assume controller-specific annotations.
+spec:
+  ingressClassName: <APPROVED_INGRESS_CLASS>
+  tls:
+    - hosts: [developer-api.staging.<YOUR_DOMAIN>]
+      secretName: developer-api-staging-tls
+  rules:
+    - host: developer-api.staging.<YOUR_DOMAIN>
+      http:
+        paths:
+          - path: /api/v1
+            pathType: Prefix
+            backend:
+              service: { name: developer-api-staging, port: { name: http } }

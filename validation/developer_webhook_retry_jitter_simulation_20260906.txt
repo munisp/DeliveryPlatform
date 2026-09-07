@@ -1,0 +1,40 @@
+Running isolated loopback network-failure dispatcher test...
+
+ RUN  v2.1.9 /home/ubuntu/DeliveryPlatform-commerce-field
+
+ ✓ tests/developer-webhook-delivery.test.ts (3 tests) 51ms
+
+ Test Files  1 passed (1)
+      Tests  3 passed (3)
+   Start at  03:36:16
+   Duration  722ms (transform 75ms, setup 0ms, collect 129ms, tests 51ms, environment 0ms, prepare 342ms)
+
+CREATE EXTENSION
+CREATE EXTENSION
+CREATE TYPE
+CREATE TYPE
+CREATE TABLE
+CREATE TABLE
+CREATE TABLE
+CREATE TABLE
+INSERT 0 1
+INSERT 0 1
+NOTICE:  trigger "field_service_work_order_event_append_only" for relation "field_service.work_order_event" does not exist, skipping
+NOTICE:  trigger "field_service_work_order_proof_append_only" for relation "field_service.work_order_proof" does not exist, skipping
+NOTICE:  trigger "developer_webhook_delivery_immutable" for relation "developer.webhook_delivery" does not exist, skipping
+NOTICE:  constraint "developer_webhook_delivery_claim_pair_check" of relation "webhook_delivery" does not exist, skipping
+SET
+RESET
+DO
+                result
+--------------------------------------
+ developer_webhook_retry_backoff=PASS
+(1 row)
+
+               event_id               |    state    | attempt_count | last_status |       last_error        |    next_attempt_at
+--------------------------------------+-------------+---------------+-------------+-------------------------+------------------------
+ 11111111-1111-4111-8111-111111111111 | delivered   |             7 |         204 |                         | 2026-09-06 12:02:15+00
+ 22222222-2222-4222-8222-222222222222 | dead_letter |            16 |         599 | simulated_network_reset | 2026-09-07 17:42:14+00
+(2 rows)
+
+developer_webhook_retry_backoff=PASS database=developer_webhook_retry_299629_1788752169 network=loopback_connection_reset durable_failures=599

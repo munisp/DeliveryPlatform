@@ -1,0 +1,18 @@
+flowchart LR
+  O[Encrypted object storage\nobject bytes] --> S[Go orchestrator\nsynthetic guard in local test mode]
+  S --> R[Python document endpoint\ninternal token]
+  R --> D[Base64 decode\nnonempty + 10 MiB maximum]
+  D --> X[SHA-256 recomputation]
+  X -->|mismatch| E422[422 evidence mismatch]
+  X -->|match| C{Processor selected}
+  C -->|PaddleOCR| P[PaddleOCR en\ntemporary file]
+  C -->|Docling| L[Docling converter\ntemporary file]
+  C -->|optional VLM| V[VLM structure extraction only]
+  P --> I[Canonical output digest]
+  L --> I
+  V --> I
+  I --> MR[manual_review only\nno automated eligibility verdict]
+  MR --> G[Go completion with\nPostgreSQL claim token]
+  G --> DB[PostgreSQL processing job\nlease fenced completion]
+  DB --> HR[Human reviewer\nchecks, consent, expiry]
+  HR --> DC[Accountable final decision]

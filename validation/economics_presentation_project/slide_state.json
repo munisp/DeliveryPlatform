@@ -1,0 +1,78 @@
+{
+  "project_info": {
+    "title": "The Core Conflict",
+    "created": 1788786064.259,
+    "last_updated": 1788786151.192,
+    "total_slides": 6
+  },
+  "slides": [
+    {
+      "id": "slide_2_core_conflict",
+      "state": "edited",
+      "pageNum": 1
+    },
+    {
+      "id": "slide_3_calculation_flow",
+      "state": "edited",
+      "pageNum": 2
+    },
+    {
+      "id": "slide_4_equilibrium_state",
+      "state": "edited",
+      "pageNum": 3
+    },
+    {
+      "id": "slide_5_two_floors",
+      "state": "edited",
+      "pageNum": 4
+    },
+    {
+      "id": "slide_6_inputs_governance",
+      "state": "edited",
+      "pageNum": 5
+    },
+    {
+      "id": "slide_7_implementation_boundary",
+      "state": "edited",
+      "pageNum": 6
+    }
+  ],
+  "outline": [
+    {
+      "id": "slide_2_core_conflict",
+      "title": "The Core Conflict",
+      "summary": "Explains why static commissions fail and introduces the dynamic equilibrium solution.",
+      "image_plan": "Use a suitable image if needed"
+    },
+    {
+      "id": "slide_3_calculation_flow",
+      "title": "Dynamic Commission Calculation Flow",
+      "summary": "Visualizes the step-by-step math for residual fee calculation.",
+      "image_plan": "Use a suitable image if needed"
+    },
+    {
+      "id": "slide_4_equilibrium_state",
+      "title": "Win/Win Equilibrium State Machine",
+      "summary": "Visualizes the fail-closed decision boundary and state transitions.",
+      "image_plan": "Use a suitable image if needed"
+    },
+    {
+      "id": "slide_5_two_floors",
+      "title": "The Two Hard Floors",
+      "summary": "Defines the non-negotiable driver and platform boundaries.",
+      "image_plan": "Use a suitable image if needed"
+    },
+    {
+      "id": "slide_6_inputs_governance",
+      "title": "Real-Time Inputs vs. Governed Policy",
+      "summary": "Distinguishes per-quote inputs from weekly/monthly governed policies.",
+      "image_plan": "Use a suitable image if needed"
+    },
+    {
+      "id": "slide_7_implementation_boundary",
+      "title": "Implementation and Evidence Boundary",
+      "summary": "Clarifies what is built locally versus what requires external validation.",
+      "image_plan": "Use a suitable image if needed"
+    }
+  ]
+}

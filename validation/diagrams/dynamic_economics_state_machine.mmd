@@ -1,0 +1,52 @@
+stateDiagram-v2
+    direction TB
+
+    state "Rider Request" as request
+    state "Policy Bounds" as policy {
+        state "Fuel/Maintenance Index" as fuel
+        state "Driver Base Floor" as floor
+        state "Max Pickup Subsidy" as max_subsidy
+        state "Platform Cost Target" as target
+        state "15.00% Commission Cap" as cap
+    }
+
+    state "Quote Calculation" as calc {
+        state "Gross Fare - Taxes" as net_fare
+        state "Required Driver Floor" as req_floor
+        state "Required Platform Target" as req_target
+    }
+
+    state "Equilibrium Check" as check <<choice>>
+
+    state "Win/Win Dispatch" as dispatch {
+        state "Allocate Subsidy (if needed)" as alloc_sub
+        state "Set Residual Commission" as set_comm
+        state "Issue Transparent Offer" as issue
+
+        alloc_sub --> set_comm
+        set_comm --> issue
+    }
+
+    state "Economic Failure" as fail {
+        state "Opaque Acceptance Rejected" as reject
+        state "No Dispatch / Pool / Schedule" as no_dispatch
+    }
+
+    request --> calc
+    policy --> calc
+    calc --> check
+
+    check --> dispatch : Floor & Target Met\n(Commission <= 15.00%)
+    check --> fail : Floor Unmet OR\nTarget Unmet OR\nCommission > 15.00%
+
+    note right of dispatch
+        Driver receives guaranteed floor.
+        Platform meets contribution target.
+        Commission floats under 15.00% cap.
+    end note
+
+    note right of fail
+        System fails closed.
+        Driver is not forced to subsidize
+        an uneconomic pickup or fare.
+    end note

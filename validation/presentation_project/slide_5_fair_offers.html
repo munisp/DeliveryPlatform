@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Fair offers are transparent before acceptance</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+        .slide-container {
+            width: 1280px;
+            min-height: 720px;
+            background-color: #0f172a;
+            color: #f8fafc;
+            position: relative;
+            overflow: hidden;
+        }
+        .header {
+            padding-top: 60px;
+            padding-left: 60px;
+            padding-right: 60px;
+            margin-bottom: 60px;
+        }
+        h1 {
+            font-size: 44px;
+            font-weight: 700;
+            color: #ffffff;
+            border-bottom: 4px solid #38bdf8;
+            display: inline-block;
+            padding-bottom: 10px;
+        }
+        .content {
+            display: flex;
+            padding-left: 60px;
+            padding-right: 60px;
+            gap: 40px;
+            justify-content: space-between;
+        }
+        .pillar {
+            flex: 1;
+            background-color: #1e293b;
+            padding: 40px 30px;
+            border-top: 6px solid #38bdf8;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            text-align: center;
+        }
+        .pillar:nth-child(2) {
+            border-top-color: #818cf8;
+        }
+        .pillar:nth-child(3) {
+            border-top-color: #10b981;
+        }
+        .pillar-icon {
+            font-size: 64px;
+            margin-bottom: 30px;
+        }
+        .pillar:nth-child(1) .pillar-icon { color: #38bdf8; }
+        .pillar:nth-child(2) .pillar-icon { color: #818cf8; }
+        .pillar:nth-child(3) .pillar-icon { color: #10b981; }
+
+        .pillar-title {
+            font-size: 28px;
+            font-weight: 600;
+            color: #ffffff;
+            margin-bottom: 20px;
+            min-height: 68px;
+        }
+        .pillar-text {
+            font-size: 22px;
+            line-height: 1.5;
+            color: #cbd5e1;
+        }
+    </style>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" rel="stylesheet">
+</head>
+<body>
+    <div class="slide-container">
+        <div class="header">
+            <h1>Fair offers are transparent before acceptance</h1>
+        </div>
+        <div class="content">
+            <div class="pillar">
+                <div class="pillar-icon"><i class="fa-solid fa-percent"></i></div>
+                <div class="pillar-title">Policy Caps &amp; Limits</div>
+                <div class="pillar-text">The dispatch policy stores a maximum 15.00% platform commission and bounded pickup distance/ETA by zone.</div>
+            </div>
+            <div class="pillar">
+                <div class="pillar-icon"><i class="fa-solid fa-file-invoice-dollar"></i></div>
+                <div class="pillar-title">Full Disclosure</div>
+                <div class="pillar-text">An offer disclosure persists full destination, route burden, gross fare, taxes/fees, commission, and expected driver proceeds.</div>
+            </div>
+            <div class="pillar">
+                <div class="pillar-icon"><i class="fa-solid fa-database"></i></div>
+                <div class="pillar-title">Database Protection</div>
+                <div class="pillar-text">A database trigger rejects an attempt to accept an opaque offer, ensuring transparency is strictly enforced.</div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

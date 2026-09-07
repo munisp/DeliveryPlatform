@@ -1,0 +1,83 @@
+CREATE EXTENSION
+CREATE EXTENSION
+CREATE TYPE
+CREATE TABLE
+INSERT 0 4
+NOTICE:  extension "postgis" already exists, skipping
+NOTICE:  extension "pgcrypto" already exists, skipping
+NOTICE:  constraint "mobility_driver_presence_active_trip_id_fkey" of relation "driver_presence" does not exist, skipping
+NOTICE:  constraint "mobility_driver_presence_active_offer_id_fkey" of relation "driver_presence" does not exist, skipping
+NOTICE:  extension "pgcrypto" already exists, skipping
+NOTICE:  schema "mobility" already exists, skipping
+NOTICE:  trigger "mobility_driver_offer_transparency_before_accept" for relation "mobility.driver_offer" does not exist, skipping
+INSERT 0 1
+INSERT 0 1
+INSERT 0 1
+INSERT 0 1
+INSERT 0 1
+INSERT 0 1
+INSERT 0 1
+INSERT 0 1
+INSERT 0 1
+SET
+ set_driver_dispatch_fairness_policy
+--------------------------------------
+ fdb65a44-8734-446d-87f8-95bc4e185798
+(1 row)
+
+  set_driver_offer_economics_policy
+--------------------------------------
+ 3fca9048-22cb-4292-b9a8-db9af379ec24
+(1 row)
+
+ issued | reason
+--------+--------
+ t      | issued
+(1 row)
+
+               offer_id               | driver_earnings_floor_kobo | pickup_subsidy_kobo | base_driver_net_kobo | economics_policy_version
+--------------------------------------+----------------------------+---------------------+----------------------+--------------------------
+ 77777777-7777-4777-8777-777777777777 |                      16848 |                1008 |                15840 | economics-v1
+(1 row)
+
+RESET
+DO
+SET
+               trip_id                |  state   | rematch_required
+--------------------------------------+----------+------------------
+ 55555555-5555-4555-8555-555555555555 | declined | t
+(1 row)
+
+  set_driver_offer_economics_policy
+--------------------------------------
+ a2825f0f-1440-4024-8aa2-95e2572e6a11
+(1 row)
+
+RESET
+INSERT 0 1
+INSERT 0 1
+SET
+ issued |           reason
+--------+-----------------------------
+ f      | driver_earnings_floor_unmet
+(1 row)
+
+RESET
+DO
+SET
+  set_driver_offer_economics_policy
+--------------------------------------
+ 126080b5-fb6c-4c6f-b0e3-22599e963af2
+(1 row)
+
+RESET
+INSERT 0 1
+INSERT 0 1
+SET
+ issued |               reason
+--------+------------------------------------
+ f      | platform_contribution_target_unmet
+(1 row)
+
+RESET
+driver_offer_economics_result=PASS database=driver_offer_economics_validation_324758_1788787109 controls=dynamic_driver_floor-pickup_subsidy-fuel_index-contribution_target-commission_cap

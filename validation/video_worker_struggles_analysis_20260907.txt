@@ -1,0 +1,35 @@
+Starting video analysis...
+Submitting video analysis task...
+Task submitted (ID: video-analysis-2a08aaf9-7ec3-44a1-9270-6514edee071b)
+[8s] Status: Analyzing video content with AI...
+[33s] Still processing, please wait...
+[52s] Status: Analysis completed
+[52s] Analysis completed!
+Full analysis result saved to: /home/ubuntu/video_wifB9kytBBY_analysis_20260907_115119.md
+Note: This tool performs AI-based visual and audio analysis, not verbatim transcription. For detailed speech transcription, use `manus-speech-to-text` instead.
+Analysis result:
+
+Here is a factual, timestamped summary of the video, detailing the speaker's analysis of why drivers left Uber in Nigeria, focusing on the specific constraints, evidence, and actions taken.
+
+**00:00 - 01:36: High Commission Rates & Market Comparisons**
+*   **Complaint:** The primary grievance is Uber’s high commission rate of 25% on every ride.
+*   **Evidence:** The speaker calculates that on a 20,000 fare, Uber takes between 5,000 and 6,000. Furthermore, competitors like InDrive maintained a significantly lower commission of 9% to 12% and often offered higher overall fares for the same trip (e.g., 25,000 to 30,000 compared to Uber's 20,000).
+*   **Proposed Remedy/Action:** In response to these economics, drivers simply stopped using the Uber app and began migrating to competitors like InDrive and Bolt.
+
+**01:37 - 02:41: Opaque Policies & Economic Imbalance**
+*   **Complaint (Safety/Access):** Drivers faced punitive measures for canceling rides. If a driver canceled two or three times, Uber would hide the passenger’s destination prior to pickup, forcing the driver to accept trips blindly. The speaker views this as an insult and a mechanism to force drivers to take unprofitable rides.
+*   **Economic Constraints:** The speaker highlights a fundamental flaw in the business arrangement: the driver bears 100% of the operational burden (owning the vehicle, buying fuel, funding maintenance, and supporting a family) out of their 70-75% share, while the app takes 25-30% solely for connecting the passenger and driver.
+
+**02:42 - 03:05: Shift to Alternative Transport Sectors**
+*   **Proposed Remedy/Action:** As drivers abandoned the major e-hailing apps, many sought alternative income streams by partnering with local, smaller shuttle bus organizations operating in areas like Lekki Epe and the Mainland.
+
+**03:06 - 04:13: Unprofitable Dispatching & Account Suspensions**
+*   **Concrete Struggles:** The speaker describes Uber's policies as extremely strict, leaving drivers with no "breathing space."
+*   **Evidence/Economic Constraints:** The app frequently mandated long-distance pickups, requiring drivers to travel up to 5 kilometers (or 12-14 minutes of driving time) just to reach the passenger. If the resulting fare was only around 4,000, the driver operated at a net loss.
+*   **Complaint:** If a driver canceled these mandatory, unprofitable pickups repeatedly, the platform would block their account.
+*   **Proposed Remedy/Action:** Driven by the financial losses of long pickups and the threat of being blocked, a massive wave of drivers deleted the Uber app entirely.
+
+**04:14 - 05:58: Warning to Current Market Leaders**
+*   **Complaint:** The speaker notes that Bolt is now repeating Uber's errors by raising its commission rates to between 25% and 30%.
+*   **Evidence:** Addressing rumors that these high rates are mandated by the government, the speaker points out that InDrive operates under the same government conditions but still maintains a 12% commission, proving the high fees are a corporate choice, not a regulatory requirement.
+*   **Proposed Remedy/Action:** The video serves as a direct warning to Bolt: Nigerian drivers will not tolerate a 30% commission when a 12% alternative exists, and they will abandon the platform just as they did Uber if the policies do not change.

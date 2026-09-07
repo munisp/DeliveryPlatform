@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>The Two Hard Floors</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+        .slide-container {
+            width: 1280px;
+            min-height: 720px;
+            background-color: #0f172a;
+            color: #f8fafc;
+            position: relative;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+        .header {
+            padding-top: 60px;
+            padding-left: 60px;
+            padding-right: 60px;
+            margin-bottom: 50px;
+        }
+        h1 {
+            font-size: 44px;
+            font-weight: 700;
+            color: #ffffff;
+            border-bottom: 4px solid #38bdf8;
+            display: inline-block;
+            padding-bottom: 10px;
+        }
+        .content {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            padding-left: 60px;
+            padding-right: 60px;
+            gap: 40px;
+        }
+        .floors-container {
+            display: flex;
+            gap: 40px;
+        }
+        .floor-column {
+            flex: 1;
+            background-color: #1e293b;
+            padding: 40px;
+            border-top: 6px solid #38bdf8;
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+        }
+        .floor-column:nth-child(2) {
+            border-top-color: #10b981;
+        }
+        .floor-icon {
+            font-size: 48px;
+            margin-bottom: 24px;
+        }
+        .floor-column:nth-child(1) .floor-icon { color: #38bdf8; }
+        .floor-column:nth-child(2) .floor-icon { color: #10b981; }
+
+        .floor-title {
+            font-size: 32px;
+            font-weight: 600;
+            color: #ffffff;
+            margin-bottom: 20px;
+        }
+        .floor-text {
+            font-size: 24px;
+            line-height: 1.5;
+            color: #cbd5e1;
+        }
+        .banner {
+            background-color: #0f172a;
+            border: 2px solid #334155;
+            border-top: 6px solid #ef4444;
+            padding: 24px 30px;
+            display: flex;
+            align-items: center;
+            gap: 20px;
+        }
+        .banner-icon {
+            font-size: 36px;
+            color: #ef4444;
+        }
+        .banner-text {
+            font-size: 24px;
+            color: #f8fafc;
+            line-height: 1.4;
+        }
+    </style>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" rel="stylesheet">
+</head>
+<body>
+    <div class="slide-container">
+        <div class="header">
+            <h1>The Two Hard Floors</h1>
+        </div>
+        <div class="content">
+            <div class="floors-container">
+                <div class="floor-column">
+                    <div class="floor-icon"><i class="fa-solid fa-car"></i></div>
+                    <div class="floor-title">Driver Floor (D_min)</div>
+                    <div class="floor-text">Expected proceeds must cover published active-time, distance, and indexed fuel/maintenance costs.</div>
+                </div>
+                <div class="floor-column">
+                    <div class="floor-icon"><i class="fa-solid fa-building"></i></div>
+                    <div class="floor-title">Platform Floor (P_target)</div>
+                    <div class="floor-text">Contribution after driver proceeds, explicit subsidy, and verified variable cost must be positive.</div>
+                </div>
+            </div>
+            <div class="banner">
+                <div class="banner-icon"><i class="fa-solid fa-shield"></i></div>
+                <div class="banner-text"><strong>Guardrail:</strong> The commission cap (e.g., 15.00%) remains a hard ceiling.</div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

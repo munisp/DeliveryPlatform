@@ -1,0 +1,47 @@
+erDiagram
+    SERVICE_ZONE ||--o{ DRIVER_DISPATCH_FAIRNESS_POLICY : governs
+    DRIVER_DISPATCH_FAIRNESS_POLICY ||--o{ DRIVER_OFFER_DISCLOSURE : versions
+    RIDE_TRIP ||--o{ DRIVER_OFFER : has
+    DRIVER_PROFILE ||--o{ DRIVER_OFFER : receives
+    DRIVER_OFFER ||--|| DRIVER_OFFER_DISCLOSURE : requires
+    DRIVER_OFFER ||--o| DRIVER_OFFER_DECLINE : records
+    DRIVER_OFFER_DECLINE }o--|| RIDE_TRIP : rematch_signal
+    DRIVER_OFFER_DECLINE }o--|| DRIVER_PROFILE : actor
+    FARE_QUOTE ||--o{ RIDE_TRIP : prices
+
+    DRIVER_DISPATCH_FAIRNESS_POLICY {
+      uuid id PK
+      uuid zone_id FK
+      int platform_commission_bp
+      int max_pickup_distance_m
+      int max_pickup_eta_s
+      text destination_disclosure
+      timestamptz effective_from
+    }
+    DRIVER_OFFER_DISCLOSURE {
+      uuid offer_id PK
+      uuid policy_id FK
+      int pickup_distance_m
+      int pickup_eta_s
+      text destination_address
+      bigint gross_fare_kobo
+      bigint taxes_and_fees_kobo
+      int platform_commission_bp
+      bigint platform_commission_kobo
+      bigint expected_driver_net_kobo
+    }
+    DRIVER_OFFER_DECLINE {
+      uuid id PK
+      uuid offer_id FK
+      int driver_user_id FK
+      driver_offer_decline_reason reason
+      boolean rematch_required
+      text idempotency_key
+    }
+    DRIVER_OFFER {
+      uuid id PK
+      uuid trip_id FK
+      int driver_user_id FK
+      offer_state state
+      timestamptz expires_at
+    }

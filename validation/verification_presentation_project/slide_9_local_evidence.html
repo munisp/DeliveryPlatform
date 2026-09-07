@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #020617; color: #f8fafc; }
+        .slide-container {
+            width: 1280px;
+            min-height: 720px;
+            background-color: #020617;
+            position: relative;
+            padding-top: 60px;
+            padding-left: 80px;
+            padding-right: 80px;
+        }
+        .header {
+            margin-bottom: 50px;
+            border-left: 6px solid #22d3ee;
+            padding-left: 24px;
+        }
+        h1 {
+            font-size: 48px;
+            font-weight: 700;
+            line-height: 1.2;
+            color: #f8fafc;
+            letter-spacing: -0.5px;
+        }
+        .list-container {
+            display: flex;
+            flex-direction: column;
+            margin-top: 20px;
+        }
+        .list-row {
+            display: flex;
+            align-items: center;
+            padding-top: 32px;
+            margin-top: 32px;
+            border-top: 1px solid #1e293b;
+        }
+        .list-row:first-child {
+            padding-top: 0;
+            margin-top: 0;
+            border-top: none;
+        }
+        .row-label {
+            width: 280px;
+            min-width: 280px;
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            font-size: 28px;
+            font-weight: 600;
+            color: #22d3ee;
+        }
+        .row-icon {
+            font-size: 36px;
+            width: 48px;
+            text-align: center;
+            color: #38bdf8;
+        }
+        .row-text {
+            flex: 1;
+            font-size: 22px;
+            line-height: 1.5;
+            color: #cbd5e1;
+        }
+        .code-text {
+            font-family: monospace;
+            color: #38bdf8;
+            background: #0f172a;
+            padding: 2px 6px;
+        }
+        .footer-bar {
+            position: absolute;
+            bottom: 40px;
+            left: 80px;
+            right: 80px;
+            height: 1px;
+            background-color: #1e293b;
+            display: flex;
+            justify-content: space-between;
+            padding-top: 16px;
+            color: #64748b;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <div class="slide-container">
+        <div class="header">
+            <h1>Local evidence validates the full control chain</h1>
+        </div>
+
+        <div class="list-container">
+            <div class="list-row">
+                <div class="row-label">
+                    <div class="row-icon"><i class="fa-brands fa-python"></i></div>
+                    Python
+                </div>
+                <div class="row-text">
+                    Verified synthetic document bytes and returned manual review.
+                </div>
+            </div>
+
+            <div class="list-row">
+                <div class="row-label">
+                    <div class="row-icon"><i class="fa-brands fa-rust"></i></div>
+                    Rust
+                </div>
+                <div class="row-text">
+                    Returned manual-review-required for completeness assessment.
+                </div>
+            </div>
+
+            <div class="list-row">
+                <div class="row-label">
+                    <div class="row-icon"><i class="fa-brands fa-golang"></i></div>
+                    Go
+                </div>
+                <div class="row-text">
+                    Sent one token-fenced processing completion and five HMAC-signed simulated provider callbacks.
+                </div>
+            </div>
+
+            <div class="list-row">
+                <div class="row-label">
+                    <div class="row-icon"><i class="fa-solid fa-shield-halved"></i></div>
+                    Final Decision
+                </div>
+                <div class="row-text">
+                    Final <span class="code-text">verified</span> decision became possible only after the checks; consent withdrawal test suspended a verified case.
+                </div>
+            </div>
+        </div>
+
+        <div class="footer-bar">
+            <span>Next-Generation Stakeholder Verification</span>
+            <span>9</span>
+        </div>
+    </div>
+</body>
+</html>

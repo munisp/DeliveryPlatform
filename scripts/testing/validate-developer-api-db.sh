@@ -42,6 +42,8 @@ SQL
 sudo -u postgres psql -X -d "$DB_NAME" -v ON_ERROR_STOP=1 < "$ROOT_DIR/drizzle/0044_field_service_operations.sql" >/dev/null
 sudo -u postgres psql -X -d "$DB_NAME" -v ON_ERROR_STOP=1 < "$ROOT_DIR/drizzle/0045_developer_api_platform.sql" >/dev/null
 sudo -u postgres psql -X -d "$DB_NAME" -v ON_ERROR_STOP=1 < "$ROOT_DIR/drizzle/0047_field_service_proof_and_public_collection.sql" >/dev/null
+sudo -u postgres psql -X -d "$DB_NAME" -v ON_ERROR_STOP=1 < "$ROOT_DIR/drizzle/0048_developer_webhook_delivery_leases.sql" >/dev/null
+sudo -u postgres psql -X -d "$DB_NAME" -v ON_ERROR_STOP=1 < "$ROOT_DIR/drizzle/0049_developer_webhook_retry_jitter.sql" >/dev/null
 
 sudo -u postgres psql -X -d "$DB_NAME" -v ON_ERROR_STOP=1 <<'SQL'
 SET ROLE field_service_api;
@@ -61,7 +63,7 @@ SELECT detail->>'state' AS public_state FROM (SELECT developer.public_field_serv
 SELECT count(*) AS provider_scoped_collection_count FROM developer.public_list_field_service_work_orders(:'api_client_id'::uuid,50,NULL);
 SELECT developer.publish_field_service_outbox(10) AS published_count;
 SELECT * FROM developer.claim_webhook_deliveries(10) \gset
-SELECT developer.complete_webhook_delivery(:'delivery_id'::uuid,true,202,NULL) AS delivery_state;
+SELECT developer.complete_webhook_delivery(:'delivery_id'::uuid, :'claim_token'::uuid, true, 202, NULL) AS delivery_state;
 RESET ROLE;
 SQL
 
