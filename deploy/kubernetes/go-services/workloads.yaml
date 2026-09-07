@@ -1,0 +1,1143 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: inventory-control
+  namespace: switchos
+  labels: &id001
+    app.kubernetes.io/name: inventory-control
+    app.kubernetes.io/component: go-service
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  replicas: 2
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: inventory-control
+  template:
+    metadata:
+      labels: *id001
+      annotations:
+        dapr.io/enabled: 'true'
+        dapr.io/app-id: inventory-control
+        dapr.io/app-port: '8117'
+        dapr.io/config: switchos-dapr-config
+    spec:
+      serviceAccountName: go-services
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+      - maxSkew: 1
+        minDomains: 2
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: DoNotSchedule
+        labelSelector:
+          matchLabels:
+            app.kubernetes.io/name: inventory-control
+      containers:
+      - name: inventory-control
+        image: ghcr.io/munisp/deliveryplatform-inventory-control:REPLACE_WITH_IMMUTABLE_TAG
+        imagePullPolicy: IfNotPresent
+        ports:
+        - name: http
+          containerPort: 8117
+        envFrom:
+        - configMapRef:
+            name: go-services-runtime-config
+        - secretRef:
+            name: go-services-secrets
+        env:
+        - name: PORT
+          value: '8117'
+        resources:
+          requests:
+            cpu: 250m
+            memory: 256Mi
+          limits:
+            cpu: '1'
+            memory: 512Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+        startupProbe:
+          httpGet:
+            path: /health
+            port: http
+          failureThreshold: 36
+          periodSeconds: 5
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: http
+          periodSeconds: 10
+          timeoutSeconds: 3
+          failureThreshold: 3
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 20
+          periodSeconds: 20
+          timeoutSeconds: 3
+          failureThreshold: 3
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: inventory-control
+  namespace: switchos
+  labels:
+    app.kubernetes.io/name: inventory-control
+    app.kubernetes.io/component: go-service
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  selector:
+    app.kubernetes.io/name: inventory-control
+  ports:
+  - name: http
+    port: 8117
+    targetPort: http
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: inventory-control
+  namespace: switchos
+  labels:
+    app.kubernetes.io/name: inventory-control
+    app.kubernetes.io/component: go-service
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: inventory-control
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: inventory-control
+  namespace: switchos
+  labels:
+    app.kubernetes.io/name: inventory-control
+    app.kubernetes.io/component: go-service
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: inventory-control
+  minReplicas: 2
+  maxReplicas: 5
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: local-commerce-gateway
+  namespace: switchos
+  labels: &id001
+    app.kubernetes.io/name: local-commerce-gateway
+    app.kubernetes.io/component: go-service
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  replicas: 2
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: local-commerce-gateway
+  template:
+    metadata:
+      labels: *id001
+      annotations:
+        dapr.io/enabled: 'true'
+        dapr.io/app-id: local-commerce-gateway
+        dapr.io/app-port: '8114'
+        dapr.io/config: switchos-dapr-config
+    spec:
+      serviceAccountName: go-services
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+      - maxSkew: 1
+        minDomains: 2
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: DoNotSchedule
+        labelSelector:
+          matchLabels:
+            app.kubernetes.io/name: local-commerce-gateway
+      containers:
+      - name: local-commerce-gateway
+        image: ghcr.io/munisp/deliveryplatform-local-commerce-gateway:REPLACE_WITH_IMMUTABLE_TAG
+        imagePullPolicy: IfNotPresent
+        ports:
+        - name: http
+          containerPort: 8114
+        envFrom:
+        - configMapRef:
+            name: go-services-runtime-config
+        - secretRef:
+            name: go-services-secrets
+        env:
+        - name: PORT
+          value: '8114'
+        resources:
+          requests:
+            cpu: 250m
+            memory: 256Mi
+          limits:
+            cpu: '1'
+            memory: 512Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+        startupProbe:
+          httpGet:
+            path: /health
+            port: http
+          failureThreshold: 36
+          periodSeconds: 5
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: http
+          periodSeconds: 10
+          timeoutSeconds: 3
+          failureThreshold: 3
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 20
+          periodSeconds: 20
+          timeoutSeconds: 3
+          failureThreshold: 3
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: local-commerce-gateway
+  namespace: switchos
+  labels:
+    app.kubernetes.io/name: local-commerce-gateway
+    app.kubernetes.io/component: go-service
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  selector:
+    app.kubernetes.io/name: local-commerce-gateway
+  ports:
+  - name: http
+    port: 8114
+    targetPort: http
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: local-commerce-gateway
+  namespace: switchos
+  labels:
+    app.kubernetes.io/name: local-commerce-gateway
+    app.kubernetes.io/component: go-service
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: local-commerce-gateway
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: local-commerce-gateway
+  namespace: switchos
+  labels:
+    app.kubernetes.io/name: local-commerce-gateway
+    app.kubernetes.io/component: go-service
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: local-commerce-gateway
+  minReplicas: 2
+  maxReplicas: 5
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mojaloop
+  namespace: switchos
+  labels: &id001
+    app.kubernetes.io/name: mojaloop
+    app.kubernetes.io/component: go-service
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  replicas: 2
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: mojaloop
+  template:
+    metadata:
+      labels: *id001
+      annotations:
+        dapr.io/enabled: 'true'
+        dapr.io/app-id: mojaloop
+        dapr.io/app-port: '8086'
+        dapr.io/config: switchos-dapr-config
+    spec:
+      serviceAccountName: go-services
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+      - maxSkew: 1
+        minDomains: 2
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: DoNotSchedule
+        labelSelector:
+          matchLabels:
+            app.kubernetes.io/name: mojaloop
+      containers:
+      - name: mojaloop
+        image: ghcr.io/munisp/deliveryplatform-mojaloop:REPLACE_WITH_IMMUTABLE_TAG
+        imagePullPolicy: IfNotPresent
+        ports:
+        - name: http
+          containerPort: 8086
+        envFrom:
+        - configMapRef:
+            name: go-services-runtime-config
+        - secretRef:
+            name: go-services-secrets
+        env:
+        - name: HTTP_PORT
+          value: '8086'
+        resources:
+          requests:
+            cpu: 500m
+            memory: 512Mi
+          limits:
+            cpu: '2'
+            memory: 1Gi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+        startupProbe:
+          httpGet:
+            path: /health
+            port: http
+          failureThreshold: 36
+          periodSeconds: 5
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: http
+          periodSeconds: 10
+          timeoutSeconds: 3
+          failureThreshold: 3
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 20
+          periodSeconds: 20
+          timeoutSeconds: 3
+          failureThreshold: 3
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mojaloop
+  namespace: switchos
+  labels:
+    app.kubernetes.io/name: mojaloop
+    app.kubernetes.io/component: go-service
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  selector:
+    app.kubernetes.io/name: mojaloop
+  ports:
+  - name: http
+    port: 8086
+    targetPort: http
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: mojaloop
+  namespace: switchos
+  labels:
+    app.kubernetes.io/name: mojaloop
+    app.kubernetes.io/component: go-service
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: mojaloop
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: mojaloop
+  namespace: switchos
+  labels:
+    app.kubernetes.io/name: mojaloop
+    app.kubernetes.io/component: go-service
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: mojaloop
+  minReplicas: 2
+  maxReplicas: 5
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: notification-dispatcher
+  namespace: switchos
+  labels: &id001
+    app.kubernetes.io/name: notification-dispatcher
+    app.kubernetes.io/component: go-service
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  replicas: 2
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: notification-dispatcher
+  template:
+    metadata:
+      labels: *id001
+      annotations: {}
+    spec:
+      serviceAccountName: go-services
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+      - maxSkew: 1
+        minDomains: 2
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: DoNotSchedule
+        labelSelector:
+          matchLabels:
+            app.kubernetes.io/name: notification-dispatcher
+      containers:
+      - name: notification-dispatcher
+        image: ghcr.io/munisp/deliveryplatform-notification-dispatcher:REPLACE_WITH_IMMUTABLE_TAG
+        imagePullPolicy: IfNotPresent
+        ports:
+        - name: http
+          containerPort: 8099
+        envFrom:
+        - configMapRef:
+            name: go-services-runtime-config
+        - secretRef:
+            name: go-services-secrets
+        env:
+        - name: PORT
+          value: '8099'
+        resources:
+          requests:
+            cpu: 250m
+            memory: 256Mi
+          limits:
+            cpu: '1'
+            memory: 512Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+        startupProbe:
+          httpGet:
+            path: /health
+            port: http
+          failureThreshold: 36
+          periodSeconds: 5
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: http
+          periodSeconds: 10
+          timeoutSeconds: 3
+          failureThreshold: 3
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 20
+          periodSeconds: 20
+          timeoutSeconds: 3
+          failureThreshold: 3
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: notification-dispatcher
+  namespace: switchos
+  labels:
+    app.kubernetes.io/name: notification-dispatcher
+    app.kubernetes.io/component: go-service
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  selector:
+    app.kubernetes.io/name: notification-dispatcher
+  ports:
+  - name: http
+    port: 8099
+    targetPort: http
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: notification-dispatcher
+  namespace: switchos
+  labels:
+    app.kubernetes.io/name: notification-dispatcher
+    app.kubernetes.io/component: go-service
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: notification-dispatcher
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: notification-dispatcher
+  namespace: switchos
+  labels:
+    app.kubernetes.io/name: notification-dispatcher
+    app.kubernetes.io/component: go-service
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: notification-dispatcher
+  minReplicas: 2
+  maxReplicas: 5
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vertical-provisioning
+  namespace: switchos
+  labels: &id001
+    app.kubernetes.io/name: vertical-provisioning
+    app.kubernetes.io/component: go-service
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  replicas: 2
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: vertical-provisioning
+  template:
+    metadata:
+      labels: *id001
+      annotations: {}
+    spec:
+      serviceAccountName: go-services
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+      - maxSkew: 1
+        minDomains: 2
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: DoNotSchedule
+        labelSelector:
+          matchLabels:
+            app.kubernetes.io/name: vertical-provisioning
+      containers:
+      - name: vertical-provisioning
+        image: ghcr.io/munisp/deliveryplatform-vertical-provisioning:REPLACE_WITH_IMMUTABLE_TAG
+        imagePullPolicy: IfNotPresent
+        ports:
+        - name: http
+          containerPort: 8112
+        envFrom:
+        - configMapRef:
+            name: go-services-runtime-config
+        - secretRef:
+            name: go-services-secrets
+        env:
+        - name: PORT
+          value: '8112'
+        resources:
+          requests:
+            cpu: 250m
+            memory: 256Mi
+          limits:
+            cpu: '1'
+            memory: 512Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+        startupProbe:
+          httpGet:
+            path: /health
+            port: http
+          failureThreshold: 36
+          periodSeconds: 5
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: http
+          periodSeconds: 10
+          timeoutSeconds: 3
+          failureThreshold: 3
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 20
+          periodSeconds: 20
+          timeoutSeconds: 3
+          failureThreshold: 3
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vertical-provisioning
+  namespace: switchos
+  labels:
+    app.kubernetes.io/name: vertical-provisioning
+    app.kubernetes.io/component: go-service
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  selector:
+    app.kubernetes.io/name: vertical-provisioning
+  ports:
+  - name: http
+    port: 8112
+    targetPort: http
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: vertical-provisioning
+  namespace: switchos
+  labels:
+    app.kubernetes.io/name: vertical-provisioning
+    app.kubernetes.io/component: go-service
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: vertical-provisioning
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: vertical-provisioning
+  namespace: switchos
+  labels:
+    app.kubernetes.io/name: vertical-provisioning
+    app.kubernetes.io/component: go-service
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: vertical-provisioning
+  minReplicas: 2
+  maxReplicas: 5
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: voice-gateway
+  namespace: switchos
+  labels: &id001
+    app.kubernetes.io/name: voice-gateway
+    app.kubernetes.io/component: go-service
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  replicas: 2
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: voice-gateway
+  template:
+    metadata:
+      labels: *id001
+      annotations: {}
+    spec:
+      serviceAccountName: go-services
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+      - maxSkew: 1
+        minDomains: 2
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: DoNotSchedule
+        labelSelector:
+          matchLabels:
+            app.kubernetes.io/name: voice-gateway
+      containers:
+      - name: voice-gateway
+        image: ghcr.io/munisp/deliveryplatform-voice-gateway:REPLACE_WITH_IMMUTABLE_TAG
+        imagePullPolicy: IfNotPresent
+        ports:
+        - name: http
+          containerPort: 8104
+        envFrom:
+        - configMapRef:
+            name: go-services-runtime-config
+        - secretRef:
+            name: go-services-secrets
+        env:
+        - name: PORT
+          value: '8104'
+        resources:
+          requests:
+            cpu: 500m
+            memory: 512Mi
+          limits:
+            cpu: '2'
+            memory: 1Gi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+        startupProbe:
+          httpGet:
+            path: /health
+            port: http
+          failureThreshold: 36
+          periodSeconds: 5
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: http
+          periodSeconds: 10
+          timeoutSeconds: 3
+          failureThreshold: 3
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 20
+          periodSeconds: 20
+          timeoutSeconds: 3
+          failureThreshold: 3
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: voice-gateway
+  namespace: switchos
+  labels:
+    app.kubernetes.io/name: voice-gateway
+    app.kubernetes.io/component: go-service
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  selector:
+    app.kubernetes.io/name: voice-gateway
+  ports:
+  - name: http
+    port: 8104
+    targetPort: http
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: voice-gateway
+  namespace: switchos
+  labels:
+    app.kubernetes.io/name: voice-gateway
+    app.kubernetes.io/component: go-service
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: voice-gateway
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: voice-gateway
+  namespace: switchos
+  labels:
+    app.kubernetes.io/name: voice-gateway
+    app.kubernetes.io/component: go-service
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: voice-gateway
+  minReplicas: 2
+  maxReplicas: 5
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ride-matching-worker
+  namespace: switchos
+  labels: &id001
+    app.kubernetes.io/name: ride-matching-worker
+    app.kubernetes.io/component: go-service
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  replicas: 2
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ride-matching-worker
+  template:
+    metadata:
+      labels: *id001
+      annotations: {}
+    spec:
+      serviceAccountName: go-services
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+      - maxSkew: 1
+        minDomains: 2
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: DoNotSchedule
+        labelSelector:
+          matchLabels:
+            app.kubernetes.io/name: ride-matching-worker
+      containers:
+      - name: ride-matching-worker
+        image: ghcr.io/munisp/deliveryplatform-ride-matching-worker:REPLACE_WITH_IMMUTABLE_TAG
+        imagePullPolicy: IfNotPresent
+        ports:
+        - name: http
+          containerPort: 8121
+        envFrom:
+        - configMapRef:
+            name: go-services-runtime-config
+        - secretRef:
+            name: go-services-secrets
+        env:
+        - name: PORT
+          value: '8121'
+        resources:
+          requests:
+            cpu: 500m
+            memory: 512Mi
+          limits:
+            cpu: '2'
+            memory: 1Gi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+        startupProbe:
+          httpGet:
+            path: /health
+            port: http
+          failureThreshold: 36
+          periodSeconds: 5
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: http
+          periodSeconds: 10
+          timeoutSeconds: 3
+          failureThreshold: 3
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 20
+          periodSeconds: 20
+          timeoutSeconds: 3
+          failureThreshold: 3
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ride-matching-worker
+  namespace: switchos
+  labels:
+    app.kubernetes.io/name: ride-matching-worker
+    app.kubernetes.io/component: go-service
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  selector:
+    app.kubernetes.io/name: ride-matching-worker
+  ports:
+  - name: http
+    port: 8121
+    targetPort: http
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: ride-matching-worker
+  namespace: switchos
+  labels:
+    app.kubernetes.io/name: ride-matching-worker
+    app.kubernetes.io/component: go-service
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ride-matching-worker
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: ride-matching-worker
+  namespace: switchos
+  labels:
+    app.kubernetes.io/name: ride-matching-worker
+    app.kubernetes.io/component: go-service
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: ride-matching-worker
+  minReplicas: 2
+  maxReplicas: 5
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: go-service-restrict-traffic
+  namespace: switchos
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: go-service
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: switchos
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: central-app
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: switchos
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/component: go-service
+    ports:
+    - protocol: TCP
+      port: 8086
+    - protocol: TCP
+      port: 8099
+    - protocol: TCP
+      port: 8104
+    - protocol: TCP
+      port: 8112
+    - protocol: TCP
+      port: 8114
+    - protocol: TCP
+      port: 8117
+    - protocol: TCP
+      port: 8121
+  egress:
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: switchos
+    ports:
+    - protocol: TCP
+      port: 3000
+    - protocol: TCP
+      port: 3005
+    - protocol: TCP
+      port: 4001
+    - protocol: TCP
+      port: 5432
+    - protocol: TCP
+      port: 6379
+    - protocol: TCP
+      port: 7233
+    - protocol: TCP
+      port: 8007
+    - protocol: TCP
+      port: 8090
+    - protocol: TCP
+      port: 8105
+    - protocol: TCP
+      port: 9092
+    - protocol: TCP
+      port: 8112
+    - protocol: TCP
+      port: 8113
+    - protocol: TCP
+      port: 8114
+    - protocol: TCP
+      port: 8115
+    - protocol: TCP
+      port: 8116
+    - protocol: TCP
+      port: 8117
+    - protocol: TCP
+      port: 8121
+    - protocol: TCP
+      port: 8122
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kube-system
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: dapr-system
+    ports:
+    - protocol: TCP
+      port: 443
+    - protocol: TCP
+      port: 50001
+    - protocol: TCP
+      port: 50005
+  - to:
+    - ipBlock:
+        cidr: 0.0.0.0/0
+    ports:
+    - protocol: TCP
+      port: 443

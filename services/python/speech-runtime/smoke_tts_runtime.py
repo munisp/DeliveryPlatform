@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import logging
 import pathlib
 import sys
 
+logger = logging.getLogger("switchos.speech_runtime.smoke_tts")
 ROOT = pathlib.Path(__file__).resolve().parent
 MODULE_PATH = ROOT / "main.py"
 
@@ -26,9 +28,10 @@ def main() -> int:
     printable["audio_base64_length"] = len(audio_base64) if isinstance(audio_base64, str) else 0
     if "audio_base64" in printable:
         printable["audio_base64"] = "<omitted>"
-    print(json.dumps(printable, indent=2))
+    logger.info("tts_smoke_result=%s", json.dumps(printable, sort_keys=True))
     return 0
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     raise SystemExit(main())

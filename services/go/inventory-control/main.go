@@ -43,50 +43,50 @@ type inventoryAdjustmentRequest struct {
 }
 
 type replenishmentSku struct {
-	SKU                    string   `json:"sku"`
-	Label                  string   `json:"label,omitempty"`
-	WarehouseID            int64    `json:"warehouse_id"`
-	WarehouseLabel         string   `json:"warehouse_label,omitempty"`
-	SupplierID             string   `json:"supplier_id,omitempty"`
-	SupplierName           string   `json:"supplier_name,omitempty"`
-	RecommendedUnits       float64  `json:"recommended_units"`
-	SafetyStockUnits       float64  `json:"safety_stock_units"`
-	CurrentAvailableUnits  float64  `json:"current_available_units"`
-	CurrentInboundUnits    float64  `json:"current_inbound_units"`
-	LeadTimeHours          float64  `json:"lead_time_hours"`
-	ServiceLevel           float64  `json:"service_level"`
-	RiskBand               string   `json:"risk_band"`
-	TargetTransferNodeID   *int64   `json:"target_transfer_node_id,omitempty"`
-	TargetTransferNodeName string   `json:"target_transfer_node_name,omitempty"`
+	SKU                    string  `json:"sku"`
+	Label                  string  `json:"label,omitempty"`
+	WarehouseID            int64   `json:"warehouse_id"`
+	WarehouseLabel         string  `json:"warehouse_label,omitempty"`
+	SupplierID             string  `json:"supplier_id,omitempty"`
+	SupplierName           string  `json:"supplier_name,omitempty"`
+	RecommendedUnits       float64 `json:"recommended_units"`
+	SafetyStockUnits       float64 `json:"safety_stock_units"`
+	CurrentAvailableUnits  float64 `json:"current_available_units"`
+	CurrentInboundUnits    float64 `json:"current_inbound_units"`
+	LeadTimeHours          float64 `json:"lead_time_hours"`
+	ServiceLevel           float64 `json:"service_level"`
+	RiskBand               string  `json:"risk_band"`
+	TargetTransferNodeID   *int64  `json:"target_transfer_node_id,omitempty"`
+	TargetTransferNodeName string  `json:"target_transfer_node_name,omitempty"`
 }
 
 type replenishmentRequest struct {
-	City                  string             `json:"city"`
-	PlanningHorizonHours  int                `json:"planning_horizon_hours"`
-	Trigger               string             `json:"trigger"`
-	RequestedBy           string             `json:"requested_by"`
-	WorkflowReason        string             `json:"workflow_reason"`
-	Skus                  []replenishmentSku `json:"skus"`
-	ApprovalMode          string             `json:"approval_mode"`
-	TraceID               string             `json:"trace_id,omitempty"`
+	City                 string             `json:"city"`
+	PlanningHorizonHours int                `json:"planning_horizon_hours"`
+	Trigger              string             `json:"trigger"`
+	RequestedBy          string             `json:"requested_by"`
+	WorkflowReason       string             `json:"workflow_reason"`
+	Skus                 []replenishmentSku `json:"skus"`
+	ApprovalMode         string             `json:"approval_mode"`
+	TraceID              string             `json:"trace_id,omitempty"`
 }
 
 type inventoryPosition struct {
-	WarehouseID       int64    `json:"warehouse_id"`
-	SKU               string   `json:"sku"`
-	MerchantID        *int64   `json:"merchant_id,omitempty"`
-	City              string   `json:"city"`
-	ZoneKey           string   `json:"zone_key"`
-	OnHandUnits       float64  `json:"on_hand_units"`
-	ReservedUnits     float64  `json:"reserved_units"`
-	InboundUnits      float64  `json:"inbound_units"`
-	AvailableUnits    float64  `json:"available_units"`
-	StockAccuracy     float64  `json:"stock_accuracy"`
-	FreshnessHours    *float64 `json:"freshness_hours,omitempty"`
-	ColdChainReady    bool     `json:"cold_chain_ready"`
-	LastSource        string   `json:"last_source"`
-	LastReason        string   `json:"last_reason"`
-	UpdatedAt         string   `json:"updated_at"`
+	WarehouseID    int64    `json:"warehouse_id"`
+	SKU            string   `json:"sku"`
+	MerchantID     *int64   `json:"merchant_id,omitempty"`
+	City           string   `json:"city"`
+	ZoneKey        string   `json:"zone_key"`
+	OnHandUnits    float64  `json:"on_hand_units"`
+	ReservedUnits  float64  `json:"reserved_units"`
+	InboundUnits   float64  `json:"inbound_units"`
+	AvailableUnits float64  `json:"available_units"`
+	StockAccuracy  float64  `json:"stock_accuracy"`
+	FreshnessHours *float64 `json:"freshness_hours,omitempty"`
+	ColdChainReady bool     `json:"cold_chain_ready"`
+	LastSource     string   `json:"last_source"`
+	LastReason     string   `json:"last_reason"`
+	UpdatedAt      string   `json:"updated_at"`
 }
 
 type inventoryWorkflowEvent struct {
@@ -99,32 +99,42 @@ type inventoryWorkflowEvent struct {
 }
 
 type inventoryResponse struct {
-	Service      string            `json:"service"`
-	WorkflowID   string            `json:"workflow_id"`
-	ResourceID   string            `json:"resource_id"`
-	Inventory    inventoryPosition `json:"inventory"`
-	Workflow     map[string]any    `json:"workflow"`
-	Middleware   map[string]any    `json:"middleware"`
-	Metrics      map[string]any    `json:"metrics"`
+	Service    string            `json:"service"`
+	WorkflowID string            `json:"workflow_id"`
+	ResourceID string            `json:"resource_id"`
+	Inventory  inventoryPosition `json:"inventory"`
+	Workflow   map[string]any    `json:"workflow"`
+	Middleware map[string]any    `json:"middleware"`
+	Metrics    map[string]any    `json:"metrics"`
 }
 
 type replenishmentResponse struct {
-	Service      string         `json:"service"`
-	WorkflowID   string         `json:"workflow_id"`
-	Status       string         `json:"status"`
-	Summary      string         `json:"summary"`
-	Approvals    []string       `json:"approvals"`
-	Middleware   map[string]any `json:"middleware"`
-	Metrics      map[string]any `json:"metrics"`
+	Service    string         `json:"service"`
+	WorkflowID string         `json:"workflow_id"`
+	Status     string         `json:"status"`
+	Summary    string         `json:"summary"`
+	Approvals  []string       `json:"approvals"`
+	Middleware map[string]any `json:"middleware"`
+	Metrics    map[string]any `json:"metrics"`
 }
 
 func main() {
-	databaseURL := getenv("DATABASE_URL", "postgresql://ubuntu:ubuntu@127.0.0.1:5432/switchos?sslmode=disable")
+	databaseURL := strings.TrimSpace(os.Getenv("DATABASE_URL"))
+	if databaseURL == "" {
+		log.Fatal("DATABASE_URL must be explicitly configured")
+	}
+	internalServiceToken := strings.TrimSpace(os.Getenv("INTERNAL_SERVICE_TOKEN"))
+	if len(internalServiceToken) < 32 {
+		log.Fatal("INTERNAL_SERVICE_TOKEN must be explicitly configured with at least 32 characters")
+	}
 	service := &inventoryService{
 		db:                   openDB(databaseURL),
 		httpClient:           &http.Client{Timeout: 5 * time.Second},
-		internalServiceToken: getenv("INTERNAL_SERVICE_TOKEN", "switchos-internal-dev-token-change-before-production"),
+		internalServiceToken: internalServiceToken,
 		serviceName:          "switchos-inventory-control",
+	}
+	if err := service.db.Ping(); err != nil {
+		log.Fatalf("ping database: %v", err)
 	}
 	if err := service.ensureSchema(); err != nil {
 		log.Fatalf("ensure schema: %v", err)
@@ -137,7 +147,7 @@ func main() {
 	mux.HandleFunc("/inventory/replenishment-request", service.replenishmentHandler)
 	mux.HandleFunc("/inventory/position", service.positionHandler)
 
-	addr := fmt.Sprintf("%s:%s", getenv("BIND_HOST", "127.0.0.1"), getenv("PORT", "8116"))
+	addr := fmt.Sprintf("%s:%s", getenv("BIND_HOST", "127.0.0.1"), getenv("PORT", "8117"))
 	log.Printf("inventory control listening on %s", addr)
 	log.Fatal(http.ListenAndServe(addr, mux))
 }
@@ -218,9 +228,9 @@ func (s *inventoryService) ensureSchema() error {
 func (s *inventoryService) healthHandler(w http.ResponseWriter, r *http.Request) {
 	traceID := requestTraceID(r)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"status": "healthy",
-		"service": s.serviceName,
-		"trace_id": traceID,
+		"status":     "healthy",
+		"service":    s.serviceName,
+		"trace_id":   traceID,
 		"middleware": s.middlewareStatus(),
 	})
 }
@@ -259,17 +269,17 @@ func (s *inventoryService) adjustmentHandler(w http.ResponseWriter, r *http.Requ
 	}
 	payload := map[string]any{
 		"inventory": position,
-		"reason": request.Reason,
-		"source": request.Source,
-		"trace_id": traceID,
+		"reason":    request.Reason,
+		"source":    request.Source,
+		"trace_id":  traceID,
 	}
 	publishMetrics, workflowErr := s.recordWorkflowEvent(inventoryWorkflowEvent{
-		WorkflowID: workflowID,
+		WorkflowID:   workflowID,
 		WorkflowType: "inventory_adjustment",
-		ResourceID: resourceID,
-		Step: "inventory_adjusted",
-		Status: "completed",
-		Payload: payload,
+		ResourceID:   resourceID,
+		Step:         "inventory_adjusted",
+		Status:       "completed",
+		Payload:      payload,
 	})
 	if workflowErr != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": workflowErr.Error(), "trace_id": traceID})
@@ -283,13 +293,13 @@ func (s *inventoryService) adjustmentHandler(w http.ResponseWriter, r *http.Requ
 		"middleware_publish": publishMetrics,
 	}
 	writeJSON(w, http.StatusOK, inventoryResponse{
-		Service: s.serviceName,
+		Service:    s.serviceName,
 		WorkflowID: workflowID,
 		ResourceID: resourceID,
-		Inventory: position,
-		Workflow: map[string]any{"type": "inventory_adjustment", "step": "inventory_adjusted", "status": "completed"},
+		Inventory:  position,
+		Workflow:   map[string]any{"type": "inventory_adjustment", "step": "inventory_adjusted", "status": "completed"},
 		Middleware: s.middlewareStatus(),
-		Metrics: responseMetrics,
+		Metrics:    responseMetrics,
 	})
 }
 
@@ -332,44 +342,44 @@ func (s *inventoryService) replenishmentHandler(w http.ResponseWriter, r *http.R
 		status = "urgent"
 	}
 	payload := map[string]any{
-		"city": request.City,
+		"city":                   request.City,
 		"planning_horizon_hours": request.PlanningHorizonHours,
-		"trigger": request.Trigger,
-		"requested_by": request.RequestedBy,
-		"workflow_reason": request.WorkflowReason,
-		"approval_mode": firstNonEmpty(request.ApprovalMode, "operator_review"),
-		"critical_sku_count": criticalCount,
-		"sku_count": len(request.Skus),
-		"skus": request.Skus,
-		"trace_id": traceID,
+		"trigger":                request.Trigger,
+		"requested_by":           request.RequestedBy,
+		"workflow_reason":        request.WorkflowReason,
+		"approval_mode":          firstNonEmpty(request.ApprovalMode, "operator_review"),
+		"critical_sku_count":     criticalCount,
+		"sku_count":              len(request.Skus),
+		"skus":                   request.Skus,
+		"trace_id":               traceID,
 	}
 	publishMetrics, workflowErr := s.recordWorkflowEvent(inventoryWorkflowEvent{
-		WorkflowID: workflowID,
+		WorkflowID:   workflowID,
 		WorkflowType: "replenishment_request",
-		ResourceID: resourceID,
-		Step: "replenishment_requested",
-		Status: status,
-		Payload: payload,
+		ResourceID:   resourceID,
+		Step:         "replenishment_requested",
+		Status:       status,
+		Payload:      payload,
 	})
 	if workflowErr != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": workflowErr.Error(), "trace_id": traceID})
 		return
 	}
 	responseMetrics := map[string]any{
-		"trace_id": traceID,
-		"sku_count": len(request.Skus),
+		"trace_id":           traceID,
+		"sku_count":          len(request.Skus),
 		"critical_sku_count": criticalCount,
-		"timings_ms": map[string]any{"total": roundDurationMs(time.Since(startedAt))},
+		"timings_ms":         map[string]any{"total": roundDurationMs(time.Since(startedAt))},
 		"middleware_publish": publishMetrics,
 	}
 	writeJSON(w, http.StatusOK, replenishmentResponse{
-		Service: s.serviceName,
+		Service:    s.serviceName,
 		WorkflowID: workflowID,
-		Status: status,
-		Summary: fmt.Sprintf("Queued replenishment workflow for %d SKUs in %s with %d critical items.", len(request.Skus), request.City, criticalCount),
-		Approvals: approvals,
+		Status:     status,
+		Summary:    fmt.Sprintf("Queued replenishment workflow for %d SKUs in %s with %d critical items.", len(request.Skus), request.City, criticalCount),
+		Approvals:  approvals,
 		Middleware: s.middlewareStatus(),
-		Metrics: responseMetrics,
+		Metrics:    responseMetrics,
 	})
 }
 
@@ -413,7 +423,7 @@ func (s *inventoryService) applyInventoryAdjustment(request inventoryAdjustmentR
 			on_hand_units = GREATEST(inventory_positions.on_hand_units + $14, 0),
 			reserved_units = GREATEST(inventory_positions.reserved_units + $15, 0),
 			inbound_units = GREATEST(inventory_positions.inbound_units + $16, 0),
-			stock_accuracy = CASE WHEN $17 > 0 THEN $17 ELSE inventory_positions.stock_accuracy END,
+			stock_accuracy = CASE WHEN $17::DOUBLE PRECISION > 0 THEN $17::DOUBLE PRECISION ELSE inventory_positions.stock_accuracy END,
 			freshness_hours = COALESCE($18, inventory_positions.freshness_hours),
 			cold_chain_ready = EXCLUDED.cold_chain_ready,
 			last_source = EXCLUDED.last_source,
@@ -625,9 +635,9 @@ func (s *inventoryService) publishToKafkaCompatible(brokers []string, topic stri
 	writer := &kafka.Writer{Addr: kafka.TCP(brokers...), Topic: topic, RequiredAcks: kafka.RequireAll, Async: false, Balancer: &kafka.LeastBytes{}}
 	defer writer.Close()
 	err := writer.WriteMessages(ctx, kafka.Message{
-		Key:   []byte(event.WorkflowID),
-		Value: body,
-		Time:  time.Now().UTC(),
+		Key:     []byte(event.WorkflowID),
+		Value:   body,
+		Time:    time.Now().UTC(),
 		Headers: []kafka.Header{{Key: "workflow-type", Value: []byte(event.WorkflowType)}, {Key: "workflow-step", Value: []byte(event.Step)}, {Key: "workflow-status", Value: []byte(event.Status)}, {Key: "workflow-broker", Value: []byte(brokerName)}},
 	})
 	return roundDurationMs(time.Since(startedAt)), err
@@ -682,22 +692,22 @@ func (s *inventoryService) publishToTemporal(event inventoryWorkflowEvent) (floa
 
 func (s *inventoryService) workflowEnvelope(event inventoryWorkflowEvent) map[string]any {
 	return map[string]any{
-		"source": s.serviceName,
-		"timestamp": time.Now().UTC().Format(time.RFC3339),
-		"workflow_id": event.WorkflowID,
+		"source":        s.serviceName,
+		"timestamp":     time.Now().UTC().Format(time.RFC3339),
+		"workflow_id":   event.WorkflowID,
 		"workflow_type": event.WorkflowType,
-		"resource_id": event.ResourceID,
-		"step": event.Step,
-		"status": event.Status,
-		"payload": event.Payload,
+		"resource_id":   event.ResourceID,
+		"step":          event.Step,
+		"status":        event.Status,
+		"payload":       event.Payload,
 	}
 }
 
 func (s *inventoryService) middlewareStatus() map[string]any {
 	return map[string]any{
-		"dapr": map[string]any{"configured": getenv("DAPR_HTTP_PORT", "") != "" && getenv("DAPR_PUBSUB_NAME", "") != "" && getenv("DAPR_INVENTORY_TOPIC", "") != ""},
-		"kafka": map[string]any{"configured": getenv("KAFKA_BROKERS", "") != "" && getenv("KAFKA_INVENTORY_TOPIC", "") != ""},
-		"fluvio": map[string]any{"configured": getenv("FLUVIO_KAFKA_BROKERS", "") != "" && getenv("FLUVIO_INVENTORY_TOPIC", "") != ""},
+		"dapr":     map[string]any{"configured": getenv("DAPR_HTTP_PORT", "") != "" && getenv("DAPR_PUBSUB_NAME", "") != "" && getenv("DAPR_INVENTORY_TOPIC", "") != ""},
+		"kafka":    map[string]any{"configured": getenv("KAFKA_BROKERS", "") != "" && getenv("KAFKA_INVENTORY_TOPIC", "") != ""},
+		"fluvio":   map[string]any{"configured": getenv("FLUVIO_KAFKA_BROKERS", "") != "" && getenv("FLUVIO_INVENTORY_TOPIC", "") != ""},
 		"temporal": map[string]any{"configured": getenv("TEMPORAL_BRIDGE_URL", "") != "" || getenv("TEMPORAL_TASK_QUEUE", "") != ""},
 	}
 }

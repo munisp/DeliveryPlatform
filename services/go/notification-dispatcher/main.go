@@ -106,7 +106,14 @@ var (
 )
 
 func main() {
-	databaseURL := getEnv("DATABASE_URL", "postgresql://ubuntu:ubuntu@127.0.0.1:5432/switchos?sslmode=disable")
+	databaseURL := strings.TrimSpace(os.Getenv("DATABASE_URL"))
+	if databaseURL == "" {
+		log.Fatal("DATABASE_URL must be explicitly configured")
+	}
+	internalServiceToken := strings.TrimSpace(os.Getenv("INTERNAL_SERVICE_TOKEN"))
+	if len(internalServiceToken) < 32 {
+		log.Fatal("INTERNAL_SERVICE_TOKEN must be explicitly configured with at least 32 characters")
+	}
 	db, err := sql.Open("postgres", databaseURL)
 	if err != nil {
 		log.Fatalf("open database: %v", err)
@@ -119,7 +126,7 @@ func main() {
 	service := &Service{
 		db:                   db,
 		httpClient:           &http.Client{Timeout: 20 * time.Second},
-		internalServiceToken: getEnv("INTERNAL_SERVICE_TOKEN", "switchos-internal-dev-token-change-before-production"),
+		internalServiceToken: internalServiceToken,
 		smsProviderURL:       strings.TrimSpace(os.Getenv("SMS_PROVIDER_URL")),
 		emailProviderURL:     strings.TrimSpace(os.Getenv("EMAIL_PROVIDER_URL")),
 		pushProviderURL:      strings.TrimSpace(os.Getenv("PUSH_PROVIDER_URL")),

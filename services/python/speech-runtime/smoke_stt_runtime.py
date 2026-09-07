@@ -3,12 +3,14 @@ from __future__ import annotations
 import base64
 import importlib.util
 import json
+import logging
 import os
 import pathlib
 import subprocess
 import sys
 import tempfile
 
+logger = logging.getLogger("switchos.speech_runtime.smoke_stt")
 ROOT = pathlib.Path(__file__).resolve().parent
 MODULE_PATH = ROOT / "main.py"
 
@@ -63,9 +65,10 @@ def main() -> int:
         "chunk_id": "smoke-chunk-1",
     }
     result = module.build_transcription_result(payload)
-    print(json.dumps(result, indent=2))
+    logger.info("stt_smoke_result=%s", json.dumps(result, sort_keys=True))
     return 0
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     raise SystemExit(main())

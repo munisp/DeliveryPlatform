@@ -2,6 +2,9 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"crypto/subtle"
+	"database/sql"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
@@ -15,6 +18,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+
+	_ "github.com/lib/pq"
 )
 
 const (
@@ -23,6 +28,7 @@ const (
 )
 
 type GatewayService struct {
+	db                   *sql.DB
 	httpClient           *http.Client
 	internalServiceToken string
 	longcatCoreURL       string
@@ -132,13 +138,33 @@ type AudioSocketStreamState struct {
 func main() {
 	port := getEnv("PORT", "8104")
 	bindHost := getEnv("BIND_HOST", "127.0.0.1")
+	internalServiceToken := strings.TrimSpace(os.Getenv("INTERNAL_SERVICE_TOKEN"))
+	if len(internalServiceToken) < 32 {
+		log.Fatal("INTERNAL_SERVICE_TOKEN must be explicitly configured with at least 32 characters")
+	}
+	databaseURL := strings.TrimSpace(os.Getenv("DATABASE_URL"))
+	if databaseURL == "" {
+		log.Fatal("DATABASE_URL must be explicitly configured")
+	}
+	db, err := sql.Open("postgres", databaseURL)
+	if err != nil {
+		log.Fatalf("open PostgreSQL connection: %v", err)
+	}
+	defer db.Close()
+	if err := db.PingContext(context.Background()); err != nil {
+		log.Fatalf("ping PostgreSQL connection: %v", err)
+	}
 	service := &GatewayService{
+		db:                   db,
 		httpClient:           &http.Client{Timeout: 25 * time.Second},
-		internalServiceToken: getEnv("INTERNAL_SERVICE_TOKEN", "switchos-internal-dev-token-change-before-production"),
+		internalServiceToken: internalServiceToken,
 		longcatCoreURL:       strings.TrimRight(getEnv("LONGCAT_CORE_URL", "http://127.0.0.1:3005"), "/"),
 		speechServiceURL:     strings.TrimRight(getEnv("LONGCAT_SPEECH_SERVICE_URL", "http://127.0.0.1:8105"), "/"),
 		telephonyMode:        getEnv("LONGCAT_TELEPHONY_MODE", "asterisk-audiosocket"),
 		audioSocketAddr:      getEnv("LONGCAT_AUDIOSOCKET_ADDR", "127.0.0.1:9104"),
+	}
+	if err := service.ensureSchema(context.Background()); err != nil {
+		log.Fatalf("initialize voice gateway persistence: %v", err)
 	}
 
 	if strings.Contains(strings.ToLower(service.telephonyMode), "audiosocket") {
@@ -168,8 +194,12 @@ func (s *GatewayService) healthHandler(w http.ResponseWriter, r *http.Request) {
 		respondJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method_not_allowed"})
 		return
 	}
+	if err := s.db.PingContext(r.Context()); err != nil {
+		respondJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "voice_gateway_persistence_unavailable"})
+		return
+	}
 	respondJSON(w, http.StatusOK, map[string]any{
-		"status":             "ok",
+		"status":             "healthy",
 		"service":            "longcat-voice-gateway",
 		"telephony_mode":     s.telephonyMode,
 		"audio_socket_addr":  s.audioSocketAddr,
@@ -204,6 +234,10 @@ func (s *GatewayService) bootstrapHandler(w http.ResponseWriter, r *http.Request
 		respondForwardingError(w, status, err)
 		return
 	}
+	if err := s.recordExecution(r.Context(), "bootstrap", req.ExternalCallID, "", status, map[string]any{"transport": req.Transport, "telephony_provider": req.TelephonyProvider, "has_user_id": req.UserID != nil}); err != nil {
+		respondJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "voice_gateway_persistence_unavailable"})
+		return
+	}
 	respondRawJSON(w, status, payload)
 }
 
@@ -235,6 +269,10 @@ func (s *GatewayService) transcriptHandler(w http.ResponseWriter, r *http.Reques
 		respondForwardingError(w, status, err)
 		return
 	}
+	if err := s.recordExecution(r.Context(), "transcript", req.ExternalCallID, req.SessionID, status, map[string]any{"transport": req.Transport, "telephony_provider": req.TelephonyProvider, "speaker": req.Speaker, "final_segment": req.FinalSegment, "transcript_length": len(req.Transcript)}); err != nil {
+		respondJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "voice_gateway_persistence_unavailable"})
+		return
+	}
 	respondRawJSON(w, status, payload)
 }
 
@@ -249,6 +287,12 @@ func (s *GatewayService) streamEventHandler(w http.ResponseWriter, r *http.Reque
 	var payload map[string]any
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		respondJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_json"})
+		return
+	}
+	externalCallID := strings.TrimSpace(fmt.Sprint(payload["externalCallId"]))
+	sessionID := strings.TrimSpace(fmt.Sprint(payload["sessionId"]))
+	if err := s.recordExecution(r.Context(), "stream_event", externalCallID, sessionID, http.StatusOK, map[string]any{"field_count": len(payload), "mode": s.telephonyMode}); err != nil {
+		respondJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "voice_gateway_persistence_unavailable"})
 		return
 	}
 	respondJSON(w, http.StatusOK, map[string]any{
@@ -363,7 +407,7 @@ func (s *GatewayService) handleAudioSocketFrame(state *AudioSocketStreamState, f
 		if digits == "" {
 			return nil
 		}
-					_, err := s.forwardTranscript(TranscriptRequest{
+		_, err := s.forwardTranscript(TranscriptRequest{
 
 			SessionID:         state.SessionID,
 			ExternalCallID:    state.ExternalCallID,
@@ -376,12 +420,12 @@ func (s *GatewayService) handleAudioSocketFrame(state *AudioSocketStreamState, f
 				"signal": "dtmf",
 			},
 		})
-					if err != nil {
-				if isHTTPStatus(err, http.StatusConflict) {
-					return errTerminalSessionConflict
-				}
-				return fmt.Errorf("forward dtmf transcript: %w", err)
+		if err != nil {
+			if isHTTPStatus(err, http.StatusConflict) {
+				return errTerminalSessionConflict
 			}
+			return fmt.Errorf("forward dtmf transcript: %w", err)
+		}
 
 		return nil
 	case isPCMFrameType(frame.PacketType):
@@ -392,10 +436,10 @@ func (s *GatewayService) handleAudioSocketFrame(state *AudioSocketStreamState, f
 			}
 			state.SessionID = sessionID
 		}
-					state.SampleRateHz = sampleRateForPacket(frame.PacketType)
-			state.ChunkIndex++
-			state.BufferedAudio = append(state.BufferedAudio, frame.Payload...)
-			return nil
+		state.SampleRateHz = sampleRateForPacket(frame.PacketType)
+		state.ChunkIndex++
+		state.BufferedAudio = append(state.BufferedAudio, frame.Payload...)
+		return nil
 
 	default:
 		return nil
@@ -510,9 +554,31 @@ func (s *GatewayService) closeTelephonySession(req CloseRequest) error {
 	return err
 }
 
+func (s *GatewayService) ensureSchema(ctx context.Context) error {
+	_, err := s.db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS voice_gateway_executions (
+		id BIGSERIAL PRIMARY KEY,
+		operation TEXT NOT NULL,
+		external_call_id TEXT,
+		session_id TEXT,
+		upstream_status INTEGER NOT NULL,
+		metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+		created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+	)`)
+	return err
+}
+
+func (s *GatewayService) recordExecution(ctx context.Context, operation, externalCallID, sessionID string, upstreamStatus int, metadata map[string]any) error {
+	encoded, err := json.Marshal(metadata)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `INSERT INTO voice_gateway_executions (operation, external_call_id, session_id, upstream_status, metadata_json) VALUES ($1, NULLIF($2, ''), NULLIF($3, ''), $4, $5::jsonb)`, operation, strings.TrimSpace(externalCallID), strings.TrimSpace(sessionID), upstreamStatus, string(encoded))
+	return err
+}
+
 func (s *GatewayService) requireInternalAccess(w http.ResponseWriter, r *http.Request) bool {
 	provided := strings.TrimSpace(r.Header.Get("X-Internal-Service-Token"))
-	if provided == "" || provided != s.internalServiceToken {
+	if provided == "" || subtle.ConstantTimeCompare([]byte(provided), []byte(s.internalServiceToken)) != 1 {
 		respondJSON(w, http.StatusUnauthorized, map[string]any{"error": "unauthorized"})
 		return false
 	}

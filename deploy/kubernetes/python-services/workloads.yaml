@@ -1,0 +1,1135 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: intake-orchestrator
+  namespace: switchos
+  labels: &id001
+    app.kubernetes.io/name: intake-orchestrator
+    app.kubernetes.io/component: python-service
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  replicas: 2
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: intake-orchestrator
+  template:
+    metadata:
+      labels: *id001
+      annotations: {}
+    spec:
+      serviceAccountName: python-services
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+      - maxSkew: 1
+        minDomains: 2
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: DoNotSchedule
+        labelSelector:
+          matchLabels:
+            app.kubernetes.io/name: intake-orchestrator
+      containers:
+      - name: intake-orchestrator
+        image: ghcr.io/munisp/deliveryplatform-intake-orchestrator:REPLACE_WITH_IMMUTABLE_TAG
+        imagePullPolicy: IfNotPresent
+        ports:
+        - name: http
+          containerPort: 8113
+        envFrom:
+        - configMapRef:
+            name: python-services-runtime-config
+        - secretRef:
+            name: python-services-secrets
+        env:
+        - name: PORT
+          value: '8113'
+        resources:
+          requests:
+            cpu: 250m
+            memory: 256Mi
+          limits:
+            cpu: '1'
+            memory: 512Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+        startupProbe:
+          httpGet:
+            path: /health
+            port: http
+          failureThreshold: 36
+          periodSeconds: 5
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: http
+          periodSeconds: 10
+          timeoutSeconds: 3
+          failureThreshold: 3
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 20
+          periodSeconds: 20
+          timeoutSeconds: 3
+          failureThreshold: 3
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: intake-orchestrator
+  namespace: switchos
+  labels:
+    app.kubernetes.io/name: intake-orchestrator
+    app.kubernetes.io/component: python-service
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  selector:
+    app.kubernetes.io/name: intake-orchestrator
+  ports:
+  - name: http
+    port: 8113
+    targetPort: http
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: intake-orchestrator
+  namespace: switchos
+  labels:
+    app.kubernetes.io/name: intake-orchestrator
+    app.kubernetes.io/component: python-service
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: intake-orchestrator
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: intake-orchestrator
+  namespace: switchos
+  labels:
+    app.kubernetes.io/name: intake-orchestrator
+    app.kubernetes.io/component: python-service
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: intake-orchestrator
+  minReplicas: 2
+  maxReplicas: 5
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lakehouse
+  namespace: switchos
+  labels: &id001
+    app.kubernetes.io/name: lakehouse
+    app.kubernetes.io/component: python-service
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  replicas: 2
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: lakehouse
+  template:
+    metadata:
+      labels: *id001
+      annotations: {}
+    spec:
+      serviceAccountName: python-services
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+      - maxSkew: 1
+        minDomains: 2
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: DoNotSchedule
+        labelSelector:
+          matchLabels:
+            app.kubernetes.io/name: lakehouse
+      containers:
+      - name: lakehouse
+        image: ghcr.io/munisp/deliveryplatform-lakehouse:REPLACE_WITH_IMMUTABLE_TAG
+        imagePullPolicy: IfNotPresent
+        ports:
+        - name: http
+          containerPort: 8007
+        envFrom:
+        - configMapRef:
+            name: python-services-runtime-config
+        - secretRef:
+            name: python-services-secrets
+        env:
+        - name: PORT
+          value: '8007'
+        resources:
+          requests:
+            cpu: 250m
+            memory: 256Mi
+          limits:
+            cpu: '1'
+            memory: 512Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+        startupProbe:
+          httpGet:
+            path: /health
+            port: http
+          failureThreshold: 36
+          periodSeconds: 5
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: http
+          periodSeconds: 10
+          timeoutSeconds: 3
+          failureThreshold: 3
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 20
+          periodSeconds: 20
+          timeoutSeconds: 3
+          failureThreshold: 3
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: lakehouse
+  namespace: switchos
+  labels:
+    app.kubernetes.io/name: lakehouse
+    app.kubernetes.io/component: python-service
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  selector:
+    app.kubernetes.io/name: lakehouse
+  ports:
+  - name: http
+    port: 8007
+    targetPort: http
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: lakehouse
+  namespace: switchos
+  labels:
+    app.kubernetes.io/name: lakehouse
+    app.kubernetes.io/component: python-service
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: lakehouse
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: lakehouse
+  namespace: switchos
+  labels:
+    app.kubernetes.io/name: lakehouse
+    app.kubernetes.io/component: python-service
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: lakehouse
+  minReplicas: 2
+  maxReplicas: 5
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: procurement-planner
+  namespace: switchos
+  labels: &id001
+    app.kubernetes.io/name: procurement-planner
+    app.kubernetes.io/component: python-service
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  replicas: 2
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: procurement-planner
+  template:
+    metadata:
+      labels: *id001
+      annotations: {}
+    spec:
+      serviceAccountName: python-services
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+      - maxSkew: 1
+        minDomains: 2
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: DoNotSchedule
+        labelSelector:
+          matchLabels:
+            app.kubernetes.io/name: procurement-planner
+      containers:
+      - name: procurement-planner
+        image: ghcr.io/munisp/deliveryplatform-procurement-planner:REPLACE_WITH_IMMUTABLE_TAG
+        imagePullPolicy: IfNotPresent
+        ports:
+        - name: http
+          containerPort: 8116
+        envFrom:
+        - configMapRef:
+            name: python-services-runtime-config
+        - secretRef:
+            name: python-services-secrets
+        env:
+        - name: PORT
+          value: '8116'
+        resources:
+          requests:
+            cpu: 250m
+            memory: 256Mi
+          limits:
+            cpu: '1'
+            memory: 512Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+        startupProbe:
+          httpGet:
+            path: /health
+            port: http
+          failureThreshold: 36
+          periodSeconds: 5
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: http
+          periodSeconds: 10
+          timeoutSeconds: 3
+          failureThreshold: 3
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 20
+          periodSeconds: 20
+          timeoutSeconds: 3
+          failureThreshold: 3
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: procurement-planner
+  namespace: switchos
+  labels:
+    app.kubernetes.io/name: procurement-planner
+    app.kubernetes.io/component: python-service
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  selector:
+    app.kubernetes.io/name: procurement-planner
+  ports:
+  - name: http
+    port: 8116
+    targetPort: http
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: procurement-planner
+  namespace: switchos
+  labels:
+    app.kubernetes.io/name: procurement-planner
+    app.kubernetes.io/component: python-service
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: procurement-planner
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: procurement-planner
+  namespace: switchos
+  labels:
+    app.kubernetes.io/name: procurement-planner
+    app.kubernetes.io/component: python-service
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: procurement-planner
+  minReplicas: 2
+  maxReplicas: 5
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: retail-forecast
+  namespace: switchos
+  labels: &id001
+    app.kubernetes.io/name: retail-forecast
+    app.kubernetes.io/component: python-service
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  replicas: 2
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: retail-forecast
+  template:
+    metadata:
+      labels: *id001
+      annotations: {}
+    spec:
+      serviceAccountName: python-services
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+      - maxSkew: 1
+        minDomains: 2
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: DoNotSchedule
+        labelSelector:
+          matchLabels:
+            app.kubernetes.io/name: retail-forecast
+      containers:
+      - name: retail-forecast
+        image: ghcr.io/munisp/deliveryplatform-retail-forecast:REPLACE_WITH_IMMUTABLE_TAG
+        imagePullPolicy: IfNotPresent
+        ports:
+        - name: http
+          containerPort: 8115
+        envFrom:
+        - configMapRef:
+            name: python-services-runtime-config
+        - secretRef:
+            name: python-services-secrets
+        env:
+        - name: PORT
+          value: '8115'
+        resources:
+          requests:
+            cpu: 250m
+            memory: 256Mi
+          limits:
+            cpu: '1'
+            memory: 512Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+        startupProbe:
+          httpGet:
+            path: /health
+            port: http
+          failureThreshold: 36
+          periodSeconds: 5
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: http
+          periodSeconds: 10
+          timeoutSeconds: 3
+          failureThreshold: 3
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 20
+          periodSeconds: 20
+          timeoutSeconds: 3
+          failureThreshold: 3
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: retail-forecast
+  namespace: switchos
+  labels:
+    app.kubernetes.io/name: retail-forecast
+    app.kubernetes.io/component: python-service
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  selector:
+    app.kubernetes.io/name: retail-forecast
+  ports:
+  - name: http
+    port: 8115
+    targetPort: http
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: retail-forecast
+  namespace: switchos
+  labels:
+    app.kubernetes.io/name: retail-forecast
+    app.kubernetes.io/component: python-service
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: retail-forecast
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: retail-forecast
+  namespace: switchos
+  labels:
+    app.kubernetes.io/name: retail-forecast
+    app.kubernetes.io/component: python-service
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: retail-forecast
+  minReplicas: 2
+  maxReplicas: 5
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: speech-runtime
+  namespace: switchos
+  labels: &id001
+    app.kubernetes.io/name: speech-runtime
+    app.kubernetes.io/component: python-service
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  replicas: 2
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: speech-runtime
+  template:
+    metadata:
+      labels: *id001
+      annotations: {}
+    spec:
+      serviceAccountName: python-services
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+      - maxSkew: 1
+        minDomains: 2
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: DoNotSchedule
+        labelSelector:
+          matchLabels:
+            app.kubernetes.io/name: speech-runtime
+      containers:
+      - name: speech-runtime
+        image: ghcr.io/munisp/deliveryplatform-speech-runtime:REPLACE_WITH_IMMUTABLE_TAG
+        imagePullPolicy: IfNotPresent
+        ports:
+        - name: http
+          containerPort: 8105
+        envFrom:
+        - configMapRef:
+            name: python-services-runtime-config
+        - secretRef:
+            name: python-services-secrets
+        env:
+        - name: PORT
+          value: '8105'
+        - name: PIPER_BIN
+          value: /opt/speech-models/piper
+        - name: PIPER_MODEL
+          value: /opt/speech-models/en_US-lessac-medium.onnx
+        - name: LONGCAT_SPEECH_STT_MODEL
+          value: /opt/speech-models/whisper
+        resources:
+          requests:
+            cpu: 500m
+            memory: 512Mi
+          limits:
+            cpu: '2'
+            memory: 1Gi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+        startupProbe:
+          httpGet:
+            path: /health
+            port: http
+          failureThreshold: 36
+          periodSeconds: 5
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: http
+          periodSeconds: 10
+          timeoutSeconds: 3
+          failureThreshold: 3
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 20
+          periodSeconds: 20
+          timeoutSeconds: 3
+          failureThreshold: 3
+        volumeMounts:
+        - name: speech-models
+          mountPath: /opt/speech-models
+          readOnly: true
+      volumes:
+      - name: speech-models
+        persistentVolumeClaim:
+          claimName: speech-runtime-models
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: speech-runtime
+  namespace: switchos
+  labels:
+    app.kubernetes.io/name: speech-runtime
+    app.kubernetes.io/component: python-service
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  selector:
+    app.kubernetes.io/name: speech-runtime
+  ports:
+  - name: http
+    port: 8105
+    targetPort: http
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: speech-runtime
+  namespace: switchos
+  labels:
+    app.kubernetes.io/name: speech-runtime
+    app.kubernetes.io/component: python-service
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: speech-runtime
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: speech-runtime
+  namespace: switchos
+  labels:
+    app.kubernetes.io/name: speech-runtime
+    app.kubernetes.io/component: python-service
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: speech-runtime
+  minReplicas: 2
+  maxReplicas: 5
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ride-payment-webhook
+  namespace: switchos
+  labels: &id001
+    app.kubernetes.io/name: ride-payment-webhook
+    app.kubernetes.io/component: python-service
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  replicas: 2
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ride-payment-webhook
+  template:
+    metadata:
+      labels: *id001
+      annotations: {}
+    spec:
+      serviceAccountName: python-services
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+      - maxSkew: 1
+        minDomains: 2
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: DoNotSchedule
+        labelSelector:
+          matchLabels:
+            app.kubernetes.io/name: ride-payment-webhook
+      containers:
+      - name: ride-payment-webhook
+        image: ghcr.io/munisp/deliveryplatform-ride-payment-webhook:REPLACE_WITH_IMMUTABLE_TAG
+        imagePullPolicy: IfNotPresent
+        ports:
+        - name: http
+          containerPort: 8122
+        envFrom:
+        - configMapRef:
+            name: python-services-runtime-config
+        - secretRef:
+            name: python-services-secrets
+        env:
+        - name: PORT
+          value: '8122'
+        resources:
+          requests:
+            cpu: 250m
+            memory: 256Mi
+          limits:
+            cpu: '1'
+            memory: 512Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+        startupProbe:
+          httpGet:
+            path: /health
+            port: http
+          failureThreshold: 36
+          periodSeconds: 5
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: http
+          periodSeconds: 10
+          timeoutSeconds: 3
+          failureThreshold: 3
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 20
+          periodSeconds: 20
+          timeoutSeconds: 3
+          failureThreshold: 3
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ride-payment-webhook
+  namespace: switchos
+  labels:
+    app.kubernetes.io/name: ride-payment-webhook
+    app.kubernetes.io/component: python-service
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  selector:
+    app.kubernetes.io/name: ride-payment-webhook
+  ports:
+  - name: http
+    port: 8122
+    targetPort: http
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: ride-payment-webhook
+  namespace: switchos
+  labels:
+    app.kubernetes.io/name: ride-payment-webhook
+    app.kubernetes.io/component: python-service
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ride-payment-webhook
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: ride-payment-webhook
+  namespace: switchos
+  labels:
+    app.kubernetes.io/name: ride-payment-webhook
+    app.kubernetes.io/component: python-service
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: ride-payment-webhook
+  minReplicas: 2
+  maxReplicas: 5
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: compliance-review
+  namespace: switchos
+  labels: &id001
+    app.kubernetes.io/name: compliance-review
+    app.kubernetes.io/component: python-service
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  replicas: 2
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: compliance-review
+  template:
+    metadata:
+      labels: *id001
+      annotations: {}
+    spec:
+      serviceAccountName: python-services
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+      - maxSkew: 1
+        minDomains: 2
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: DoNotSchedule
+        labelSelector:
+          matchLabels:
+            app.kubernetes.io/name: compliance-review
+      containers:
+      - name: compliance-review
+        image: ghcr.io/munisp/deliveryplatform-compliance-review:REPLACE_WITH_IMMUTABLE_TAG
+        imagePullPolicy: IfNotPresent
+        ports:
+        - name: http
+          containerPort: 8125
+        envFrom:
+        - configMapRef:
+            name: python-services-runtime-config
+        - secretRef:
+            name: python-services-secrets
+        env:
+        - name: PORT
+          value: '8125'
+        resources:
+          requests:
+            cpu: 250m
+            memory: 256Mi
+          limits:
+            cpu: '1'
+            memory: 512Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+        startupProbe:
+          httpGet:
+            path: /health
+            port: http
+          failureThreshold: 36
+          periodSeconds: 5
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: http
+          periodSeconds: 10
+          timeoutSeconds: 3
+          failureThreshold: 3
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 20
+          periodSeconds: 20
+          timeoutSeconds: 3
+          failureThreshold: 3
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: compliance-review
+  namespace: switchos
+  labels:
+    app.kubernetes.io/name: compliance-review
+    app.kubernetes.io/component: python-service
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  selector:
+    app.kubernetes.io/name: compliance-review
+  ports:
+  - name: http
+    port: 8125
+    targetPort: http
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: compliance-review
+  namespace: switchos
+  labels:
+    app.kubernetes.io/name: compliance-review
+    app.kubernetes.io/component: python-service
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: compliance-review
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: compliance-review
+  namespace: switchos
+  labels:
+    app.kubernetes.io/name: compliance-review
+    app.kubernetes.io/component: python-service
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: compliance-review
+  minReplicas: 2
+  maxReplicas: 5
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: python-service-restrict-traffic
+  namespace: switchos
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: python-service
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: switchos
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: central-app
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: switchos
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/component: go-service
+    ports:
+    - protocol: TCP
+      port: 8007
+    - protocol: TCP
+      port: 8105
+    - protocol: TCP
+      port: 8113
+    - protocol: TCP
+      port: 8115
+    - protocol: TCP
+      port: 8116
+    - protocol: TCP
+      port: 8122
+    - protocol: TCP
+      port: 8125
+  egress:
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: switchos
+    ports:
+    - protocol: TCP
+      port: 5432
+    - protocol: TCP
+      port: 8121
+    - protocol: TCP
+      port: 8125
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kube-system
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: dapr-system
+    ports:
+    - protocol: TCP
+      port: 443
+    - protocol: TCP
+      port: 50001
+    - protocol: TCP
+      port: 50005
+  - to:
+    - ipBlock:
+        cidr: 0.0.0.0/0
+    ports:
+    - protocol: TCP
+      port: 443
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ride-payment-webhook-ingress
+  namespace: switchos
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: ride-payment-webhook
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: ingress-nginx
+    ports:
+    - protocol: TCP
+      port: 8122

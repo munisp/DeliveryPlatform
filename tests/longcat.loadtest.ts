@@ -191,7 +191,7 @@ async function runLoadTest(): Promise<void> {
   };
 
   const fs = await import("fs");
-  fs.writeFileSync("/home/ubuntu/DeliveryPlatform_silent_mockware/tests/loadtest-results.json", JSON.stringify(report, null, 2));
+  fs.writeFileSync(new URL("./loadtest-results.json", import.meta.url), JSON.stringify(report, null, 2));
   console.log("\n✓ Results saved to tests/loadtest-results.json");
 }
 

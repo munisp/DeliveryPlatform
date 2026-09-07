@@ -13,7 +13,7 @@ from typing import Any
 sys.path.append('/opt/.manus/.sandbox-runtime')
 from data_api import ApiClient  # type: ignore
 
-OUTPUT_PATH = Path('/home/ubuntu/merged_switchos_project_v2/validation/longcat_merchant_benchmarks.json')
+OUTPUT_PATH = Path(__file__).resolve().parents[1] / "validation" / "longcat_merchant_benchmarks.json"
 TARGETS = [
     {"domain": "doordash.com", "label": "DoorDash"},
     {"domain": "ubereats.com", "label": "Uber Eats"},

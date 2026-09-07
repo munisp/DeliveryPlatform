@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hmac
 import os
 
 from fastapi import FastAPI, Header, HTTPException
@@ -15,7 +16,7 @@ ALLOWED_ORIGINS = [
     for origin in os.getenv("ALLOWED_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173").split(",")
     if origin.strip()
 ]
-INTERNAL_SERVICE_TOKEN = os.getenv("INTERNAL_SERVICE_TOKEN", "switchos-internal-dev-token-change-before-production")
+INTERNAL_SERVICE_TOKEN = os.getenv("INTERNAL_SERVICE_TOKEN", "").strip()
 
 app = FastAPI(
     title="SwitchOS Lakehouse Service",
@@ -37,8 +38,8 @@ service = LakehouseService()
 
 async def require_internal_access(x_internal_service_token: str | None = Header(default=None)) -> None:
     if not INTERNAL_SERVICE_TOKEN:
-        raise HTTPException(status_code=500, detail="internal service token is not configured")
-    if x_internal_service_token != INTERNAL_SERVICE_TOKEN:
+        raise HTTPException(status_code=503, detail="internal authentication is not configured")
+    if not x_internal_service_token or not hmac.compare_digest(x_internal_service_token, INTERNAL_SERVICE_TOKEN):
         raise HTTPException(status_code=401, detail="invalid internal service token")
 
 

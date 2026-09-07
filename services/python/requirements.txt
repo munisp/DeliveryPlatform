@@ -1,0 +1,9 @@
+fastapi==0.115.12
+uvicorn[standard]==0.34.0
+prometheus-client==0.22.1
+psycopg[binary]==3.2.9
+psycopg-pool==3.2.6
+faster-whisper==1.1.1
+ctranslate2==4.6.0
+requests==2.32.3
+python-dateutil==2.9.0.post0

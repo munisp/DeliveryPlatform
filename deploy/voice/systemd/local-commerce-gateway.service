@@ -5,7 +5,7 @@ After=network.target postgresql.service
 [Service]
 Type=simple
 User=ubuntu
-WorkingDirectory=/opt/switchos/services/go/local-commerce-gateway
+WorkingDirectory=/opt/switchos/DeliveryPlatform/services/go/local-commerce-gateway
 EnvironmentFile=/etc/switchos/longcat-voice.env
 ExecStart=/usr/bin/env go run .
 Restart=always
