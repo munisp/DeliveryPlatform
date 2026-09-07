@@ -38,7 +38,7 @@ describe("silent mockware regression guards", () => {
     expect(dbSource).toContain("DatabaseUnavailableError");
   });
 
-  it("keeps multimodal workspaces backed by reachable database queries", async () => {
+  it("fails unverified multimodal workspaces explicitly instead of manufacturing metrics", async () => {
     const dbSource = await source("server/db.ts");
 
     for (const workspace of [
@@ -53,11 +53,7 @@ describe("silent mockware regression guards", () => {
       "tableside_ordering_summary",
       "white_label_apps_summary",
     ]) {
-      expect(dbSource).not.toContain(`VERIFIED_DATA_UNAVAILABLE:${workspace}`);
+      expect(dbSource).toContain(`VERIFIED_DATA_UNAVAILABLE:${workspace}`);
     }
-
-    expect(dbSource).toContain("export async function getMobilityOverviewSummary");
-    expect(dbSource).toContain("export async function getRiderAppSummary");
-    expect(dbSource).toContain("export async function getWhiteLabelAppsSummary");
   });
 });
