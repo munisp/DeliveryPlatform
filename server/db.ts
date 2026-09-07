@@ -2,18 +2,18 @@ import { and, desc, eq, ilike, or, sql } from "drizzle-orm";
 import { createHash } from "node:crypto";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
-import { 
-  InsertUser, 
-  users, 
-  orders, 
-  drivers, 
-  serviceProviders, 
-  supportTickets, 
-  transactions, 
-  serviceVerticals, 
-  systemConfig, 
-  notifications, 
-  auditLogs 
+import {
+  InsertUser,
+  users,
+  orders,
+  drivers,
+  serviceProviders,
+  supportTickets,
+  transactions,
+  serviceVerticals,
+  systemConfig,
+  notifications,
+  auditLogs
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
 import { optimizeDispatch } from './_core/dispatchOptimizer';
@@ -76,6 +76,12 @@ export async function getFinancialAdminSnapshot(): Promise<FinancialAdminSnapsho
 }
 
 // Lazily create the drizzle instance so local tooling can run without a DB.
+export async function getPool(): Promise<Pool> {
+  await getDb();
+  if (!_pool) throw new DatabaseUnavailableError("postgres_pool");
+  return _pool;
+}
+
 export async function getDb() {
   if (!_db && ENV.databaseUrl) {
     try {
@@ -698,13 +704,13 @@ export async function getDrivers(filters?: {
 }) {
   const db = await getDb();
   if (!db) return [];
-  
+
   let query = db.select().from(drivers).$dynamic();
-  
+
   if (filters?.status) {
     query = query.where(eq(drivers.status, filters.status as any));
   }
-  
+
   const results = await query.limit(filters?.limit || 50).offset(filters?.offset || 0);
   return results;
 }
@@ -1058,7 +1064,7 @@ export async function getSystemConfig(key: string) {
 export async function getAllSystemConfig(category?: string) {
   const db = await getDb();
   if (!db) return [];
-  
+
   if (category) {
     return await db.select().from(systemConfig).where(eq(systemConfig.category, category));
   }
@@ -1230,16 +1236,16 @@ export async function getAuditLogs(filters?: {
 }) {
   const db = await getDb();
   if (!db) return [];
-  
+
   let query = db.select().from(auditLogs).$dynamic();
-  
+
   if (filters?.userId) {
     query = query.where(eq(auditLogs.userId, filters.userId));
   }
   if (filters?.entity) {
     query = query.where(eq(auditLogs.entity, filters.entity));
   }
-  
+
   const results = await query.limit(filters?.limit || 50).offset(filters?.offset || 0);
   return results;
 }
@@ -1254,10 +1260,10 @@ export async function getOrderStats(filters?: {
 }) {
   const db = await getDb();
   if (!db) throw new DatabaseUnavailableError("order_stats");
-  
+
   // This is a simplified version - in production, you'd use proper aggregation
   const allOrders = await db.select().from(orders);
-  
+
   return {
     total: allOrders.length,
     completed: allOrders.filter(o => o.status === 'delivered').length,
@@ -1272,9 +1278,9 @@ export async function getOrderStats(filters?: {
 export async function getDriverStats() {
   const db = await getDb();
   if (!db) throw new DatabaseUnavailableError("driver_stats");
-  
+
   const allDrivers = await db.select().from(drivers);
-  
+
   return {
     total: allDrivers.length,
     online: allDrivers.filter(d => d.status === 'online').length,
@@ -1286,16 +1292,16 @@ export async function getDriverStats() {
 export async function assignDriverToOrder(orderId: number, driverId: number): Promise<boolean> {
   const db = await getDb();
   if (!db) return false;
-  
+
   try {
     await db.update(orders)
       .set({ driverId, status: 'assigned', updatedAt: new Date() })
       .where(eq(orders.id, orderId));
-    
+
     await db.update(drivers)
       .set({ status: 'busy', updatedAt: new Date() })
       .where(eq(drivers.id, driverId));
-    
+
     return true;
   } catch (error) {
     console.error('[Database] Failed to assign driver to order:', error);
@@ -1319,7 +1325,7 @@ export async function calculateOptimalRoute(
   if (!db) return null;
 
   const query = `
-    WITH 
+    WITH
     start_node AS (
       SELECT id, location <-> ST_SetSRID(ST_MakePoint($1, $2), 4326) as dist
       FROM routing_nodes
@@ -1340,7 +1346,7 @@ export async function calculateOptimalRoute(
         directed := false
       )
     )
-    SELECT 
+    SELECT
       r.seq,
       r.node,
       r.edge,
@@ -1393,7 +1399,7 @@ export async function findNearestRoad(lat: number, lng: number) {
   if (!db) return null;
 
   const query = `
-    SELECT 
+    SELECT
       id,
       name,
       road_type,
@@ -1421,7 +1427,7 @@ export async function estimateDeliveryTime(
   const route = await calculateOptimalRoute(startLat, startLng, endLat, endLng);
   if (!route || route.length === 0) return null;
 
-  const totalDistanceMeters = route.reduce((sum: number, segment: any) => 
+  const totalDistanceMeters = route.reduce((sum: number, segment: any) =>
     sum + (parseFloat(segment.distance_meters) || 0), 0
   );
 
@@ -1448,13 +1454,13 @@ export async function getDeliveryHeatmapData() {
   if (!_pool) return null;
 
   const query = `
-    SELECT 
+    SELECT
       ST_X(delivery_location::geometry) as longitude,
       ST_Y(delivery_location::geometry) as latitude,
       COUNT(*) as delivery_count,
       AVG(EXTRACT(EPOCH FROM (delivered_at - created_at)) / 60) as avg_delivery_time_minutes
     FROM orders
-    WHERE delivery_location IS NOT NULL 
+    WHERE delivery_location IS NOT NULL
       AND delivered_at IS NOT NULL
       AND status = 'delivered'
     GROUP BY ST_SnapToGrid(delivery_location::geometry, 0.01)
@@ -1471,7 +1477,7 @@ export async function getDriverDensityByArea() {
   if (!_pool) return null;
 
   const query = `
-    SELECT 
+    SELECT
       ST_X(location::geometry) as longitude,
       ST_Y(location::geometry) as latitude,
       COUNT(*) as driver_count,
@@ -1493,15 +1499,15 @@ export async function getAvgDeliveryTimeByArea() {
 
   const query = `
     WITH grid_cells AS (
-      SELECT 
+      SELECT
         ST_SnapToGrid(delivery_location::geometry, 0.01) as grid_point,
         EXTRACT(EPOCH FROM (delivered_at - created_at)) / 60 as delivery_time_minutes
       FROM orders
-      WHERE delivery_location IS NOT NULL 
+      WHERE delivery_location IS NOT NULL
         AND delivered_at IS NOT NULL
         AND status = 'delivered'
     )
-    SELECT 
+    SELECT
       ST_X(grid_point) as longitude,
       ST_Y(grid_point) as latitude,
       AVG(delivery_time_minutes) as avg_delivery_time_minutes,
@@ -1524,7 +1530,7 @@ export async function getServiceCoverageAnalysis() {
 
   const query = `
     WITH service_areas AS (
-      SELECT 
+      SELECT
         sp.id,
         sp.name,
         sp.location,
@@ -1533,7 +1539,7 @@ export async function getServiceCoverageAnalysis() {
       WHERE sp.location IS NOT NULL
     ),
     coverage_stats AS (
-      SELECT 
+      SELECT
         sa.id,
         sa.name,
         ST_X(sa.location::geometry) as longitude,
@@ -1559,7 +1565,7 @@ export async function getDeliveryHotspots(limit: number = 10) {
 
   const query = `
     WITH clustered_deliveries AS (
-      SELECT 
+      SELECT
         ST_ClusterKMeans(delivery_location::geometry, $1) OVER() as cluster_id,
         delivery_location,
         id,
@@ -1571,7 +1577,7 @@ export async function getDeliveryHotspots(limit: number = 10) {
         AND status = 'delivered'
     ),
     cluster_stats AS (
-      SELECT 
+      SELECT
         cluster_id,
         ST_Centroid(ST_Collect(delivery_location::geometry)) as center,
         COUNT(*) as order_count,
@@ -1580,7 +1586,7 @@ export async function getDeliveryHotspots(limit: number = 10) {
       FROM clustered_deliveries
       GROUP BY cluster_id
     )
-    SELECT 
+    SELECT
       cluster_id,
       ST_X(center) as longitude,
       ST_Y(center) as latitude,
@@ -1601,7 +1607,7 @@ export async function getGeospatialPerformanceMetrics() {
   if (!_pool) return null;
 
   const query = `
-    SELECT 
+    SELECT
       COUNT(DISTINCT CASE WHEN delivery_location IS NOT NULL THEN id END) as orders_with_location,
       COUNT(*) as total_orders,
       ROUND((COUNT(DISTINCT CASE WHEN delivery_location IS NOT NULL THEN id END)::numeric / COUNT(*)::numeric) * 100, 2) as location_coverage_percent,
@@ -1628,7 +1634,7 @@ export async function getAllDriverZones() {
   if (!_pool) return null;
 
   const query = `
-    SELECT 
+    SELECT
       id,
       name,
       target_driver_count,
@@ -1653,7 +1659,7 @@ export async function findZoneForLocation(latitude: number, longitude: number) {
   if (!_pool) return null;
 
   const query = `
-    SELECT 
+    SELECT
       id,
       name,
       priority_level,
@@ -1690,26 +1696,26 @@ export async function assignDriverToZone(driverId: number, latitude: number, lon
     INSERT INTO driver_zone_assignments (driver_id, zone_id, status)
     SELECT $1, zone_id, 'active'
     FROM driver_zone
-    ON CONFLICT (driver_id, zone_id) 
+    ON CONFLICT (driver_id, zone_id)
     DO UPDATE SET status = 'active', assigned_at = CURRENT_TIMESTAMP
     RETURNING *;
   `;
 
   const result = await _pool.query(query, [driverId, longitude, latitude]);
-  
+
   // Update zone driver count
   if (result.rows.length > 0) {
     await _pool.query(`
-      UPDATE driver_zones 
+      UPDATE driver_zones
       SET current_driver_count = (
-        SELECT COUNT(*) 
-        FROM driver_zone_assignments 
+        SELECT COUNT(*)
+        FROM driver_zone_assignments
         WHERE zone_id = $1 AND status = 'active'
       )
       WHERE id = $1
     `, [result.rows[0].zone_id]);
   }
-  
+
   return result.rows[0] || null;
 }
 
@@ -1718,7 +1724,7 @@ export async function getDriverZoneAssignment(driverId: number) {
   if (!_pool) return null;
 
   const query = `
-    SELECT 
+    SELECT
       dza.id,
       dza.driver_id,
       dza.zone_id,
@@ -1744,7 +1750,7 @@ export async function rebalanceDriverZones() {
 
   const query = `
     WITH zone_stats AS (
-      SELECT 
+      SELECT
         dz.id as zone_id,
         dz.name,
         dz.target_driver_count,
@@ -1762,7 +1768,7 @@ export async function rebalanceDriverZones() {
       WHERE d.status = 'online' AND dza.id IS NULL
       LIMIT 50
     )
-    SELECT 
+    SELECT
       zs.zone_id,
       zs.name as zone_name,
       zs.driver_deficit,
@@ -1786,7 +1792,7 @@ export async function checkDriverGeofence(driverId: number, latitude: number, lo
   if (!_pool) return null;
 
   const query = `
-    SELECT 
+    SELECT
       dza.zone_id,
       dz.name as zone_name,
       ST_Contains(
@@ -1814,7 +1820,7 @@ export async function updateZoneStatistics(zoneId: number) {
 
   const query = `
     UPDATE driver_zones dz
-    SET 
+    SET
       total_orders = (
         SELECT COUNT(*)
         FROM orders o
@@ -1864,7 +1870,7 @@ export async function getAllTrafficConditions() {
   if (!_pool) return null;
 
   const query = `
-    SELECT 
+    SELECT
       tc.*,
       rn.name as road_name,
       rn.road_type,
@@ -1892,7 +1898,7 @@ export async function updateTrafficConditions(
 
   const query = `
     INSERT INTO traffic_conditions (
-      road_id, traffic_level, speed_kmh, delay_minutes, 
+      road_id, traffic_level, speed_kmh, delay_minutes,
       incident_reported, incident_type, updated_at, expires_at
     )
     VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP + INTERVAL '5 minutes')
@@ -1921,7 +1927,7 @@ export async function calculateTrafficAwareRoute(
   if (!_pool) return null;
 
   const query = `
-    WITH 
+    WITH
     start_node AS (
       SELECT id
       FROM routing_nodes
@@ -1935,11 +1941,11 @@ export async function calculateTrafficAwareRoute(
       LIMIT 1
     ),
     traffic_adjusted_costs AS (
-      SELECT 
+      SELECT
         rn.id,
         rn.source,
         rn.target,
-        CASE 
+        CASE
           WHEN tc.traffic_level = 'free_flow' THEN rn.cost
           WHEN tc.traffic_level = 'light' THEN rn.cost * 1.2
           WHEN tc.traffic_level = 'moderate' THEN rn.cost * 1.5
@@ -1950,10 +1956,10 @@ export async function calculateTrafficAwareRoute(
         tc.traffic_level,
         tc.delay_minutes
       FROM road_network rn
-      LEFT JOIN traffic_conditions tc ON rn.id = tc.road_id 
+      LEFT JOIN traffic_conditions tc ON rn.id = tc.road_id
         AND tc.expires_at > CURRENT_TIMESTAMP
     )
-    SELECT 
+    SELECT
       seq,
       node,
       edge,
@@ -1964,7 +1970,7 @@ export async function calculateTrafficAwareRoute(
       rn.name as road_name,
       ST_AsGeoJSON(rn.geom) as road_geojson
     FROM pgr_dijkstra(
-      'SELECT id, source, target, 
+      'SELECT id, source, target,
         COALESCE((SELECT adjusted_cost FROM traffic_adjusted_costs WHERE id = road_network.id), cost) as cost,
         COALESCE((SELECT adjusted_cost FROM traffic_adjusted_costs WHERE id = road_network.id), reverse_cost) as reverse_cost
        FROM road_network',
@@ -1986,7 +1992,7 @@ export async function getTrafficIncidents() {
   if (!_pool) return null;
 
   const query = `
-    SELECT 
+    SELECT
       tc.id,
       tc.road_id,
       tc.incident_type,
@@ -2018,14 +2024,14 @@ export async function calculateETAWithTraffic(
   if (!_pool) return null;
 
   const route = await calculateTrafficAwareRoute(startLat, startLon, endLat, endLon);
-  
+
   if (!route || route.length === 0) {
     return null;
   }
 
   const totalDistance = route[route.length - 1]?.agg_cost || 0;
   const totalDelay = route.reduce((sum, segment) => sum + (segment.delay_minutes || 0), 0);
-  
+
   // Calculate base travel time (assuming average speed of 40 km/h)
   const baseTimeMinutes = (totalDistance / 40) * 60;
   const totalTimeMinutes = baseTimeMinutes + totalDelay;
@@ -2054,7 +2060,7 @@ export async function getTrafficPatterns(roadId?: number) {
 
   const query = roadId
     ? `
-      SELECT 
+      SELECT
         hour_of_day,
         day_of_week,
         AVG(delay_minutes) as avg_delay,
@@ -2067,7 +2073,7 @@ export async function getTrafficPatterns(roadId?: number) {
       ORDER BY day_of_week, hour_of_day
     `
     : `
-      SELECT 
+      SELECT
         hour_of_day,
         day_of_week,
         AVG(delay_minutes) as avg_delay,
@@ -2079,10 +2085,10 @@ export async function getTrafficPatterns(roadId?: number) {
       ORDER BY day_of_week, hour_of_day
     `;
 
-  const result = roadId 
+  const result = roadId
     ? await pool.query(query, [roadId])
     : await pool.query(query);
-  
+
   return result.rows;
 }
 
@@ -2093,31 +2099,31 @@ export async function predictTrafficLevel(hour: number, dayOfWeek: number, roadI
 
   const query = roadId
     ? `
-      SELECT 
+      SELECT
         MODE() WITHIN GROUP (ORDER BY traffic_level) as predicted_level,
         AVG(delay_minutes) as predicted_delay,
         AVG(speed_kmh) as predicted_speed,
         COUNT(*) as confidence_samples
       FROM traffic_history
-      WHERE hour_of_day = $1 
+      WHERE hour_of_day = $1
         AND day_of_week = $2
         AND road_id = $3
     `
     : `
-      SELECT 
+      SELECT
         MODE() WITHIN GROUP (ORDER BY traffic_level) as predicted_level,
         AVG(delay_minutes) as predicted_delay,
         AVG(speed_kmh) as predicted_speed,
         COUNT(*) as confidence_samples
       FROM traffic_history
-      WHERE hour_of_day = $1 
+      WHERE hour_of_day = $1
         AND day_of_week = $2
     `;
 
   const result = roadId
     ? await pool.query(query, [hour, dayOfWeek, roadId])
     : await pool.query(query, [hour, dayOfWeek]);
-  
+
   return result.rows[0];
 }
 
@@ -2142,7 +2148,7 @@ export async function getOptimalDeliveryWindows(startLat: number, startLon: numb
       LIMIT 20
     ),
     hourly_predictions AS (
-      SELECT 
+      SELECT
         hour_val as hour,
         AVG(
           CASE th.traffic_level
@@ -2156,17 +2162,17 @@ export async function getOptimalDeliveryWindows(startLat: number, startLon: numb
         ) as avg_delay_minutes,
         MODE() WITHIN GROUP (ORDER BY th.traffic_level) as typical_level
       FROM generate_series(0, 23) as hour_val
-      LEFT JOIN traffic_history th ON 
-        th.hour_of_day = hour_val 
+      LEFT JOIN traffic_history th ON
+        th.hour_of_day = hour_val
         AND th.road_id IN (SELECT id FROM route_roads)
         AND th.day_of_week = EXTRACT(DOW FROM NOW())::INTEGER
       GROUP BY hour_val
     )
-    SELECT 
+    SELECT
       hour,
       avg_delay_minutes,
       typical_level,
-      CASE 
+      CASE
         WHEN avg_delay_minutes < 3 THEN 'excellent'
         WHEN avg_delay_minutes < 6 THEN 'good'
         WHEN avg_delay_minutes < 10 THEN 'fair'
@@ -2186,7 +2192,7 @@ export async function getTrafficTrends(days: number = 7) {
   const pool = db.$client;
 
   const query = `
-    SELECT 
+    SELECT
       DATE(recorded_at) as date,
       hour_of_day,
       AVG(delay_minutes) as avg_delay,
@@ -2209,13 +2215,13 @@ export async function getPeakHours() {
   const pool = db.$client;
 
   const query = `
-    SELECT 
+    SELECT
       hour_of_day,
       day_of_week,
       AVG(delay_minutes) as avg_delay,
       COUNT(CASE WHEN traffic_level IN ('heavy', 'severe') THEN 1 END) as congestion_incidents,
       COUNT(*) as total_samples,
-      CASE 
+      CASE
         WHEN AVG(delay_minutes) > 8 THEN 'peak'
         WHEN AVG(delay_minutes) > 5 THEN 'busy'
         ELSE 'normal'
@@ -2236,7 +2242,7 @@ export async function getPeakHours() {
 
 export async function getDriverPerformanceScore(driverId: number) {
   if (!_pool) return null;
-  
+
   const result = await _pool.query(
     'SELECT * FROM driver_performance_scores WHERE driver_id = $1',
     [driverId]
@@ -2246,9 +2252,9 @@ export async function getDriverPerformanceScore(driverId: number) {
 
 export async function getLeaderboard(limit: number = 50) {
   if (!_pool) return [];
-  
+
   const result = await _pool.query(`
-    SELECT 
+    SELECT
       dps.*,
       d.name as driver_name,
       d.profile_image,
@@ -2263,9 +2269,9 @@ export async function getLeaderboard(limit: number = 50) {
 
 export async function getLeaderboardByTier(tier: string) {
   if (!_pool) return [];
-  
+
   const result = await _pool.query(`
-    SELECT 
+    SELECT
       dps.*,
       d.name as driver_name,
       d.profile_image,
@@ -2280,11 +2286,11 @@ export async function getLeaderboardByTier(tier: string) {
 
 export async function calculateDriverPerformance(driverId: number) {
   if (!_pool) return null;
-  
+
   // Calculate performance metrics
   const result = await _pool.query(`
     WITH driver_stats AS (
-      SELECT 
+      SELECT
         COUNT(*) as total,
         COUNT(*) FILTER (WHERE status = 'delivered') as completed,
         COUNT(*) FILTER (WHERE status = 'cancelled') as cancelled,
@@ -2294,13 +2300,13 @@ export async function calculateDriverPerformance(driverId: number) {
       WHERE driver_id = $1 AND status IN ('delivered', 'cancelled')
     ),
     review_stats AS (
-      SELECT 
+      SELECT
         AVG(overall_rating) as avg_rating,
         COUNT(*) as review_count
       FROM driver_reviews
       WHERE driver_id = $1
     )
-    SELECT 
+    SELECT
       ds.total as total_deliveries,
       ds.completed as completed_deliveries,
       ds.cancelled as cancelled_deliveries,
@@ -2313,16 +2319,16 @@ export async function calculateDriverPerformance(driverId: number) {
     FROM driver_stats ds
     CROSS JOIN review_stats rs
   `, [driverId]);
-  
+
   const stats = result.rows[0];
   if (!stats) return null;
-  
+
   // Calculate component scores (0-100 scale)
   const deliveryTimeScore = Math.max(0, 100 - (parseFloat(stats.avg_delivery_minutes || '30') - 20) * 2);
   const reviewScore = (parseFloat(stats.avg_rating || '0') / 5) * 100;
   const acceptanceRate = parseFloat(stats.completion_rate || '0');
   const completionRate = parseFloat(stats.on_time_rate || '0');
-  
+
   // Weighted overall score
   const overallScore = (
     deliveryTimeScore * 0.3 +
@@ -2330,13 +2336,13 @@ export async function calculateDriverPerformance(driverId: number) {
     acceptanceRate * 0.2 +
     completionRate * 0.2
   );
-  
+
   // Determine tier
   let tier = 'bronze';
   if (overallScore >= 90) tier = 'platinum';
   else if (overallScore >= 80) tier = 'gold';
   else if (overallScore >= 70) tier = 'silver';
-  
+
   // Update performance score
   await _pool.query(`
     INSERT INTO driver_performance_scores (
@@ -2370,7 +2376,7 @@ export async function calculateDriverPerformance(driverId: number) {
     parseInt(stats.total_deliveries) - parseInt(stats.on_time_deliveries),
     stats.cancelled_deliveries
   ]);
-  
+
   return {
     driverId,
     score: overallScore,
@@ -2385,27 +2391,27 @@ export async function calculateDriverPerformance(driverId: number) {
 
 export async function getPerformanceTrends(driverId: number, days: number = 30) {
   if (!_pool) return [];
-  
+
   const result = await _pool.query(`
-    SELECT 
+    SELECT
       DATE(created_at) as date,
       score,
       tier,
       total_deliveries
     FROM driver_performance_scores
-    WHERE driver_id = $1 
+    WHERE driver_id = $1
       AND created_at >= CURRENT_DATE - INTERVAL '${days} days'
     ORDER BY created_at ASC
   `, [driverId]);
-  
+
   return result.rows;
 }
 
 export async function getTierDistribution() {
   if (!_pool) return [];
-  
+
   const result = await _pool.query(`
-    SELECT 
+    SELECT
       tier,
       COUNT(*) as count,
       AVG(score) as avg_score,
@@ -2413,7 +2419,7 @@ export async function getTierDistribution() {
       MAX(score) as max_score
     FROM driver_performance_scores
     GROUP BY tier
-    ORDER BY 
+    ORDER BY
       CASE tier
         WHEN 'platinum' THEN 1
         WHEN 'gold' THEN 2
@@ -2421,16 +2427,16 @@ export async function getTierDistribution() {
         WHEN 'bronze' THEN 4
       END
   `);
-  
+
   return result.rows;
 }
 
 export async function getPerformanceImprovementSuggestions(driverId: number) {
   const score = await getDriverPerformanceScore(driverId);
   if (!score) return [];
-  
+
   const suggestions = [];
-  
+
   if (parseFloat(score.delivery_time_score) < 70) {
     suggestions.push({
       category: 'Delivery Time',
@@ -2439,7 +2445,7 @@ export async function getPerformanceImprovementSuggestions(driverId: number) {
       potentialImpact: '+5-10 points'
     });
   }
-  
+
   if (parseFloat(score.review_score) < 70) {
     suggestions.push({
       category: 'Customer Reviews',
@@ -2448,7 +2454,7 @@ export async function getPerformanceImprovementSuggestions(driverId: number) {
       potentialImpact: '+5-15 points'
     });
   }
-  
+
   if (parseFloat(score.acceptance_rate) < 80) {
     suggestions.push({
       category: 'Acceptance Rate',
@@ -2457,7 +2463,7 @@ export async function getPerformanceImprovementSuggestions(driverId: number) {
       potentialImpact: '+3-8 points'
     });
   }
-  
+
   if (parseFloat(score.completion_rate) < 90) {
     suggestions.push({
       category: 'Completion Rate',
@@ -2487,7 +2493,7 @@ export async function getPerformanceImprovementSuggestions(driverId: number) {
       });
     }
   }
-  
+
   return suggestions;
 }
 
@@ -2713,12 +2719,12 @@ export async function getDriverDispatchRecommendation(driverId: number) {
 
 export async function getNotificationPreferences(userId: number) {
   if (!_pool) return null;
-  
+
   const result = await _pool.query(
     'SELECT * FROM notification_preferences WHERE user_id = $1',
     [userId]
   );
-  
+
   // If no preferences exist, create default ones
   if (result.rows.length === 0) {
     await _pool.query(
@@ -2731,7 +2737,7 @@ export async function getNotificationPreferences(userId: number) {
     );
     return newResult.rows[0];
   }
-  
+
   return result.rows[0];
 }
 
@@ -2810,28 +2816,28 @@ export async function shouldSendNotification(
   trigger: string
 ): Promise<boolean> {
   if (!_pool) return false;
-  
+
   const prefs = await getNotificationPreferences(userId);
   if (!prefs) return false;
-  
+
   // Check if channel is enabled
   const channelKey = `channel_${channel}`;
   if (!prefs[channelKey]) return false;
-  
+
   // Check if trigger is enabled
   const triggerKey = `trigger_${trigger}`;
   if (prefs[triggerKey] === false) return false;
-  
+
   // Check do-not-disturb
   if (prefs.dnd_enabled && prefs.dnd_start_time && prefs.dnd_end_time) {
     const now = new Date();
     const currentTime = now.toTimeString().slice(0, 5); // HH:MM format
-    
+
     if (currentTime >= prefs.dnd_start_time && currentTime <= prefs.dnd_end_time) {
       return false;
     }
   }
-  
+
   // Check frequency limit (notifications sent today)
   const result = await _pool.query(`
     SELECT COUNT(*) as count
@@ -2839,18 +2845,18 @@ export async function shouldSendNotification(
     WHERE user_id = $1
       AND created_at >= CURRENT_DATE
   `, [userId]);
-  
+
   const todayCount = parseInt(result.rows[0]?.count || '0');
   if (todayCount >= (prefs.frequency_limit || 10)) {
     return false;
   }
-  
+
   return true;
 }
 
 export async function getNotificationHistory(userId: number, limit: number = 50) {
   if (!_pool) return [];
-  
+
   const result = await _pool.query(`
     SELECT *
     FROM notifications
@@ -2858,7 +2864,7 @@ export async function getNotificationHistory(userId: number, limit: number = 50)
     ORDER BY created_at DESC
     LIMIT $2
   `, [userId, limit]);
-  
+
   return result.rows;
 }
 
@@ -2869,7 +2875,7 @@ export async function testNotificationPreview(
 ) {
   const canSend = await shouldSendNotification(userId, channel, trigger);
   const prefs = await getNotificationPreferences(userId);
-  
+
   return {
     canSend,
     reason: !canSend ? getBlockReason(prefs, channel, trigger) : null,
@@ -2882,16 +2888,16 @@ function getBlockReason(prefs: any, channel: string, trigger: string): string {
   if (!prefs[channelKey]) {
     return `${channel.toUpperCase()} notifications are disabled`;
   }
-  
+
   const triggerKey = `trigger_${trigger}`;
   if (prefs[triggerKey] === false) {
     return `Notifications for "${trigger}" are disabled`;
   }
-  
+
   if (prefs.dnd_enabled) {
     return `Do Not Disturb is enabled (${prefs.dnd_start_time} - ${prefs.dnd_end_time})`;
   }
-  
+
   return 'Daily notification limit reached';
 }
 
@@ -2914,7 +2920,7 @@ export async function logNotificationDelivery(data: {
   if (!_pool) throw new Error('Database not initialized');
 
   const result = await _pool.query<any>(
-    `INSERT INTO notification_delivery_logs 
+    `INSERT INTO notification_delivery_logs
      (user_id, notification_type, channel, recipient, message_id, status, error_message, metadata)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
      RETURNING *`,
@@ -2938,9 +2944,9 @@ export async function getNotificationDeliveryLogs(userId: number, limit: number 
   if (!_pool) throw new Error('Database not initialized');
 
   const result = await _pool.query<any>(
-    `SELECT * FROM notification_delivery_logs 
-     WHERE user_id = $1 
-     ORDER BY sent_at DESC 
+    `SELECT * FROM notification_delivery_logs
+     WHERE user_id = $1
+     ORDER BY sent_at DESC
      LIMIT $2`,
     [userId, limit]
   );
@@ -2953,12 +2959,12 @@ export async function getNotificationDeliveryStats(userId: number, days: number 
   if (!_pool) throw new Error('Database not initialized');
 
   const result = await _pool.query<any>(
-    `SELECT 
+    `SELECT
        channel,
        status,
        COUNT(*) as count
      FROM notification_delivery_logs
-     WHERE user_id = $1 
+     WHERE user_id = $1
        AND sent_at >= NOW() - INTERVAL '${days} days'
      GROUP BY channel, status
      ORDER BY channel, status`,
@@ -2977,8 +2983,8 @@ export async function updateNotificationDeliveryStatus(
   if (!_pool) throw new Error('Database not initialized');
 
   const result = await _pool.query<any>(
-    `UPDATE notification_delivery_logs 
-     SET status = $1, 
+    `UPDATE notification_delivery_logs
+     SET status = $1,
          error_message = $2,
          delivered_at = CASE WHEN $1 = 'delivered' THEN NOW() ELSE delivered_at END
      WHERE message_id = $3
@@ -3021,7 +3027,7 @@ export async function calculateDriverIncentive(driverId: number, month: number, 
 
   // Insert incentive record
   const result = await _pool.query<any>(
-    `INSERT INTO driver_incentives 
+    `INSERT INTO driver_incentives
      (driver_id, incentive_type, amount, tier, description, status)
      VALUES ($1, $2, $3, $4, $5, $6)
      RETURNING *`,
@@ -3061,7 +3067,7 @@ export async function approveIncentive(incentiveId: number) {
   if (!_pool) return false;
 
   const result = await _pool.query<any>(
-    `UPDATE driver_incentives 
+    `UPDATE driver_incentives
      SET status = 'approved'
      WHERE id = $1
      RETURNING *`,
@@ -3363,8 +3369,8 @@ export async function getDriverSettlements(driverId: number) {
   if (!_pool) return [];
 
   const result = await _pool.query<any>(
-    `SELECT * FROM payout_settlements 
-     WHERE driver_id = $1 
+    `SELECT * FROM payout_settlements
+     WHERE driver_id = $1
      ORDER BY period_end DESC`,
     [driverId]
   );
@@ -3565,7 +3571,7 @@ export async function getSettlementStats(month?: number, year?: number) {
   if (!_pool) return null;
 
   let query = `
-    SELECT 
+    SELECT
       COUNT(*) as total_settlements,
       COUNT(CASE WHEN status = 'pending' THEN 1 END) as pending_count,
       COUNT(CASE WHEN status = 'approved' THEN 1 END) as approved_count,
@@ -3683,7 +3689,7 @@ async function checkAndUpgradeTier(userId: number, lifetimePoints: number) {
   const progress = nextThreshold > 0 ? lifetimePoints - TIER_THRESHOLDS[newTier as keyof typeof TIER_THRESHOLDS] : 0;
 
   await _pool!.query<any>(
-    `UPDATE loyalty_points 
+    `UPDATE loyalty_points
      SET tier = $1,
          tier_progress = $2,
          next_tier_threshold = $3
@@ -3800,9 +3806,9 @@ export async function getLoyaltyTransactions(userId: number, limit: number = 50)
   if (!_pool) return [];
 
   const result = await _pool.query<any>(
-    `SELECT * FROM loyalty_transactions 
-     WHERE user_id = $1 
-     ORDER BY created_at DESC 
+    `SELECT * FROM loyalty_transactions
+     WHERE user_id = $1
+     ORDER BY created_at DESC
      LIMIT $2`,
     [userId, limit]
   );
@@ -3818,7 +3824,7 @@ export async function getAvailableRewards(userId: number) {
   if (!account) return [];
 
   const result = await _pool.query<any>(
-    `SELECT * FROM loyalty_rewards 
+    `SELECT * FROM loyalty_rewards
      WHERE is_active = true
        AND points_cost <= $1
      ORDER BY points_cost ASC`,
@@ -3833,7 +3839,7 @@ export async function getUserRedemptions(userId: number) {
   if (!_pool) return [];
 
   const result = await _pool.query<any>(
-    `SELECT 
+    `SELECT
        r.*,
        rw.reward_name,
        rw.reward_type,
@@ -3853,7 +3859,7 @@ export async function getLoyaltyStats() {
   if (!_pool) return null;
 
   const result = await _pool.query<any>(`
-    SELECT 
+    SELECT
       COUNT(*) as total_members,
       COUNT(CASE WHEN tier = 'bronze' THEN 1 END) as bronze_count,
       COUNT(CASE WHEN tier = 'silver' THEN 1 END) as silver_count,
@@ -3896,7 +3902,7 @@ export async function getLoyaltyMembers(options?: {
 
   const whereClause = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
   const result = await _pool.query<any>(
-    `SELECT 
+    `SELECT
        lp.*,
        u.name,
        u.email,
@@ -4046,7 +4052,7 @@ export async function getAllLoyaltyRedemptions(options?: {
   const whereClause = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
 
   const result = await _pool.query<any>(
-    `SELECT 
+    `SELECT
        r.*,
        rw.reward_name,
        rw.reward_type,
@@ -4285,7 +4291,7 @@ export async function getReferralById(referralId: number) {
   if (!_pool) return null;
 
   const result = await _pool.query<any>(
-    `SELECT 
+    `SELECT
        r.*,
        u1.name as referrer_name,
        u1.email as referrer_email,
@@ -4306,7 +4312,7 @@ export async function getUserReferrals(userId: number) {
   if (!_pool) return [];
 
   const result = await _pool.query<any>(
-    `SELECT 
+    `SELECT
        r.*,
        u.name as referred_name,
        u.email as referred_email
@@ -4327,7 +4333,7 @@ export async function getReferralStats(userId?: number) {
   if (userId) {
     // Stats for specific user
     const result = await _pool.query<any>(
-      `SELECT 
+      `SELECT
          COUNT(*) as total_referrals,
          COUNT(CASE WHEN status = 'completed' THEN 1 END) as completed_referrals,
          COUNT(CASE WHEN status = 'rewarded' THEN 1 END) as rewarded_referrals,
@@ -4340,7 +4346,7 @@ export async function getReferralStats(userId?: number) {
   } else {
     // Platform-wide stats
     const result = await _pool.query<any>(`
-      SELECT 
+      SELECT
         COUNT(*) as total_referrals,
         COUNT(CASE WHEN status = 'completed' THEN 1 END) as completed_referrals,
         COUNT(CASE WHEN status = 'rewarded' THEN 1 END) as rewarded_referrals,
@@ -4359,7 +4365,7 @@ export async function calculateViralCoefficient() {
   // Viral coefficient = (Number of invitations sent) / (Number of existing users)
   // Simplified: (Completed referrals) / (Total users who made referrals)
   const result = await _pool.query<any>(`
-    SELECT 
+    SELECT
       COUNT(CASE WHEN status IN ('completed', 'rewarded') THEN 1 END)::FLOAT as completed,
       COUNT(DISTINCT referrer_id)::FLOAT as referrers
     FROM customer_referrals
@@ -4386,7 +4392,7 @@ export async function createCampaign(campaignData: {
   if (!_pool) return null;
 
   const result = await _pool.query<any>(
-    `INSERT INTO marketing_campaigns 
+    `INSERT INTO marketing_campaigns
      (campaign_name, campaign_type, email_template, sms_template, target_audience, trigger_condition)
      VALUES ($1, $2, $3, $4, $5, $6)
      RETURNING *`,
@@ -4472,7 +4478,7 @@ export async function updateCampaign(campaignId: number, updates: any) {
   values.push(campaignId);
 
   const result = await _pool.query<any>(
-    `UPDATE marketing_campaigns 
+    `UPDATE marketing_campaigns
      SET ${fields.join(", ")}
      WHERE id = $${paramIndex}
      RETURNING *`,
@@ -4664,7 +4670,7 @@ export async function getCampaignSends(campaignId: number) {
   if (!_pool) return [];
 
   const result = await _pool.query<any>(
-    `SELECT 
+    `SELECT
        cs.*,
        u.name as user_name,
        u.email as user_email
@@ -4685,19 +4691,19 @@ export async function getCampaignStats(campaignId?: number) {
   if (campaignId) {
     // Stats for specific campaign
     const result = await _pool.query<any>(
-      `SELECT 
+      `SELECT
          COUNT(*) as total_sends,
          COUNT(CASE WHEN status = 'sent' THEN 1 END) as successful_sends,
          COUNT(CASE WHEN status = 'failed' THEN 1 END) as failed_sends,
          COUNT(CASE WHEN status = 'opened' THEN 1 END) as opened_count,
          COUNT(CASE WHEN status = 'clicked' THEN 1 END) as clicked_count,
-         CASE 
-           WHEN COUNT(CASE WHEN status = 'sent' THEN 1 END) > 0 
+         CASE
+           WHEN COUNT(CASE WHEN status = 'sent' THEN 1 END) > 0
            THEN ROUND((COUNT(CASE WHEN status = 'opened' THEN 1 END)::DECIMAL / COUNT(CASE WHEN status = 'sent' THEN 1 END)) * 100, 2)
            ELSE 0
          END as open_rate,
-         CASE 
-           WHEN COUNT(CASE WHEN status = 'sent' THEN 1 END) > 0 
+         CASE
+           WHEN COUNT(CASE WHEN status = 'sent' THEN 1 END) > 0
            THEN ROUND((COUNT(CASE WHEN status = 'clicked' THEN 1 END)::DECIMAL / COUNT(CASE WHEN status = 'sent' THEN 1 END)) * 100, 2)
            ELSE 0
          END as click_rate
@@ -4709,7 +4715,7 @@ export async function getCampaignStats(campaignId?: number) {
   } else {
     // Platform-wide stats
     const result = await _pool.query<any>(`
-      SELECT 
+      SELECT
         COUNT(DISTINCT campaign_id) as total_campaigns,
         COUNT(*) as total_sends,
         COUNT(CASE WHEN status = 'sent' THEN 1 END) as successful_sends,
@@ -4727,7 +4733,7 @@ export async function trackCampaignOpen(sendId: number) {
   if (!_pool) return null;
 
   await _pool.query<any>(
-    `UPDATE campaign_sends 
+    `UPDATE campaign_sends
      SET status = 'opened', opened_at = NOW()
      WHERE id = $1 AND status = 'sent'`,
     [sendId]
@@ -4741,7 +4747,7 @@ export async function trackCampaignClick(sendId: number) {
   if (!_pool) return null;
 
   await _pool.query<any>(
-    `UPDATE campaign_sends 
+    `UPDATE campaign_sends
      SET status = 'clicked', clicked_at = NOW()
      WHERE id = $1 AND status IN ('sent', 'opened')`,
     [sendId]
@@ -4766,9 +4772,9 @@ export async function getCurrentLeaderboardPeriod() {
   if (!_pool) return null;
 
   const result = await _pool.query<any>(
-    `SELECT * FROM referral_leaderboard_periods 
-     WHERE is_active = true 
-     ORDER BY period_start DESC 
+    `SELECT * FROM referral_leaderboard_periods
+     WHERE is_active = true
+     ORDER BY period_start DESC
      LIMIT 1`
   );
 
@@ -4796,7 +4802,7 @@ export async function updateLeaderboardEntry(userId: number, periodId?: number) 
 
   // Count user's referrals in this period
   const statsResult = await _pool.query<any>(
-    `SELECT 
+    `SELECT
        COUNT(*) as referral_count,
        COUNT(CASE WHEN status IN ('completed', 'rewarded') THEN 1 END) as successful_referrals,
        COALESCE(SUM(CASE WHEN status = 'rewarded' THEN referrer_bonus_points ELSE 0 END), 0) as points_earned
@@ -4811,11 +4817,11 @@ export async function updateLeaderboardEntry(userId: number, periodId?: number) 
 
   // Upsert leaderboard entry
   const result = await _pool.query<any>(
-    `INSERT INTO referral_leaderboard_entries 
+    `INSERT INTO referral_leaderboard_entries
      (period_id, user_id, referral_count, successful_referrals, points_earned, updated_at)
      VALUES ($1, $2, $3, $4, $5, NOW())
-     ON CONFLICT (period_id, user_id) 
-     DO UPDATE SET 
+     ON CONFLICT (period_id, user_id)
+     DO UPDATE SET
        referral_count = $3,
        successful_referrals = $4,
        points_earned = $5,
@@ -4855,7 +4861,7 @@ export async function calculateLeaderboardRankings(periodId?: number) {
            ELSE 0
          END
      FROM (
-       SELECT id, 
+       SELECT id,
               RANK() OVER (ORDER BY successful_referrals DESC, points_earned DESC) as rank
        FROM referral_leaderboard_entries
        WHERE period_id = $1
@@ -4879,7 +4885,7 @@ export async function getReferralLeaderboard(periodId?: number, limit: number = 
   }
 
   const result = await _pool.query<any>(
-    `SELECT 
+    `SELECT
        le.*,
        u.name as user_name,
        u.email as user_email,
@@ -4909,7 +4915,7 @@ export async function getUserLeaderboardPosition(userId: number, periodId?: numb
   }
 
   const result = await _pool.query<any>(
-    `SELECT 
+    `SELECT
        le.*,
        lp.period_start,
        lp.period_end,
@@ -4929,7 +4935,7 @@ export async function distributeLeaderboardRewards(periodId: number) {
 
   // Get all entries with rewards
   const entriesResult = await _pool.query<any>(
-    `SELECT * FROM referral_leaderboard_entries 
+    `SELECT * FROM referral_leaderboard_entries
      WHERE period_id = $1 AND reward_points > 0`,
     [periodId]
   );
@@ -4952,7 +4958,7 @@ export async function distributeLeaderboardRewards(periodId: number) {
 
   // Mark period as no longer active after rewards are distributed
   await _pool.query<any>(
-    `UPDATE referral_leaderboard_periods 
+    `UPDATE referral_leaderboard_periods
      SET is_active = false,
          updated_at = NOW()
      WHERE id = $1`,
@@ -4974,7 +4980,7 @@ export async function closeLeaderboardPeriod(periodId: number) {
 
   // Mark the closed period as inactive
   await _pool.query<any>(
-    `UPDATE referral_leaderboard_periods 
+    `UPDATE referral_leaderboard_periods
      SET is_active = false,
          updated_at = NOW()
      WHERE id = $1`,
@@ -5022,11 +5028,11 @@ export async function registerPushToken(
   if (!_pool) return null;
 
   const result = await _pool.query<any>(
-    `INSERT INTO push_notification_tokens 
+    `INSERT INTO push_notification_tokens
      (user_id, device_token, device_type, device_id, last_used_at)
      VALUES ($1, $2, $3, $4, NOW())
-     ON CONFLICT (user_id, device_token) 
-     DO UPDATE SET 
+     ON CONFLICT (user_id, device_token)
+     DO UPDATE SET
        is_active = true,
        last_used_at = NOW()
      RETURNING *`,
@@ -5041,8 +5047,8 @@ export async function deactivatePushToken(userId: number, deviceToken: string) {
   if (!_pool) return null;
 
   await _pool.query<any>(
-    `UPDATE push_notification_tokens 
-     SET is_active = false 
+    `UPDATE push_notification_tokens
+     SET is_active = false
      WHERE user_id = $1 AND device_token = $2`,
     [userId, deviceToken]
   );
@@ -5055,7 +5061,7 @@ export async function getUserPushTokens(userId: number) {
   if (!_pool) return [];
 
   const result = await _pool.query<any>(
-    `SELECT * FROM push_notification_tokens 
+    `SELECT * FROM push_notification_tokens
      WHERE user_id = $1 AND is_active = true`,
     [userId]
   );
@@ -5075,7 +5081,7 @@ export async function sendPushToUser(
 
   // Get user's active tokens
   const tokens = await getUserPushTokens(userId);
-  
+
   if (tokens.length === 0) {
     console.log(`[Push] No active tokens for user ${userId}`);
     return null;
@@ -5094,7 +5100,7 @@ export async function sendPushToUser(
 
   // Log notification
   const logResult = await _pool.query<any>(
-    `INSERT INTO push_notification_logs 
+    `INSERT INTO push_notification_logs
      (user_id, notification_type, title, body, data, status, sent_at)
      VALUES ($1, $2, $3, $4, $5, $6, NOW())
      RETURNING *`,
@@ -5120,7 +5126,7 @@ export async function getPushNotificationLogs(userId?: number, limit: number = 5
   if (!_pool) return [];
 
   let query = `
-    SELECT 
+    SELECT
       pnl.*,
       u.name as user_name,
       u.email as user_email
@@ -5146,7 +5152,7 @@ export async function trackPushNotificationClick(logId: number) {
   if (!_pool) return null;
 
   await _pool.query<any>(
-    `UPDATE push_notification_logs 
+    `UPDATE push_notification_logs
      SET status = 'clicked', clicked_at = NOW()
      WHERE id = $1`,
     [logId]
@@ -5262,8 +5268,8 @@ export async function getCampaignVariants(campaignId: number) {
   if (!_pool) return [];
 
   const result = await _pool.query<any>(
-    `SELECT * FROM campaign_variants 
-     WHERE campaign_id = $1 
+    `SELECT * FROM campaign_variants
+     WHERE campaign_id = $1
      ORDER BY created_at ASC`,
     [campaignId]
   );
@@ -5277,7 +5283,7 @@ export async function assignVariantToUser(campaignId: number, userId: number): P
 
   // Check if user already has an assignment
   const existingResult = await _pool.query<any>(
-    `SELECT * FROM variant_assignments 
+    `SELECT * FROM variant_assignments
      WHERE campaign_id = $1 AND user_id = $2`,
     [campaignId, userId]
   );
@@ -5293,7 +5299,7 @@ export async function assignVariantToUser(campaignId: number, userId: number): P
 
   // Get all variants for this campaign
   const variants = await getCampaignVariants(campaignId);
-  
+
   if (variants.length === 0) {
     throw new Error('No variants found for this campaign');
   }
@@ -5326,8 +5332,8 @@ export async function trackVariantSend(variantId: number) {
   if (!_pool) return null;
 
   await _pool.query<any>(
-    `UPDATE campaign_variants 
-     SET send_count = send_count + 1 
+    `UPDATE campaign_variants
+     SET send_count = send_count + 1
      WHERE id = $1`,
     [variantId]
   );
@@ -5340,8 +5346,8 @@ export async function trackVariantOpen(variantId: number) {
   if (!_pool) return null;
 
   await _pool.query<any>(
-    `UPDATE campaign_variants 
-     SET open_count = open_count + 1 
+    `UPDATE campaign_variants
+     SET open_count = open_count + 1
      WHERE id = $1`,
     [variantId]
   );
@@ -5354,8 +5360,8 @@ export async function trackVariantClick(variantId: number) {
   if (!_pool) return null;
 
   await _pool.query<any>(
-    `UPDATE campaign_variants 
-     SET click_count = click_count + 1 
+    `UPDATE campaign_variants
+     SET click_count = click_count + 1
      WHERE id = $1`,
     [variantId]
   );
@@ -5368,8 +5374,8 @@ export async function trackVariantConversion(variantId: number) {
   if (!_pool) return null;
 
   await _pool.query<any>(
-    `UPDATE campaign_variants 
-     SET conversion_count = conversion_count + 1 
+    `UPDATE campaign_variants
+     SET conversion_count = conversion_count + 1
      WHERE id = $1`,
     [variantId]
   );
@@ -5382,17 +5388,17 @@ export async function getVariantPerformance(campaignId: number) {
   if (!_pool) return [];
 
   const result = await _pool.query<any>(
-    `SELECT 
+    `SELECT
        *,
-       CASE 
+       CASE
          WHEN send_count > 0 THEN ROUND((open_count::DECIMAL / send_count) * 100, 2)
          ELSE 0
        END as open_rate,
-       CASE 
+       CASE
          WHEN send_count > 0 THEN ROUND((click_count::DECIMAL / send_count) * 100, 2)
          ELSE 0
        END as click_rate,
-       CASE 
+       CASE
          WHEN send_count > 0 THEN ROUND((conversion_count::DECIMAL / send_count) * 100, 2)
          ELSE 0
        END as conversion_rate
@@ -5411,7 +5417,7 @@ export async function calculateStatisticalSignificance(
 ): Promise<{ isSignificant: boolean; confidenceLevel: number; winner?: string }> {
   // Simplified chi-square test for statistical significance
   // In production, use a proper statistical library like jStat
-  
+
   const n1 = variant1.send_count;
   const n2 = variant2.send_count;
   const p1 = variant1.conversion_count / n1;
@@ -5427,18 +5433,18 @@ export async function calculateStatisticalSignificance(
 
   // Calculate pooled probability
   const pooledP = (variant1.conversion_count + variant2.conversion_count) / (n1 + n2);
-  
+
   // Calculate standard error
   const se = Math.sqrt(pooledP * (1 - pooledP) * (1 / n1 + 1 / n2));
-  
+
   // Calculate z-score
   const zScore = Math.abs(p1 - p2) / se;
-  
+
   // Determine confidence level (simplified)
   let confidenceLevel = 0;
   if (zScore >= 1.96) confidenceLevel = 95; // 95% confidence
   if (zScore >= 2.58) confidenceLevel = 99; // 99% confidence
-  
+
   const isSignificant = zScore >= 1.96; // 95% confidence threshold
   const winner = p1 > p2 ? variant1.variant_name : variant2.variant_name;
 
@@ -5454,13 +5460,13 @@ export async function selectWinningVariant(campaignId: number) {
   if (!_pool) return null;
 
   const variants = await getVariantPerformance(campaignId);
-  
+
   if (variants.length < 2) {
     throw new Error('Need at least 2 variants to determine a winner');
   }
 
   // Sort by conversion rate
-  const sortedVariants = variants.sort((a: any, b: any) => 
+  const sortedVariants = variants.sort((a: any, b: any) =>
     parseFloat(b.conversion_rate) - parseFloat(a.conversion_rate)
   );
 
@@ -5480,7 +5486,7 @@ export async function selectWinningVariant(campaignId: number) {
 
   // Mark winner
   await _pool.query<any>(
-    `UPDATE campaign_variants 
+    `UPDATE campaign_variants
      SET is_winner = true, updated_at = NOW()
      WHERE id = $1`,
     [topVariant.id]
@@ -5488,7 +5494,7 @@ export async function selectWinningVariant(campaignId: number) {
 
   // Update campaign to use winning variant
   await _pool.query<any>(
-    `UPDATE marketing_campaigns 
+    `UPDATE marketing_campaigns
      SET email_template = $1, sms_template = $2, updated_at = NOW()
      WHERE id = $3`,
     [topVariant.email_template, topVariant.sms_template, campaignId]
@@ -5559,7 +5565,7 @@ export async function getGrowthAnalytics(dateRange?: { start: Date; end: Date })
 
   // Leaderboard stats
   const leaderboardStats = await _pool.query<any>(
-    `SELECT 
+    `SELECT
        COUNT(DISTINCT user_id) as total_participants,
        SUM(successful_referrals) as total_referrals,
        SUM(points_earned) as total_points_earned,
@@ -5571,17 +5577,17 @@ export async function getGrowthAnalytics(dateRange?: { start: Date; end: Date })
 
   // Campaign performance
   const campaignStats = await _pool.query<any>(
-    `SELECT 
+    `SELECT
        COUNT(*) as total_campaigns,
        COUNT(CASE WHEN status = 'active' THEN 1 END) as active_campaigns,
        SUM(send_count) as total_sends,
        SUM(open_count) as total_opens,
        SUM(click_count) as total_clicks,
-       CASE 
+       CASE
          WHEN SUM(send_count) > 0 THEN ROUND((SUM(open_count)::DECIMAL / SUM(send_count)) * 100, 2)
          ELSE 0
        END as avg_open_rate,
-       CASE 
+       CASE
          WHEN SUM(send_count) > 0 THEN ROUND((SUM(click_count)::DECIMAL / SUM(send_count)) * 100, 2)
          ELSE 0
        END as avg_click_rate
@@ -5592,13 +5598,13 @@ export async function getGrowthAnalytics(dateRange?: { start: Date; end: Date })
 
   // Push notification stats
   const pushStats = await _pool.query<any>(
-    `SELECT 
+    `SELECT
        COUNT(*) as total_notifications,
        COUNT(CASE WHEN status = 'sent' THEN 1 END) as sent_count,
        COUNT(CASE WHEN status = 'delivered' THEN 1 END) as delivered_count,
        COUNT(CASE WHEN status = 'clicked' THEN 1 END) as clicked_count,
        COUNT(CASE WHEN status = 'failed' THEN 1 END) as failed_count,
-       CASE 
+       CASE
          WHEN COUNT(*) > 0 THEN ROUND((COUNT(CASE WHEN status = 'clicked' THEN 1 END)::DECIMAL / COUNT(*)) * 100, 2)
          ELSE 0
        END as click_through_rate
@@ -5609,12 +5615,12 @@ export async function getGrowthAnalytics(dateRange?: { start: Date; end: Date })
 
   // Referral conversion funnel
   const referralFunnel = await _pool.query<any>(
-    `SELECT 
+    `SELECT
        COUNT(*) as total_referrals,
        COUNT(CASE WHEN status = 'pending' THEN 1 END) as pending,
        COUNT(CASE WHEN status = 'completed' THEN 1 END) as completed,
        COUNT(CASE WHEN status = 'rewarded' THEN 1 END) as rewarded,
-       CASE 
+       CASE
          WHEN COUNT(*) > 0 THEN ROUND((COUNT(CASE WHEN status = 'rewarded' THEN 1 END)::DECIMAL / COUNT(*)) * 100, 2)
          ELSE 0
        END as conversion_rate
@@ -5625,7 +5631,7 @@ export async function getGrowthAnalytics(dateRange?: { start: Date; end: Date })
 
   // A/B testing stats
   const abTestStats = await _pool.query<any>(
-    `SELECT 
+    `SELECT
        COUNT(DISTINCT campaign_id) as campaigns_with_tests,
        COUNT(*) as total_variants,
        COUNT(CASE WHEN is_winner = true THEN 1 END) as winners_selected,
@@ -5638,7 +5644,7 @@ export async function getGrowthAnalytics(dateRange?: { start: Date; end: Date })
 
   // Top leaderboard winners
   const topWinners = await _pool.query<any>(
-    `SELECT 
+    `SELECT
        u.name,
        u.email,
        le.successful_referrals,
@@ -5657,17 +5663,17 @@ export async function getGrowthAnalytics(dateRange?: { start: Date; end: Date })
 
   // Top performing campaigns
   const topCampaigns = await _pool.query<any>(
-    `SELECT 
+    `SELECT
        campaign_name,
        campaign_type,
        send_count,
        open_count,
        click_count,
-       CASE 
+       CASE
          WHEN send_count > 0 THEN ROUND((open_count::DECIMAL / send_count) * 100, 2)
          ELSE 0
        END as open_rate,
-       CASE 
+       CASE
          WHEN send_count > 0 THEN ROUND((click_count::DECIMAL / send_count) * 100, 2)
          ELSE 0
        END as click_rate
@@ -5695,7 +5701,7 @@ export async function getGrowthTrends(days: number = 30) {
   if (!_pool) return [];
 
   const result = await _pool.query<any>(
-    `SELECT 
+    `SELECT
        DATE(created_at) as date,
        COUNT(*) as referral_count,
        COUNT(CASE WHEN status = 'rewarded' THEN 1 END) as converted_count
@@ -5716,38 +5722,38 @@ export async function getGrowthTrends(days: number = 30) {
 export async function getJobLogs(limit: number = 100) {
   const pool = await getDb();
   if (!pool) return [];
-  
+
   const result = await (pool as any).query(
-    `SELECT * FROM scheduled_job_logs 
-     ORDER BY created_at DESC 
+    `SELECT * FROM scheduled_job_logs
+     ORDER BY created_at DESC
      LIMIT $1`,
     [limit]
   );
-  
+
   return result.rows;
 }
 
 export async function getJobLogsByName(jobName: string, limit: number = 50) {
   const pool = await getDb();
   if (!pool) return [];
-  
+
   const result = await (pool as any).query(
-    `SELECT * FROM scheduled_job_logs 
-     WHERE job_name = $1 
-     ORDER BY created_at DESC 
+    `SELECT * FROM scheduled_job_logs
+     WHERE job_name = $1
+     ORDER BY created_at DESC
      LIMIT $2`,
     [jobName, limit]
   );
-  
+
   return result.rows;
 }
 
 export async function getJobStats() {
   const pool = await getDb();
   if (!pool) return null;
-  
+
   const result = await (pool as any).query(
-    `SELECT 
+    `SELECT
        job_name,
        COUNT(*) as total_executions,
        SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) as successful,
@@ -5759,7 +5765,7 @@ export async function getJobStats() {
      GROUP BY job_name
      ORDER BY job_name`
   );
-  
+
   return result.rows;
 }
 
@@ -5772,9 +5778,9 @@ export async function logJobExecution(params: {
 }) {
   const pool = await getDb();
   if (!pool) return null;
-  
+
   const result = await (pool as any).query(
-    `INSERT INTO scheduled_job_logs 
+    `INSERT INTO scheduled_job_logs
      (job_name, status, message, execution_time_ms, error_details, completed_at)
      VALUES ($1, $2, $3, $4, $5, $6)
      RETURNING *`,
@@ -5787,20 +5793,20 @@ export async function logJobExecution(params: {
       params.status !== 'running' ? new Date() : null,
     ]
   );
-  
+
   return result.rows[0];
 }
 
 export async function triggerJobManually(jobName: string) {
   // This will be called from the UI to manually trigger jobs
   const { jobs } = await import('./_core/scheduledJobs');
-  
+
   const jobMap: Record<string, any> = {
     closeLeaderboard: jobs.closeLeaderboard,
     pointsExpiration: jobs.pointsExpiration,
     abTestWinner: jobs.abTestWinner,
   };
-  
+
   const job = jobMap[jobName];
   if (!job) {
     throw new Error(`Job ${jobName} not found`);
@@ -5838,14 +5844,14 @@ export async function triggerJobManually(jobName: string) {
 export async function generateWeeklyDigest() {
   const pool = await getDb();
   if (!pool) return null;
-  
+
   const periodEnd = new Date();
   const periodStart = new Date(periodEnd.getTime() - 7 * 24 * 60 * 60 * 1000);
-  
+
   // Get growth metrics
   const [leaderboardStats, campaignStats, referralStats] = await Promise.all([
     (pool as any).query(
-      `SELECT COUNT(*) as total_periods, 
+      `SELECT COUNT(*) as total_periods,
               SUM(total_referrals) as total_referrals
        FROM referral_leaderboard_periods
        WHERE period_start >= $1`,
@@ -5867,7 +5873,7 @@ export async function generateWeeklyDigest() {
       [periodStart]
     ),
   ]);
-  
+
   // Get top performers
   const topReferrers = await (pool as any).query(
     `SELECT c.name, c.email, COUNT(cr.id) as referral_count
@@ -5879,7 +5885,7 @@ export async function generateWeeklyDigest() {
      LIMIT 5`,
     [periodStart]
   );
-  
+
   return {
     periodStart,
     periodEnd,
@@ -5900,9 +5906,9 @@ export async function createEmailDigest(params: {
 }) {
   const pool = await getDb();
   if (!pool) return null;
-  
+
   const result = await (pool as any).query(
-    `INSERT INTO email_digests 
+    `INSERT INTO email_digests
      (digest_type, period_start, period_end, recipient_email, subject, html_content)
      VALUES ($1, $2, $3, $4, $5, $6)
      RETURNING *`,
@@ -5915,35 +5921,35 @@ export async function createEmailDigest(params: {
       params.htmlContent,
     ]
   );
-  
+
   return result.rows[0];
 }
 
 export async function markDigestAsSent(digestId: number) {
   const pool = await getDb();
   if (!pool) return false;
-  
+
   await (pool as any).query(
-    `UPDATE email_digests 
+    `UPDATE email_digests
      SET status = 'sent', sent_at = NOW()
      WHERE id = $1`,
     [digestId]
   );
-  
+
   return true;
 }
 
 export async function getDigestHistory(limit: number = 20) {
   const pool = await getDb();
   if (!pool) return [];
-  
+
   const result = await (pool as any).query(
-    `SELECT * FROM email_digests 
-     ORDER BY created_at DESC 
+    `SELECT * FROM email_digests
+     ORDER BY created_at DESC
      LIMIT $1`,
     [limit]
   );
-  
+
   return result.rows;
 }
 
@@ -5955,10 +5961,10 @@ export async function getDigestHistory(limit: number = 20) {
 export async function checkAndAwardBadges(customerId: number) {
   const pool = await getDb();
   if (!pool) return [];
-  
+
   // Get customer stats
   const customerStats = await (pool as any).query(
-    `SELECT 
+    `SELECT
        c.points_balance,
        c.current_tier,
        COUNT(DISTINCT cr.id) as referral_count
@@ -5968,43 +5974,43 @@ export async function checkAndAwardBadges(customerId: number) {
      GROUP BY c.id, c.points_balance, c.current_tier`,
     [customerId]
   );
-  
+
   if (customerStats.rows.length === 0) return [];
-  
+
   const stats = customerStats.rows[0];
   const awardedBadges = [];
-  
+
   // Get all badges
   const badges = await (pool as any).query(
     `SELECT * FROM achievement_badges`
   );
-  
+
   // Check each badge
   for (const badge of badges.rows) {
     // Check if already earned
     const existing = await (pool as any).query(
-      `SELECT id FROM customer_badges 
+      `SELECT id FROM customer_badges
        WHERE customer_id = $1 AND badge_id = $2`,
       [customerId, badge.id]
     );
-    
+
     if (existing.rows.length > 0) continue;
-    
+
     // Check if eligible
     let eligible = false;
-    
+
     if (badge.referrals_required && stats.referral_count >= badge.referrals_required) {
       eligible = true;
     }
-    
+
     if (badge.points_required && stats.points_balance >= badge.points_required) {
       eligible = true;
     }
-    
+
     if (badge.tier_required && stats.current_tier === badge.tier_required) {
       eligible = true;
     }
-    
+
     // Award badge
     if (eligible) {
       await (pool as any).query(
@@ -6012,18 +6018,18 @@ export async function checkAndAwardBadges(customerId: number) {
          VALUES ($1, $2)`,
         [customerId, badge.id]
       );
-      
+
       awardedBadges.push(badge);
     }
   }
-  
+
   return awardedBadges;
 }
 
 export async function getCustomerBadges(customerId: number) {
   const pool = await getDb();
   if (!pool) return [];
-  
+
   const result = await (pool as any).query(
     `SELECT ab.*, cb.earned_at
      FROM customer_badges cb
@@ -6032,27 +6038,27 @@ export async function getCustomerBadges(customerId: number) {
      ORDER BY cb.earned_at DESC`,
     [customerId]
   );
-  
+
   return result.rows;
 }
 
 export async function getAllBadges() {
   const pool = await getDb();
   if (!pool) return [];
-  
+
   const result = await (pool as any).query(
     `SELECT * FROM achievement_badges ORDER BY badge_type, referrals_required, points_required`
   );
-  
+
   return result.rows;
 }
 
 export async function getBadgeLeaderboard(limit: number = 10) {
   const pool = await getDb();
   if (!pool) return [];
-  
+
   const result = await (pool as any).query(
-    `SELECT 
+    `SELECT
        c.id,
        c.name,
        c.email,
@@ -6064,7 +6070,7 @@ export async function getBadgeLeaderboard(limit: number = 10) {
      LIMIT $1`,
     [limit]
   );
-  
+
   return result.rows;
 }
 
@@ -6228,7 +6234,7 @@ export async function getDispatchControlCenter(limit: number = 12) {
       GROUP BY COALESCE(vertical_id, 0)
     )
     SELECT
-      co.*, 
+      co.*,
       COALESCE(ds.available_count, 0) AS available_count,
       COALESCE(op.open_orders, 0) AS open_orders,
       ROUND((COALESCE(op.open_orders, 0)::numeric / GREATEST(COALESCE(ds.available_count, 0), 1)), 2) AS pressure_ratio

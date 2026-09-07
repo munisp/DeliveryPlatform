@@ -20,6 +20,8 @@ const menuItems = [
   { icon: BarChart3, label: "Analytics", path: "/analytics" },
   { icon: CarFront, label: "Driver Mobility", path: "/driver-mobility" },
   { icon: PackageCheck, label: "Logistics Control Tower", path: "/logistics-control-tower" },
+  { icon: PackageCheck, label: "Logistics Operations", path: "/logistics-operations" },
+  { icon: ShieldCheck, label: "Compliance Review", path: "/compliance-review" },
   { icon: UtensilsCrossed, label: "Tableside Commerce", path: "/tableside-commerce" },
   { icon: AppWindow, label: "White-Label Apps", path: "/white-label-apps" },
   { icon: Store, label: "Merchant Channels", path: "/merchant-channels" },

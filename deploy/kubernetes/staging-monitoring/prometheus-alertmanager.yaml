@@ -1,0 +1,164 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: prometheus-platform
+  namespace: monitoring
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: prometheus-platform-discovery
+rules:
+  - apiGroups: [""]
+    resources:
+      ["nodes", "nodes/metrics", "services", "endpoints", "pods", "namespaces"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["discovery.k8s.io"]
+    resources: ["endpointslices"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: prometheus-platform-discovery
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: prometheus-platform-discovery
+subjects:
+  - kind: ServiceAccount
+    name: prometheus-platform
+    namespace: monitoring
+---
+apiVersion: monitoring.coreos.com/v1
+kind: Prometheus
+metadata:
+  name: platform
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: prometheus
+    app.kubernetes.io/instance: platform
+spec:
+  image: REPLACE_WITH_APPROVED_PROMETHEUS_IMAGE_DIGEST
+  serviceAccountName: prometheus-platform
+  replicas: 2
+  retention: 7d
+  retentionSize: 20GB
+  enableAdminAPI: false
+  externalLabels:
+    environment: staging
+    cluster: REPLACE_WITH_STAGING_CLUSTER_ID
+  serviceMonitorSelector:
+    matchLabels:
+      prometheus: platform
+  serviceMonitorNamespaceSelector:
+    matchLabels:
+      resilience.delivery-platform.io/environment: non-production
+  ruleSelector:
+    matchLabels:
+      prometheus: platform
+  ruleNamespaceSelector:
+    matchLabels:
+      kubernetes.io/metadata.name: monitoring
+  alerting:
+    alertmanagers:
+      - namespace: monitoring
+        name: alertmanager-operated
+        port: web
+  storage:
+    volumeClaimTemplate:
+      spec:
+        storageClassName: REPLACE_WITH_STAGING_MONITORING_STORAGE_CLASS
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 20Gi
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: alertmanager-platform
+  namespace: monitoring
+---
+apiVersion: monitoring.coreos.com/v1
+kind: Alertmanager
+metadata:
+  name: platform
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: alertmanager
+    app.kubernetes.io/instance: platform
+spec:
+  image: REPLACE_WITH_APPROVED_ALERTMANAGER_IMAGE_DIGEST
+  serviceAccountName: alertmanager-platform
+  replicas: 2
+  alertmanagerConfigSelector:
+    matchLabels:
+      alertmanagerConfig: enabled
+  alertmanagerConfigNamespaceSelector:
+    matchLabels:
+      kubernetes.io/metadata.name: monitoring
+  storage:
+    volumeClaimTemplate:
+      spec:
+        storageClassName: REPLACE_WITH_STAGING_MONITORING_STORAGE_CLASS
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 5Gi
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: monitoring-resilience-egress
+  namespace: monitoring
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/name
+        operator: In
+        values: ["prometheus", "alertmanager"]
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: resilience-test
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: resilience-circuit-breaker-alert-receiver
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: resilience-test
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: matrix-escalation-bridge
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: resilience-test
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: wazuh-escalation-bridge
+      ports:
+        - protocol: TCP
+          port: 8443
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: kube-state-metrics
+      ports:
+        - protocol: TCP
+          port: 8080
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53

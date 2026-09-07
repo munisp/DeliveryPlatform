@@ -3,18 +3,27 @@ from __future__ import annotations
 import base64
 import importlib.util
 import io
+import hmac
 import json
 import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
+import uuid
 import wave
 from typing import Any
 
+SERVICE_ROOT = Path(__file__).resolve().parents[1]
+if str(SERVICE_ROOT) not in sys.path:
+    sys.path.insert(0, str(SERVICE_ROOT))
+
 from fastapi import FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect, status
 from fastapi.middleware.cors import CORSMiddleware
+
+from durable_run_store import DurableRunStore
 
 
 ALLOWED_ORIGINS = [
@@ -25,7 +34,7 @@ ALLOWED_ORIGINS = [
     ).split(",")
     if origin.strip()
 ]
-INTERNAL_SERVICE_TOKEN = os.getenv("INTERNAL_SERVICE_TOKEN", "switchos-internal-dev-token-change-before-production")
+INTERNAL_SERVICE_TOKEN = os.getenv("INTERNAL_SERVICE_TOKEN", "").strip()
 BASE_DIR = Path(__file__).resolve().parent
 PIPER_BIN = os.getenv("PIPER_BIN", "")
 PIPER_MODEL = os.getenv("PIPER_MODEL", "")
@@ -36,6 +45,7 @@ STREAM_SESSION_TIMEOUT_SECONDS = int(os.getenv("LONGCAT_SPEECH_STREAM_TIMEOUT_SE
 FASTER_WHISPER_DEVICE = os.getenv("LONGCAT_SPEECH_STT_DEVICE", "cpu").strip() or "cpu"
 FASTER_WHISPER_COMPUTE_TYPE = os.getenv("LONGCAT_SPEECH_STT_COMPUTE_TYPE", "int8").strip() or "int8"
 _faster_whisper_models: dict[str, Any] = {}
+execution_store = DurableRunStore("speech-runtime")
 
 app = FastAPI(
     title="SwitchOS LongCat Speech Runtime",
@@ -52,19 +62,33 @@ app.add_middleware(
 
 
 async def require_internal_access(x_internal_service_token: str | None = Header(default=None)) -> None:
-    if x_internal_service_token != INTERNAL_SERVICE_TOKEN:
+    if not INTERNAL_SERVICE_TOKEN:
+        raise HTTPException(status_code=503, detail="internal authentication is not configured")
+    if not x_internal_service_token or not hmac.compare_digest(x_internal_service_token, INTERNAL_SERVICE_TOKEN):
         raise HTTPException(status_code=401, detail="invalid internal service token")
 
 
 async def require_websocket_internal_access(websocket: WebSocket) -> None:
     provided = websocket.headers.get("X-Internal-Service-Token") or websocket.query_params.get("token")
-    if provided != INTERNAL_SERVICE_TOKEN:
+    if not INTERNAL_SERVICE_TOKEN:
+        await websocket.close(code=status.WS_1011_INTERNAL_ERROR)
+        raise HTTPException(status_code=503, detail="internal authentication is not configured")
+    if not provided or not hmac.compare_digest(provided, INTERNAL_SERVICE_TOKEN):
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         raise HTTPException(status_code=401, detail="invalid internal service token")
 
 
+@app.on_event("startup")
+async def startup() -> None:
+    execution_store.initialize()
+
+
 @app.get("/health")
 async def health() -> dict[str, Any]:
+    try:
+        execution_store.check()
+    except RuntimeError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
     stt_runtime = resolve_stt_runtime()
     tts_runtime = resolve_tts_runtime()
     overall_status = "healthy" if stt_runtime["ready"] or tts_runtime["ready"] else "degraded"
@@ -83,25 +107,60 @@ async def health() -> dict[str, Any]:
 
 
 @app.post("/stt/transcribe")
-async def transcribe(payload: dict[str, Any], x_internal_service_token: str | None = Header(default=None)) -> dict[str, Any]:
+async def transcribe(
+    payload: dict[str, Any],
+    x_internal_service_token: str | None = Header(default=None),
+    x_trace_id: str | None = Header(default=None),
+) -> dict[str, Any]:
     await require_internal_access(x_internal_service_token)
-    return build_transcription_result(payload)
+    result = build_transcription_result(payload)
+    trace_id = (x_trace_id or f"stt-{uuid.uuid4()}").strip()[:128]
+    execution_store.record(
+        "transcribe",
+        trace_id,
+        {"engine": str(payload.get("engine") or ""), "audio_bytes": estimate_audio_bytes(payload), "final": bool(payload.get("final", True)), "has_transcript_hint": bool(str(payload.get("transcript_hint") or "").strip())},
+        {"engine": result.get("engine"), "engine_ready": result.get("engine_ready"), "degraded_mode": result.get("degraded_mode"), "latency_ms": result.get("latency_ms")},
+    )
+    return result
 
 
 @app.post("/stt/stream-chunk")
-async def transcribe_stream_chunk(payload: dict[str, Any], x_internal_service_token: str | None = Header(default=None)) -> dict[str, Any]:
+async def transcribe_stream_chunk(
+    payload: dict[str, Any],
+    x_internal_service_token: str | None = Header(default=None),
+    x_trace_id: str | None = Header(default=None),
+) -> dict[str, Any]:
     await require_internal_access(x_internal_service_token)
     result = build_transcription_result(payload)
     result["session_id"] = str(payload.get("session_id") or "").strip() or None
     result["chunk_id"] = str(payload.get("chunk_id") or "").strip() or None
     result["audio_bytes"] = estimate_audio_bytes(payload)
+    trace_id = (x_trace_id or f"stt-chunk-{uuid.uuid4()}").strip()[:128]
+    execution_store.record(
+        "transcribe_stream_chunk",
+        trace_id,
+        {"audio_bytes": result["audio_bytes"], "final": bool(payload.get("final", True)), "has_session_id": bool(result["session_id"])},
+        {"engine": result.get("engine"), "engine_ready": result.get("engine_ready"), "degraded_mode": result.get("degraded_mode"), "latency_ms": result.get("latency_ms")},
+    )
     return result
 
 
 @app.post("/tts/synthesize")
-async def synthesize(payload: dict[str, Any], x_internal_service_token: str | None = Header(default=None)) -> dict[str, Any]:
+async def synthesize(
+    payload: dict[str, Any],
+    x_internal_service_token: str | None = Header(default=None),
+    x_trace_id: str | None = Header(default=None),
+) -> dict[str, Any]:
     await require_internal_access(x_internal_service_token)
-    return synthesize_payload(payload)
+    result = synthesize_payload(payload)
+    trace_id = (x_trace_id or f"tts-{uuid.uuid4()}").strip()[:128]
+    execution_store.record(
+        "synthesize",
+        trace_id,
+        {"engine": str(payload.get("engine") or ""), "text_length": len(str(payload.get("text") or ""))},
+        {"engine": result.get("engine"), "synthesized": result.get("synthesized"), "degraded_mode": result.get("degraded_mode"), "latency_ms": result.get("latency_ms")},
+    )
+    return result
 
 
 @app.websocket("/ws/stt")

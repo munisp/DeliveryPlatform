@@ -1,20 +1,41 @@
 use axum::{
     extract::State,
-    http::{HeaderMap, StatusCode},
+    http::{HeaderMap, HeaderValue, StatusCode},
+    middleware,
     response::IntoResponse,
     routing::{get, post},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
-use std::{env, net::SocketAddr, sync::Arc};
+use std::{
+    env,
+            net::SocketAddr,
+        time::{SystemTime, UNIX_EPOCH},
+
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+};
 use tokio_postgres::{Client, NoTls};
-use tracing::info;
+use tracing::{info, info_span, Instrument};
+
+const RESILIENCE_RUN_HEADER: &str = "x-resilience-run-id";
+const REQUEST_ID_HEADER: &str = "x-request-id";
+
+
+#[derive(Clone)]
+struct DatabasePool {
+    clients: Arc<Vec<Arc<Client>>>,
+    next: Arc<AtomicUsize>,
+}
 
 #[derive(Clone)]
 struct AppState {
     service_name: String,
-    database_url: String,
+    database: DatabasePool,
     internal_service_token: String,
+    request_sequence: Arc<AtomicUsize>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -30,6 +51,64 @@ struct PricingRequest {
     price_ceiling: Option<f64>,
     merchant_elasticity: Option<f64>,
     incentive_budget_ratio: Option<f64>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct RideSurgeQuoteRequest {
+    trip_id: String,
+    zone_id: String,
+    city_code: String,
+    request_id: String,
+    idempotency_key: String,
+    base_fare_kobo: i64,
+    demand_count: i32,
+    supply_count: i32,
+    market_source_version: i64,
+    h3_cell: String,
+    quote_ttl_seconds: Option<i64>,
+}
+
+#[derive(Debug, Serialize)]
+struct RideSurgeQuoteResponse {
+    quote_id: String,
+    state: String,
+    idempotent: bool,
+    policy_version: String,
+    surge_multiplier_bps: i32,
+    quoted_total_kobo: i64,
+    driver_earnings_kobo: i64,
+    platform_commission_kobo: i64,
+    tax_and_statutory_kobo: i64,
+    provider_fee_kobo: i64,
+    effective_commission_bps: i32,
+    market_demand_count: i32,
+    market_supply_count: i32,
+    rationale: String,
+}
+
+#[derive(Debug, Clone)]
+struct SurgePolicy {
+    id: String,
+    policy_version: String,
+    demand_supply_target_bps: i32,
+    max_surge_bps: i32,
+    max_surge_step_bps: i32,
+    base_commission_bps: i32,
+    surge_commission_relief_bps: i32,
+    minimum_driver_earnings_kobo: i64,
+    tax_bps: i32,
+    provider_fee_bps: i32,
+}
+
+#[derive(Debug, Clone)]
+struct CommissionSplit {
+    surge_multiplier_bps: i32,
+    quoted_total_kobo: i64,
+    driver_earnings_kobo: i64,
+    platform_commission_kobo: i64,
+    tax_and_statutory_kobo: i64,
+    provider_fee_kobo: i64,
+    effective_commission_bps: i32,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -168,11 +247,20 @@ async fn main() {
         .init();
 
     let database_url = env::var("DATABASE_URL")
-        .unwrap_or_else(|_| "postgresql://ubuntu:ubuntu@127.0.0.1:5432/switchos?sslmode=disable".to_string());
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .expect("DATABASE_URL must be explicitly configured");
     let internal_service_token = env::var("INTERNAL_SERVICE_TOKEN")
-        .unwrap_or_else(|_| "switchos-internal-dev-token-change-before-production".to_string());
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| value.len() >= 32)
+        .expect("INTERNAL_SERVICE_TOKEN must be explicitly configured with at least 32 characters");
 
-    ensure_schema(&database_url)
+    let database = create_pool(&database_url)
+        .await
+        .unwrap_or_else(|error| panic!("failed to initialize pricing connection pool: {error}"));
+    ensure_schema(&database)
         .await
         .unwrap_or_else(|error| panic!("failed to initialize pricing schema: {error}"));
 
@@ -180,17 +268,23 @@ async fn main() {
     let bind_host = env::var("BIND_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
     let state = Arc::new(AppState {
         service_name: "pricing-engine".to_string(),
-        database_url,
+        database,
         internal_service_token,
+        request_sequence: Arc::new(AtomicUsize::new(1)),
     });
 
-    let app = Router::new()
-        .route("/health", get(health))
+    let protected_routes = Router::new()
         .route("/price", post(price))
+        .route("/ride/surge-quote", post(quote_ride_surge))
         .route("/quote-bundle", post(quote_bundle))
         .route("/quote-vertical", post(quote_vertical))
         .route("/quote-courier-offer", post(quote_courier_offer))
         .route("/quote-marketplace", post(quote_marketplace))
+        .route_layer(middleware::from_fn_with_state(state.clone(), require_internal_access_middleware));
+    let app = Router::new()
+        .route("/health", get(health))
+        .merge(protected_routes)
+        .layer(middleware::from_fn_with_state(state.clone(), correlation_middleware))
         .with_state(state);
 
     let addr: SocketAddr = format!("{}:{}", bind_host, port)
@@ -202,11 +296,73 @@ async fn main() {
     axum::serve(listener, app).await.unwrap();
 }
 
+async fn correlation_middleware(
+    State(state): State<Arc<AppState>>,
+    request: axum::extract::Request,
+    next: middleware::Next,
+) -> axum::response::Response {
+    let request_id = correlation_header(request.headers(), REQUEST_ID_HEADER).unwrap_or_else(|| generated_request_id(&state));
+    let resilience_run_id = correlation_header(request.headers(), RESILIENCE_RUN_HEADER);
+    let method = request.method().to_string();
+    let path = request.uri().path().to_string();
+    let span = info_span!("http.request", service = %state.service_name, request_id = %request_id, resilience_run_id = %resilience_run_id.as_deref().unwrap_or(""), method = %method, path = %path);
+    let mut response = next.run(request).instrument(span).await;
+    if let Ok(value) = HeaderValue::from_str(&request_id) {
+        response.headers_mut().insert(REQUEST_ID_HEADER, value);
+    }
+    if let Some(run_id) = resilience_run_id {
+        if let Ok(value) = HeaderValue::from_str(&run_id) {
+            response.headers_mut().insert(RESILIENCE_RUN_HEADER, value);
+        }
+        info!(service = %state.service_name, event = "http.request.completed", request_id = %request_id, resilience_run_id = %run_id, method = %method, path = %path, status = response.status().as_u16());
+    }
+    response
+}
+
+fn generated_request_id(state: &AppState) -> String {
+    let micros = SystemTime::now().duration_since(UNIX_EPOCH).map(|duration| duration.as_micros()).unwrap_or(0);
+    let sequence = state.request_sequence.fetch_add(1, Ordering::Relaxed);
+    format!("{}-{}-{}", state.service_name, micros, sequence)
+}
+
+fn correlation_header(headers: &HeaderMap, name: &str) -> Option<String> {
+    headers.get(name).and_then(|value| value.to_str().ok()).map(str::trim).filter(|value| is_correlation_identifier(value)).map(str::to_owned)
+}
+
+fn is_correlation_identifier(value: &str) -> bool {
+    (3..=81).contains(&value.len()) && value.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+}
+
+async fn require_internal_access_middleware(
+    State(state): State<Arc<AppState>>,
+    request: axum::extract::Request,
+    next: middleware::Next,
+) -> axum::response::Response {
+    match require_internal_access(request.headers(), &state) {
+        Ok(()) => next.run(request).await,
+        Err((status, body)) => (status, body).into_response(),
+    }
+}
+
 async fn health(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    Json(HealthResponse {
-        status: "ok".to_string(),
-        service: state.service_name.clone(),
-    })
+    match acquire_client(&state.database).await {
+        Ok(client) if client.query_one("SELECT 1", &[]).await.is_ok() => (
+            StatusCode::OK,
+            Json(HealthResponse {
+                status: "ok".to_string(),
+                service: state.service_name.clone(),
+            }),
+        )
+            .into_response(),
+        _ => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(HealthResponse {
+                status: "degraded".to_string(),
+                service: state.service_name.clone(),
+            }),
+        )
+            .into_response(),
+    }
 }
 
 async fn price(
@@ -219,7 +375,7 @@ async fn price(
         return Err(error_json(StatusCode::BAD_REQUEST, "invalid pricing request"));
     }
 
-    let client = open_db(&state.database_url).await?;
+    let client = acquire_client(&state.database).await?;
     let market_demand = if request.current_demand > 0.0 {
         request.current_demand
     } else {
@@ -324,6 +480,207 @@ async fn price(
     Ok(Json(response))
 }
 
+async fn quote_ride_surge(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(request): Json<RideSurgeQuoteRequest>,
+) -> Result<Json<RideSurgeQuoteResponse>, (StatusCode, Json<serde_json::Value>)> {
+    require_internal_access(&headers, &state)?;
+    validate_ride_quote_request(&request)?;
+    let client = acquire_client(&state.database).await?;
+    let policy = load_active_surge_policy(&client, &request.city_code, &request.zone_id)
+        .await
+        .map_err(jsonify_error)?;
+    let split = calculate_commission_split(
+        &policy,
+        request.base_fare_kobo,
+        request.demand_count,
+        request.supply_count,
+    )?;
+    let ttl_seconds = request.quote_ttl_seconds.unwrap_or(300).clamp(30, 900);
+    let request_payload = serde_json::to_value(&request).map_err(|error| jsonify_error(error.to_string()))?;
+    let request_digest_source = request_payload.to_string();
+    let response_payload = serde_json::json!({
+        "policy_version": policy.policy_version,
+        "surge_multiplier_bps": split.surge_multiplier_bps,
+        "quoted_total_kobo": split.quoted_total_kobo,
+        "driver_earnings_kobo": split.driver_earnings_kobo,
+        "platform_commission_kobo": split.platform_commission_kobo,
+        "tax_and_statutory_kobo": split.tax_and_statutory_kobo,
+        "provider_fee_kobo": split.provider_fee_kobo,
+        "effective_commission_bps": split.effective_commission_bps,
+    });
+
+    // This one statement atomically records a fresh quote, all allocations, and the
+    // durable publish intent. On an idempotency conflict it writes nothing and the
+    // existing quote is returned below.
+    let created = client
+        .query_opt(
+            r#"
+            WITH inserted AS (
+              INSERT INTO pricing.ride_quote
+                (trip_id, zone_id, pricing_policy_id, pricing_policy_version, request_id, idempotency_key,
+                 base_fare_kobo, surge_multiplier_bps, quoted_total_kobo, demand_count, supply_count, expires_at)
+              VALUES
+                ($1::text::uuid, $2::text::uuid, $3::text::uuid, $4, $5::text::uuid, $6, $7, $8, $9, $10, $11, NOW() + ($12::bigint * INTERVAL '1 second'))
+              ON CONFLICT (trip_id, idempotency_key) DO NOTHING
+              RETURNING id
+            ), allocations AS (
+              INSERT INTO pricing.quote_commission_allocation
+                (quote_id, allocation_kind, amount_kobo, rate_bps, policy_version)
+              SELECT inserted.id, allocation_kind::pricing.allocation_kind, amount_kobo, rate_bps, $4
+              FROM inserted
+              CROSS JOIN (VALUES
+                ('driver_earnings', $13::bigint, NULL::integer),
+                ('platform_commission', $14::bigint, $15::integer),
+                ('tax_and_statutory', $16::bigint, $17::integer),
+                ('provider_fee', $18::bigint, $19::integer)
+              ) AS contribution(allocation_kind, amount_kobo, rate_bps)
+              RETURNING quote_id
+            ), event AS (
+              INSERT INTO pricing.outbox_event (aggregate_type, aggregate_id, event_type, idempotency_key, payload)
+              SELECT 'ride_quote', inserted.id, 'pricing.quote.created', 'ride-quote:' || inserted.id::text, $20::jsonb
+              FROM inserted
+              RETURNING id
+            )
+            SELECT id::text FROM inserted
+            "#,
+            &[
+                &request.trip_id, &request.zone_id, &policy.id, &policy.policy_version, &request.request_id,
+                &request.idempotency_key, &request.base_fare_kobo, &split.surge_multiplier_bps,
+                &split.quoted_total_kobo, &request.demand_count, &request.supply_count, &ttl_seconds,
+                &split.driver_earnings_kobo, &split.platform_commission_kobo, &split.effective_commission_bps,
+                &split.tax_and_statutory_kobo, &policy.tax_bps, &split.provider_fee_kobo,
+                &policy.provider_fee_bps, &response_payload,
+            ],
+        )
+        .await
+        .map_err(|error| jsonify_error(error.to_string()))?;
+
+    let (quote_id, idempotent) = if let Some(row) = created {
+        (row.get::<_, String>("id"), false)
+    } else {
+        let row = client
+            .query_one(
+                "SELECT id::text FROM pricing.ride_quote WHERE trip_id=$1::text::uuid AND idempotency_key=$2",
+                &[&request.trip_id, &request.idempotency_key],
+            )
+            .await
+            .map_err(|error| jsonify_error(error.to_string()))?;
+        (row.get::<_, String>("id"), true)
+    };
+
+    // Every accepted quote carries a durable market observation. Snapshot collisions
+    // are benign when the caller retries the same source version.
+    client
+        .execute(
+            "INSERT INTO pricing.market_snapshot (city_code, zone_id, h3_cell, window_started_at, window_ended_at, open_trip_count, eligible_driver_count, source_version, input_digest) VALUES ($1,$2::text::uuid,$3,NOW()-INTERVAL '1 minute',NOW(),$4,$5,$6,digest($7::text,'sha256')) ON CONFLICT (zone_id,h3_cell,source_version) DO NOTHING",
+            &[&request.city_code, &request.zone_id, &request.h3_cell, &request.demand_count, &request.supply_count, &request.market_source_version, &request_digest_source],
+        )
+        .await
+        .map_err(|error| jsonify_error(error.to_string()))?;
+
+    Ok(Json(RideSurgeQuoteResponse {
+        quote_id,
+        state: "quoted".to_string(),
+        idempotent,
+        policy_version: policy.policy_version.clone(),
+        surge_multiplier_bps: split.surge_multiplier_bps,
+        quoted_total_kobo: split.quoted_total_kobo,
+        driver_earnings_kobo: split.driver_earnings_kobo,
+        platform_commission_kobo: split.platform_commission_kobo,
+        tax_and_statutory_kobo: split.tax_and_statutory_kobo,
+        provider_fee_kobo: split.provider_fee_kobo,
+        effective_commission_bps: split.effective_commission_bps,
+        market_demand_count: request.demand_count,
+        market_supply_count: request.supply_count,
+        rationale: format!("policy={} demand={} supply={} surge_bps={}", policy.policy_version, request.demand_count, request.supply_count, split.surge_multiplier_bps),
+    }))
+}
+
+fn validate_ride_quote_request(request: &RideSurgeQuoteRequest) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+    let is_uuid = |value: &str| is_canonical_uuid(value);
+    if !is_uuid(&request.trip_id) || !is_uuid(&request.zone_id) || !is_uuid(&request.request_id) {
+        return Err(error_json(StatusCode::BAD_REQUEST, "trip_id, zone_id, and request_id must be UUIDs"));
+    }
+    if request.city_code.len() < 3 || request.city_code.len() > 12 || !request.city_code.chars().all(|value| value.is_ascii_uppercase()) {
+        return Err(error_json(StatusCode::BAD_REQUEST, "city_code must contain 3-12 uppercase ASCII letters"));
+    }
+    if request.idempotency_key.len() < 16 || request.idempotency_key.len() > 160 || request.base_fare_kobo <= 0 || request.demand_count < 0 || request.supply_count < 0 || request.market_source_version <= 0 || request.h3_cell.len() < 15 || request.h3_cell.len() > 16 || !request.h3_cell.chars().all(|value| value.is_ascii_hexdigit()) {
+        return Err(error_json(StatusCode::BAD_REQUEST, "ride surge quote request is outside validated bounds"));
+    }
+    Ok(())
+}
+
+async fn load_active_surge_policy(client: &Client, city_code: &str, zone_id: &str) -> Result<SurgePolicy, String> {
+    let row = client
+        .query_opt(
+            "SELECT id::text, policy_version, demand_supply_target_bps, max_surge_bps, max_surge_step_bps, base_commission_bps, surge_commission_relief_bps, minimum_driver_earnings_kobo, tax_bps, provider_fee_bps FROM pricing.surge_policy WHERE city_code=$1 AND active=true AND effective_from<=NOW() AND (effective_to IS NULL OR effective_to>NOW()) AND (zone_id=$2::text::uuid OR zone_id IS NULL) ORDER BY (zone_id IS NULL), effective_from DESC LIMIT 1",
+            &[&city_code, &zone_id],
+        )
+        .await
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "no active surge policy exists for this city and zone".to_string())?;
+    Ok(SurgePolicy {
+        id: row.get("id"),
+        policy_version: row.get("policy_version"),
+        demand_supply_target_bps: row.get("demand_supply_target_bps"),
+        max_surge_bps: row.get("max_surge_bps"),
+        max_surge_step_bps: row.get("max_surge_step_bps"),
+        base_commission_bps: row.get("base_commission_bps"),
+        surge_commission_relief_bps: row.get("surge_commission_relief_bps"),
+        minimum_driver_earnings_kobo: row.get("minimum_driver_earnings_kobo"),
+        tax_bps: row.get("tax_bps"),
+        provider_fee_bps: row.get("provider_fee_bps"),
+    })
+}
+
+fn calculate_commission_split(policy: &SurgePolicy, base_fare_kobo: i64, demand_count: i32, supply_count: i32) -> Result<CommissionSplit, (StatusCode, Json<serde_json::Value>)> {
+    if base_fare_kobo <= 0 {
+        return Err(error_json(StatusCode::BAD_REQUEST, "base_fare_kobo must be positive"));
+    }
+    let ratio_bps = ((i64::from(demand_count) * 10_000) / i64::from(supply_count.max(1))) as i32;
+    let excess_bps = ratio_bps.saturating_sub(policy.demand_supply_target_bps);
+    let computed_surge_bps = 10_000 + (excess_bps / 2).clamp(0, policy.max_surge_step_bps);
+    let surge_multiplier_bps = computed_surge_bps.clamp(10_000, policy.max_surge_bps);
+    let quoted_total_kobo = multiply_bps_round_half_up(base_fare_kobo, surge_multiplier_bps);
+    let relief = ((surge_multiplier_bps - 10_000).max(0) * policy.surge_commission_relief_bps) / 10_000;
+    let effective_commission_bps = policy.base_commission_bps.saturating_sub(relief).max(0);
+    let tax_and_statutory_kobo = multiply_bps_round_half_up(quoted_total_kobo, policy.tax_bps);
+    let provider_fee_kobo = multiply_bps_round_half_up(quoted_total_kobo, policy.provider_fee_bps);
+    let mut platform_commission_kobo = multiply_bps_round_half_up(quoted_total_kobo, effective_commission_bps);
+    let minimum_required = policy.minimum_driver_earnings_kobo;
+    let preliminary_driver = quoted_total_kobo - tax_and_statutory_kobo - provider_fee_kobo - platform_commission_kobo;
+    if preliminary_driver < minimum_required {
+        let relief_kobo = (minimum_required - preliminary_driver).min(platform_commission_kobo);
+        platform_commission_kobo -= relief_kobo;
+    }
+    let driver_earnings_kobo = quoted_total_kobo - tax_and_statutory_kobo - provider_fee_kobo - platform_commission_kobo;
+    if driver_earnings_kobo < 0 {
+        return Err(error_json(StatusCode::UNPROCESSABLE_ENTITY, "policy deductions exceed quoted fare"));
+    }
+    Ok(CommissionSplit {
+        surge_multiplier_bps,
+        quoted_total_kobo,
+        driver_earnings_kobo,
+        platform_commission_kobo,
+        tax_and_statutory_kobo,
+        provider_fee_kobo,
+        effective_commission_bps,
+    })
+}
+
+fn multiply_bps_round_half_up(amount_kobo: i64, basis_points: i32) -> i64 {
+    (amount_kobo.saturating_mul(i64::from(basis_points)) + 5_000) / 10_000
+}
+
+fn is_canonical_uuid(value: &str) -> bool {
+    let expected = [8usize, 4, 4, 4, 12];
+    let parts: Vec<&str> = value.split('-').collect();
+    parts.len() == expected.len()
+        && parts.iter().zip(expected.iter()).all(|(part, expected_len)| part.len() == *expected_len && part.bytes().all(|byte| byte.is_ascii_hexdigit()))
+}
+
 async fn quote_bundle(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -334,7 +691,7 @@ async fn quote_bundle(
         return Err(error_json(StatusCode::BAD_REQUEST, "invalid quote request"));
     }
 
-    let client = open_db(&state.database_url).await?;
+    let client = acquire_client(&state.database).await?;
     let small_order_fee = request.small_order_fee.unwrap_or(0.0).max(0.0);
     let priority_fee = if request.priority_delivery.unwrap_or(false) { 2.49 } else { 0.0 };
     let base_total = request.subtotal + request.delivery_fee + request.service_fee + small_order_fee + priority_fee;
@@ -397,7 +754,7 @@ async fn quote_vertical(
         return Err(error_json(StatusCode::BAD_REQUEST, "invalid vertical quote request"));
     }
 
-    let client = open_db(&state.database_url).await?;
+    let client = acquire_client(&state.database).await?;
     let vertical = request.vertical_name.to_lowercase();
     let mut multiplier = 1.0;
     let mut surcharge_components = Vec::new();
@@ -471,7 +828,7 @@ async fn quote_courier_offer(
     Json(request): Json<CourierOfferRequest>,
 ) -> Result<Json<CourierOfferResponse>, (StatusCode, Json<serde_json::Value>)> {
     require_internal_access(&headers, &state)?;
-    let client = open_db(&state.database_url).await?;
+    let client = acquire_client(&state.database).await?;
 
     let demand = if request.current_demand > 0.0 {
         request.current_demand
@@ -524,7 +881,7 @@ async fn quote_marketplace(
     Json(request): Json<MarketplaceQuoteRequest>,
 ) -> Result<Json<MarketplaceQuoteResponse>, (StatusCode, Json<serde_json::Value>)> {
     require_internal_access(&headers, &state)?;
-    let client = open_db(&state.database_url).await?;
+    let client = acquire_client(&state.database).await?;
 
     let demand = if request.current_demand > 0.0 {
         request.current_demand
@@ -574,20 +931,40 @@ async fn quote_marketplace(
     Ok(Json(response))
 }
 
-async fn open_db(database_url: &str) -> Result<Client, (StatusCode, Json<serde_json::Value>)> {
-    let (client, connection) = tokio_postgres::connect(database_url, NoTls)
-        .await
-        .map_err(|error| jsonify_error(error.to_string()))?;
-    tokio::spawn(async move {
-        if let Err(error) = connection.await {
-            tracing::error!("pricing engine postgres connection error: {}", error);
-        }
-    });
-    Ok(client)
+async fn create_pool(database_url: &str) -> Result<DatabasePool, String> {
+    let max_size = env::var("DATABASE_POOL_MAX_SIZE")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(24)
+        .clamp(4, 48);
+    let mut clients = Vec::with_capacity(max_size);
+    for slot in 0..max_size {
+        let (client, connection) = tokio_postgres::connect(database_url, NoTls)
+            .await
+            .map_err(|error| format!("open pricing database connection {slot}: {error}"))?;
+        tokio::spawn(async move {
+            if let Err(error) = connection.await {
+                tracing::error!("pricing engine pooled postgres connection error: {}", error);
+            }
+        });
+        clients.push(Arc::new(client));
+    }
+    Ok(DatabasePool {
+        clients: Arc::new(clients),
+        next: Arc::new(AtomicUsize::new(0)),
+    })
 }
 
-async fn ensure_schema(database_url: &str) -> Result<(), String> {
-    let client = open_db(database_url).await.map_err(|(_, payload)| payload["error"].as_str().unwrap_or("database error").to_string())?;
+async fn acquire_client(pool: &DatabasePool) -> Result<Arc<Client>, (StatusCode, Json<serde_json::Value>)> {
+    if pool.clients.is_empty() {
+        return Err(jsonify_error("database pool unavailable".to_string()));
+    }
+    let index = pool.next.fetch_add(1, Ordering::Relaxed) % pool.clients.len();
+    Ok(Arc::clone(&pool.clients[index]))
+}
+
+async fn ensure_schema(pool: &DatabasePool) -> Result<(), String> {
+    let client = acquire_client(pool).await.map_err(|(_, payload)| payload["error"].as_str().unwrap_or("database error").to_string())?;
     client
         .batch_execute(
             r#"
@@ -723,4 +1100,38 @@ fn error_json(status: StatusCode, message: &str) -> (StatusCode, Json<serde_json
 
 fn round2(value: f64) -> f64 {
     (value * 100.0).round() / 100.0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{calculate_commission_split, multiply_bps_round_half_up, round2, subtle_equal, SurgePolicy};
+
+    #[test]
+    fn secure_comparison_accepts_only_equal_values() {
+        assert!(subtle_equal("32-character-internal-service-token", "32-character-internal-service-token"));
+        assert!(!subtle_equal("32-character-internal-service-token", "32-character-internal-service-t0ken"));
+        assert!(!subtle_equal("short", "longer"));
+    }
+
+    #[test]
+    fn surge_and_commission_are_integer_safe_and_balanced() {
+        let policy = SurgePolicy {
+            id: "00000000-0000-0000-0000-000000000001".to_string(), policy_version: "test-v1".to_string(),
+            demand_supply_target_bps: 10_000, max_surge_bps: 18_000, max_surge_step_bps: 4_000,
+            base_commission_bps: 2_000, surge_commission_relief_bps: 1_000, minimum_driver_earnings_kobo: 6_000,
+            tax_bps: 500, provider_fee_bps: 200,
+        };
+        let split = calculate_commission_split(&policy, 10_000, 30, 10).expect("valid split");
+        assert_eq!(split.surge_multiplier_bps, 14_000);
+        assert_eq!(split.quoted_total_kobo, 14_000);
+        assert_eq!(split.quoted_total_kobo, split.driver_earnings_kobo + split.platform_commission_kobo + split.tax_and_statutory_kobo + split.provider_fee_kobo);
+        assert_eq!(multiply_bps_round_half_up(101, 500), 5);
+    }
+
+    #[test]
+    fn rounding_preserves_two_decimal_pricing_precision() {
+        assert_eq!(round2(19.995), 20.0);
+        assert_eq!(round2(19.994), 19.99);
+        assert_eq!(round2(-2.675), -2.68);
+    }
 }

@@ -1,0 +1,19 @@
+apiVersion: chaos-mesh.org/v1alpha1
+kind: PodChaos
+metadata:
+  name: resilience-matching-worker-pod-kill
+  namespace: resilience-test
+  labels:
+    app.kubernetes.io/part-of: deliveryplatform-resilience-testing
+    resilience.delivery-platform.io/environment: non-production
+    resilience.delivery-platform.io/scenario: matching-worker-pod-kill
+spec:
+  action: pod-kill
+  mode: one
+  duration: 30s
+  selector:
+    namespaces:
+      - resilience-test
+    labelSelectors:
+      app.kubernetes.io/name: ride-matching-worker
+      app.kubernetes.io/part-of: deliveryplatform-resilience-testing

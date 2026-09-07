@@ -1,0 +1,2 @@
+fault command completed: clear proxy=payment-provider upstream=provider-simulator.resilience-test.svc.cluster.local:8080
+circuit breaker is open; active TestRun and known faults were stopped/cleared where present. Preserve artifacts and begin incident handling.

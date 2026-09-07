@@ -1,10 +1,12 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 import pg from "pg";
 
 import { buildConsumerAssistant, buildDispatchIntelligence, buildMerchantConsultant } from "../_core/longcat";
 import { ENV } from "../_core/env";
 
 const { Pool } = pg;
+const merchantBenchmarkSnapshotPath = path.resolve(process.cwd(), "validation", "longcat_merchant_benchmarks.json");
 let pool: pg.Pool | null = null;
 
 export class WorkspaceDataUnavailableError extends Error {
@@ -75,7 +77,7 @@ function unavailable(workspace: string, error: unknown): never {
 
 async function readMerchantBenchmarkSnapshot() {
   try {
-    const raw = await fs.readFile("/home/ubuntu/merged_switchos_project_v2/validation/longcat_merchant_benchmarks.json", "utf8");
+    const raw = await fs.readFile(merchantBenchmarkSnapshotPath, "utf8");
     const parsed = JSON.parse(raw) as {
       generated_at?: string;
       benchmarks?: Array<{

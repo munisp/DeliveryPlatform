@@ -1,0 +1,32 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: resilience-circuit-breaker-alert-receiver-ca
+  namespace: monitoring
+  annotations:
+    resilience.delivery-platform.io/provisioning: "Populate ca.crt from the approved staging receiver trust bundle before applying."
+data:
+  ca.crt: |
+    REPLACE_WITH_STAGING_RECEIVER_CA_PEM
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: matrix-escalation-bridge-ca
+  namespace: monitoring
+  annotations:
+    resilience.delivery-platform.io/provisioning: "Populate ca.crt from the approved staging Matrix bridge trust bundle before applying."
+data:
+  ca.crt: |
+    REPLACE_WITH_STAGING_MATRIX_BRIDGE_CA_PEM
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: wazuh-escalation-bridge-ca
+  namespace: monitoring
+  annotations:
+    resilience.delivery-platform.io/provisioning: "Populate ca.crt from the approved staging Wazuh bridge trust bundle before applying."
+data:
+  ca.crt: |
+    REPLACE_WITH_STAGING_WAZUH_BRIDGE_CA_PEM

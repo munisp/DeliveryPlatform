@@ -1,0 +1,109 @@
+name: Protected Staging Resilience Validation
+
+on:
+  workflow_dispatch:
+    inputs:
+      scenario:
+        description: "Approved fixed resilience scenario"
+        required: true
+        default: baseline
+        type: choice
+        options:
+          - baseline
+          - gateway-latency
+          - gateway-timeout
+          - gateway-reset
+          - gateway-outage
+          - matching-worker-pod-kill
+      change_id:
+        description: "Approved change or experiment identifier"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deliveryplatform-staging-resilience
+  cancel-in-progress: false
+
+jobs:
+  staging-resilience-validation:
+    name: Run approved staging resilience scenario
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    environment: staging-resilience
+    steps:
+      - name: Checkout immutable source revision
+        uses: actions/checkout@v4
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v4
+        with:
+          version: v1.30.0
+
+      - name: Configure protected staging cluster access
+        shell: bash
+        env:
+          KUBE_CONFIG_STAGING_B64: ${{ secrets.KUBE_CONFIG_STAGING_B64 }}
+        run: |
+          set -euo pipefail
+          test -n "$KUBE_CONFIG_STAGING_B64"
+          echo "$KUBE_CONFIG_STAGING_B64" | base64 --decode > "$RUNNER_TEMP/kubeconfig"
+          chmod 600 "$RUNNER_TEMP/kubeconfig"
+          echo "KUBECONFIG=$RUNNER_TEMP/kubeconfig" >> "$GITHUB_ENV"
+
+      - name: Verify resilience cluster boundary
+        shell: bash
+        env:
+          RESILIENCE_TEST_CONTEXT: ${{ vars.STAGING_RESILIENCE_KUBE_CONTEXT }}
+          RESILIENCE_TEST_NAMESPACE: resilience-test
+        run: |
+          set -euo pipefail
+          test -n "$RESILIENCE_TEST_CONTEXT"
+          test "$(kubectl config current-context)" = "$RESILIENCE_TEST_CONTEXT"
+          test "$(kubectl get namespace "$RESILIENCE_TEST_NAMESPACE" -o jsonpath='{.metadata.labels.resilience\.delivery-platform\.io/environment}')" = "non-production"
+          kubectl get crd testruns.k6.io
+          for capability in \
+            "create testruns.k6.io" "get testruns.k6.io" "delete testruns.k6.io" \
+            "create configmaps" "get configmaps" "patch configmaps" \
+            "create jobs" "get jobs" "delete jobs" \
+            "get pods" "list pods" "get events"; do
+            read -r verb resource <<< "$capability"
+            kubectl auth can-i "$verb" "$resource" -n "$RESILIENCE_TEST_NAMESPACE" | grep -qx yes
+          done
+          kubectl auth can-i get secrets -n "$RESILIENCE_TEST_NAMESPACE" && exit 1 || true
+
+      - name: Run approved fixed scenario
+        shell: bash
+        env:
+          SCENARIO: ${{ inputs.scenario }}
+          CHANGE_ID: ${{ inputs.change_id }}
+          CONFIRM_APPROVED_STAGING_CHAOS: ${{ inputs.scenario }}:${{ inputs.change_id }}
+          RESILIENCE_TEST_CONTEXT: ${{ vars.STAGING_RESILIENCE_KUBE_CONTEXT }}
+          RESILIENCE_TEST_NAMESPACE: resilience-test
+          TARGET_ENV: staging
+          MATCHING_BASE_URL: ${{ vars.RESILIENCE_MATCHING_BASE_URL }}
+          PAYMENT_BASE_URL: ${{ vars.RESILIENCE_PAYMENT_BASE_URL }}
+          PROVIDER_SIMULATOR_UPSTREAM: ${{ vars.RESILIENCE_PROVIDER_SIMULATOR_UPSTREAM }}
+          RUN_ID: chaos-${{ github.run_id }}-${{ github.run_attempt }}
+          ARTIFACT_DIR: ${{ github.workspace }}/validation/resilience_runs/chaos-${{ github.run_id }}-${{ github.run_attempt }}
+          MATCH_RATE_PER_SECOND: "80"
+          MATCH_DURATION: "15m"
+          PAYMENT_RATE_PER_SECOND: "10"
+          PAYMENT_DURATION: "15m"
+          PRE_ALLOCATED_VUS: "50"
+          MAX_VUS: "250"
+          MIN_MATCHING_REPLICAS: "3"
+          TESTRUN_TIMEOUT_SECONDS: "1500"
+        run: scripts/testing/resilience/run-staging-chaos-validation.sh
+
+      - name: Upload resilience evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: staging-resilience-${{ inputs.scenario }}-${{ github.run_id }}
+          path: validation/resilience_runs/chaos-${{ github.run_id }}-${{ github.run_attempt }}/
+          if-no-files-found: warn
+          retention-days: 30

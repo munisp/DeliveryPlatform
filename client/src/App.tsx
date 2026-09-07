@@ -12,6 +12,10 @@ import CommerceFulfillment from "@/pages/CommerceFulfillment";
 import VehicleAccessOperations from "@/pages/VehicleAccessOperations";
 import StakeholderVerification from "@/pages/StakeholderVerification";
 import LogisticsControlTower from "@/pages/LogisticsControlTower";
+import LogisticsOperations from "@/pages/LogisticsOperations";
+import ComplianceReview from "@/pages/ComplianceReview";
+import PartnerIntegrations from "@/pages/PartnerIntegrations";
+import FinancialOperations from "@/pages/FinancialOperations";
 import TablesideCommerce from "@/pages/TablesideCommerce";
 import WhiteLabelApps from "@/pages/WhiteLabelApps";
 import MerchantChannels from "@/pages/MerchantChannels";
@@ -119,6 +123,26 @@ const quickLinks = [
     href: "/logistics-control-tower",
     description:
       "Supply resilience, warehouse risk, middleware readiness, and operator shortcuts for live logistics execution.",
+  },
+  {
+    title: "Logistics Operations",
+    href: "/logistics-operations",
+    description: "Tenant-scoped jobs, service zones, state-controlled work execution, tracking evidence, and signed partner events.",
+  },
+  {
+    title: "Compliance Review",
+    href: "/compliance-review",
+    description: "Auditable driver and vehicle evidence verification, mandatory reviewer decisions, expiry reconciliation, and dispatch eligibility.",
+  },
+  {
+    title: "Partner Integrations",
+    href: "/partner-integrations",
+    description: "Tenant-scoped API credentials, explicit scopes, HMAC-signed inbound events, replay protection, and revocation controls.",
+  },
+  {
+    title: "Financial Operations",
+    href: "/financial-operations",
+    description: "Invoice issuance, payment-dispute lifecycle, audit evidence, and durable governed reporting.",
   },
 ];
 
@@ -585,6 +609,10 @@ export default function App() {
         path="/logistics-control-tower"
         component={LogisticsControlTower}
       />
+      <Route path="/logistics-operations" component={LogisticsOperations} />
+      <Route path="/compliance-review" component={ComplianceReview} />
+      <Route path="/partner-integrations" component={PartnerIntegrations} />
+      <Route path="/financial-operations" component={FinancialOperations} />
       <Route path="/tableside-commerce" component={TablesideCommerce} />
       <Route path="/white-label-apps" component={WhiteLabelApps} />
       <Route path="/merchant-channels" component={MerchantChannels} />

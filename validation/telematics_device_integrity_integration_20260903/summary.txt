@@ -1,0 +1,7 @@
+device_registration=201
+consented_location=202
+low_integrity_location=422
+attestation_mismatch_location=403
+withdrawn_location=403
+future_timestamp_location=400
+durable_events=1

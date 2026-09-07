@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: resilience-validation-circuit-breaker
+  namespace: resilience-test
+  labels:
+    app.kubernetes.io/name: resilience-validation-circuit-breaker
+    app.kubernetes.io/part-of: deliveryplatform-resilience-testing
+    resilience.delivery-platform.io/environment: non-production
+data:
+  state: "closed"
+  incident_id: ""
+  opened_at: ""
+  opened_by: ""
+  reason: ""
+  recovery_evidence_id: ""
+  half_opened_at: ""
+  half_opened_by: ""
+  half_open_evidence_id: ""
+  approval_id: ""
+  approval_key_id: ""
+  approval_verified_at: ""
+  approval_payload_sha256: ""
+  closed_at: ""
+  closed_by: ""

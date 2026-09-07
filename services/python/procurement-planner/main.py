@@ -1,19 +1,37 @@
 from __future__ import annotations
 
+import hmac
+import logging
 import math
 import os
+import sys
 import time
+import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
+
+SERVICE_ROOT = Path(__file__).resolve().parents[1]
+if str(SERVICE_ROOT) not in sys.path:
+    sys.path.insert(0, str(SERVICE_ROOT))
 
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
 
-INTERNAL_SERVICE_TOKEN = os.getenv("INTERNAL_SERVICE_TOKEN", "switchos-internal-dev-token-change-before-production")
+from durable_run_store import DurableRunStore
+
+INTERNAL_SERVICE_TOKEN = os.getenv("INTERNAL_SERVICE_TOKEN", "").strip()
+logger = logging.getLogger("switchos.procurement_planner")
 APP_VERSION = "2026-07-09-procurement-closure-wave"
 TRACE_ENABLED = os.getenv("LOCAL_COMMERCE_ENABLE_TRACING", "true").strip().lower() == "true"
 
 app = FastAPI(title="switchos-procurement-planner", version=APP_VERSION)
+execution_store = DurableRunStore("procurement-planner")
+
+
+@app.on_event("startup")
+async def startup() -> None:
+    execution_store.initialize()
 
 
 class SupplierSignal(BaseModel):
@@ -120,6 +138,10 @@ class SupplierHealthResponse(BaseModel):
 
 @app.get("/health")
 def health() -> dict[str, Any]:
+    try:
+        execution_store.check()
+    except RuntimeError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
     return {
         "status": "healthy",
         "service": "switchos-procurement-planner",
@@ -198,7 +220,7 @@ def procurement_plan(
         transfer_items=transfer_items,
     )
     _trace("procurement.plan_complete", metrics.model_dump())
-    return ProcurementPlanResponse(
+    response = ProcurementPlanResponse(
         service="switchos-procurement-planner",
         generated_at=datetime.now(timezone.utc),
         city=request.city,
@@ -209,6 +231,13 @@ def procurement_plan(
         procurement_actions=actions,
         metrics=metrics,
     )
+    execution_store.record(
+        "procurement_plan",
+        trace_id,
+        {"city": request.city, "planning_horizon_hours": request.planning_horizon_hours, "sku_count": len(request.skus), "trigger": request.trigger},
+        {"approval_mode": response.approval_mode, "critical_items": response.critical_items, "action_count": len(response.procurement_actions)},
+    )
+    return response
 
 
 @app.post("/procurement/supplier-health", response_model=SupplierHealthResponse)
@@ -253,7 +282,7 @@ def supplier_health(
         "critical_suppliers": high_risk,
     }
     _trace("procurement.supplier_health_complete", metrics)
-    return SupplierHealthResponse(
+    response = SupplierHealthResponse(
         service="switchos-procurement-planner",
         generated_at=datetime.now(timezone.utc),
         city=request.city,
@@ -262,19 +291,26 @@ def supplier_health(
         summary=f"Evaluated {len(suppliers)} suppliers in {request.city}; {high_risk} require immediate mitigation.",
         metrics=metrics,
     )
+    execution_store.record(
+        "supplier_health",
+        trace_id,
+        {"city": request.city, "supplier_count": len(request.suppliers)},
+        {"resilience_band": response.resilience_band, "supplier_count": len(response.suppliers)},
+    )
+    return response
 
 
 def _require_internal_token(provided: str | None) -> None:
     if not INTERNAL_SERVICE_TOKEN:
-        return
-    if provided != INTERNAL_SERVICE_TOKEN:
+        raise HTTPException(status_code=503, detail="internal authentication is not configured")
+    if not provided or not hmac.compare_digest(provided, INTERNAL_SERVICE_TOKEN):
         raise HTTPException(status_code=401, detail="Unauthorized internal access")
 
 
 def _trace(event: str, payload: dict[str, Any]) -> None:
     if TRACE_ENABLED:
-        print({"event": event, **payload})
+        logger.info("procurement_event=%s payload=%s", event, payload)
 
 
 def _trace_id() -> str:
-    return f"proc-{int(time.time() * 1000)}"
+    return f"proc-{uuid.uuid4()}"

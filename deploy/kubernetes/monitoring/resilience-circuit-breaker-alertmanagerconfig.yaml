@@ -1,0 +1,43 @@
+apiVersion: monitoring.coreos.com/v1alpha1
+kind: AlertmanagerConfig
+metadata:
+  name: resilience-circuit-breaker
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: deliveryplatform-resilience-testing
+    alertmanagerConfig: enabled
+spec:
+  route:
+    receiver: resilience-circuit-breaker-open
+    groupBy: ["alertname", "resilience_run_id", "change_id"]
+    groupWait: 10s
+    groupInterval: 5m
+    repeatInterval: 4h
+    matchers:
+      - name: severity
+        matchType: "="
+        value: critical
+      - name: namespace
+        matchType: "="
+        value: resilience-test
+      - name: circuit_breaker
+        matchType: "="
+        value: open
+  receivers:
+    - name: resilience-circuit-breaker-open
+      webhookConfigs:
+        - url: https://resilience-circuit-breaker-alert-receiver.resilience-test.svc:8443/v1/alertmanager/open
+          sendResolved: false
+          maxAlerts: 10
+          httpConfig:
+            authorization:
+              type: Bearer
+              credentials:
+                name: resilience-circuit-breaker-alert-receiver-auth
+                key: token
+            tlsConfig:
+              serverName: resilience-circuit-breaker-alert-receiver.resilience-test.svc
+              ca:
+                configMap:
+                  name: resilience-circuit-breaker-alert-receiver-ca
+                  key: ca.crt
