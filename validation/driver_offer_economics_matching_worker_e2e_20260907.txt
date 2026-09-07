@@ -1,0 +1,10 @@
+health=ok
+success_match_response={"trip_id":"20000000-0000-4000-8000-000000000041","match_attempt_id":"4197cda7-7e09-4a5a-ad7d-514a870b9a0a","state":"driver_offered","candidate_count":1,"offer_ids":["e451f579-cc9a-4791-997a-0faf25f4210a"],"algorithm_version":"geodesic_eta_fairness_v1"}
+success_trip_state=driver_offered
+success_offer_id=e451f579-cc9a-4791-997a-0faf25f4210a
+success_economics=base_net:driver_floor:pickup_subsidy:platform_contribution=1100:260:0:100
+decline_response={"offer_id":"e451f579-cc9a-4791-997a-0faf25f4210a","rematch_required":true,"state":"declined","trip_id":"20000000-0000-4000-8000-000000000041"}
+floor_failure_match_response={"trip_id":"20000000-0000-4000-8000-000000000042","match_attempt_id":"b763c8f9-a70a-4eb3-921b-a21469c53375","state":"unfulfilled","candidate_count":1,"offer_ids":null,"algorithm_version":"geodesic_eta_fairness_v1"}
+floor_failure_trip_state=unfulfilled
+floor_failure_offer_count=0
+driver_offer_economics_e2e_result=PASS scenario=real_go_matching_worker_with_simulated_destination_data

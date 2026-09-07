@@ -1,0 +1,117 @@
+
+> switchos-operator-dashboard@1.0.0 test /home/ubuntu/DeliveryPlatform-commerce-field
+> vitest run --exclude tests/e2e/**
+
+
+ RUN  v2.1.9 /home/ubuntu/DeliveryPlatform-commerce-field
+
+ ✓ tests/chaos-simultaneous-partition.test.ts (6 tests) 19ms
+ ✓ tests/concurrency-double-spend.test.ts (9 tests) 26ms
+ ✓ tests/longcat.redteam-eval.test.ts (11 tests) 31ms
+ ✓ tests/longcat.security-eval.test.ts (14 tests) 67ms
+ ✓ tests/temporal-compensation.test.ts (8 tests) 20ms
+ ✓ tests/partition-simulation.test.ts (12 tests) 14ms
+ ✓ tests/kafka-broker-failure.test.ts (6 tests) 38ms
+ ✓ mobile/switchos-native/tests/mobile.api.test.ts (15 tests) 38ms
+stdout | tests/platform.scenarios.test.ts > SwitchOS platform scenario workflows > rejects analytics workflows for operators missing analytics scope
+{"event":"policy.decision","allowed":false,"source":"fallback","subject":"21","tenantId":"switchos-core","resourceType":"tenant","resourceId":"switchos-core","permission":"read_analytics","mfa":false}
+
+stdout | tests/platform.scenarios.test.ts > SwitchOS platform scenario workflows > rejects workspace workflows for operators missing platform read scope
+{"event":"policy.decision","allowed":false,"source":"fallback","subject":"22","tenantId":"switchos-core","resourceType":"workspace","resourceId":"switchos-operator-workspaces","permission":"read","mfa":false}
+
+stdout | tests/platform.scenarios.test.ts > SwitchOS platform scenario workflows > serves analytics from the lakehouse-backed path when synchronization succeeds
+{"event":"policy.decision","allowed":true,"source":"fallback","subject":"3","tenantId":"switchos-core","resourceType":"tenant","resourceId":"switchos-core","permission":"read_analytics","mfa":false}
+{"event":"policy.decision","allowed":true,"source":"fallback","subject":"3","tenantId":"switchos-core","resourceType":"tenant","resourceId":"switchos-core","permission":"read_analytics","mfa":false}
+{"event":"policy.decision","allowed":true,"source":"fallback","subject":"3","tenantId":"switchos-core","resourceType":"tenant","resourceId":"switchos-core","permission":"read_analytics","mfa":false}
+{"event":"policy.decision","allowed":true,"source":"fallback","subject":"3","tenantId":"switchos-core","resourceType":"tenant","resourceId":"switchos-core","permission":"read_analytics","mfa":false}
+{"event":"policy.decision","allowed":true,"source":"fallback","subject":"3","tenantId":"switchos-core","resourceType":"tenant","resourceId":"switchos-core","permission":"read_analytics","mfa":false}
+
+stdout | tests/platform.scenarios.test.ts > SwitchOS platform scenario workflows > surfaces lakehouse failure instead of substituting plausible workspace analytics
+{"event":"policy.decision","allowed":true,"source":"fallback","subject":"4","tenantId":"switchos-core","resourceType":"tenant","resourceId":"switchos-core","permission":"read_analytics","mfa":false}
+
+stdout | tests/platform.scenarios.test.ts > SwitchOS platform scenario workflows > surfaces workspace source failure instead of returning a plausible fallback payload
+{"event":"policy.decision","allowed":true,"source":"fallback","subject":"41","tenantId":"switchos-core","resourceType":"workspace","resourceId":"switchos-operator-workspaces","permission":"read","mfa":false}
+
+stdout | tests/platform.scenarios.test.ts > SwitchOS platform scenario workflows > returns the core stakeholder workspaces for authenticated operators
+{"event":"policy.decision","allowed":true,"source":"fallback","subject":"5","tenantId":"switchos-core","resourceType":"workspace","resourceId":"switchos-operator-workspaces","permission":"read","mfa":false}
+{"event":"policy.decision","allowed":true,"source":"fallback","subject":"5","tenantId":"switchos-core","resourceType":"workspace","resourceId":"switchos-operator-workspaces","permission":"read","mfa":false}
+{"event":"policy.decision","allowed":true,"source":"fallback","subject":"5","tenantId":"switchos-core","resourceType":"workspace","resourceId":"switchos-operator-workspaces","permission":"read","mfa":false}
+{"event":"policy.decision","allowed":true,"source":"fallback","subject":"5","tenantId":"switchos-core","resourceType":"workspace","resourceId":"switchos-operator-workspaces","permission":"read","mfa":false}
+{"event":"policy.decision","allowed":true,"source":"fallback","subject":"5","tenantId":"switchos-core","resourceType":"workspace","resourceId":"switchos-operator-workspaces","permission":"read","mfa":false}
+{"event":"policy.decision","allowed":true,"source":"fallback","subject":"5","tenantId":"switchos-core","resourceType":"workspace","resourceId":"switchos-operator-workspaces","permission":"read","mfa":false}
+
+stdout | tests/platform.scenarios.test.ts > SwitchOS platform scenario workflows > returns the local commerce control and planning surfaces for authenticated operators
+{"event":"policy.decision","allowed":true,"source":"fallback","subject":"6","tenantId":"switchos-core","resourceType":"workspace","resourceId":"switchos-operator-workspaces","permission":"read","mfa":false}
+{"event":"policy.decision","allowed":true,"source":"fallback","subject":"6","tenantId":"switchos-core","resourceType":"workspace","resourceId":"switchos-operator-workspaces","permission":"read","mfa":false}
+{"event":"policy.decision","allowed":true,"source":"fallback","subject":"6","tenantId":"switchos-core","resourceType":"workspace","resourceId":"switchos-operator-workspaces","permission":"read","mfa":false}
+
+stdout | tests/platform.scenarios.test.ts > SwitchOS platform scenario workflows > supports call-center and messaging workflows for customer support stakeholders
+{"event":"policy.decision","allowed":true,"source":"fallback","subject":"8","tenantId":"switchos-core","resourceType":"workspace","resourceId":"switchos-operator-workspaces","permission":"read","mfa":false}
+
+ ✓ tests/platform.scenarios.test.ts (12 tests) 41ms
+ ✓ tests/tenant-admin-actions.config.test.ts (12 tests) 37ms
+stdout | tests/policy.integration.test.ts > SwitchOS policy integration > falls back to local scope evaluation when the external policy engine is not configured
+{"event":"policy.decision","allowed":true,"source":"fallback","subject":"1","tenantId":"switchos-core","resourceType":"tenant","resourceId":"switchos-core","permission":"read_platform","mfa":false}
+{"event":"policy.decision","allowed":false,"source":"fallback","subject":"2","tenantId":"switchos-core","resourceType":"tenant","resourceId":"switchos-core","permission":"read_analytics","mfa":false}
+
+stdout | tests/policy.integration.test.ts > SwitchOS policy integration > calls the configured external policy engine and caches the decision in Redis when available
+{"event":"policy.decision","allowed":true,"source":"permify","subject":"kc-user-10","tenantId":"switchos-core","resourceType":"tenant","resourceId":"switchos-core","permission":"read_platform","mfa":false}
+{"event":"policy.decision","allowed":true,"source":"cache","subject":"kc-user-10","tenantId":"switchos-core","resourceType":"tenant","resourceId":"switchos-core","permission":"read_platform","mfa":false}
+
+stdout | tests/policy.integration.test.ts > SwitchOS policy integration > continues without cache when Redis is configured but unavailable
+{"event":"policy.decision","allowed":false,"source":"permify","subject":"11","tenantId":"switchos-core","resourceType":"tenant","resourceId":"switchos-core","permission":"write_platform","mfa":false}
+
+ ✓ tests/integration-probes.test.ts (4 tests) 461ms
+   ✓ SwitchOS live integration probes > reports healthy middleware checks when configured endpoints respond successfully 410ms
+stdout | tests/policy.integration.test.ts > SwitchOS policy integration > requires an OPA allow decision before Permify and passes MFA assurance context
+{"event":"policy.decision","allowed":true,"source":"permify","subject":"21","tenantId":"switchos-core","resourceType":"tenant","resourceId":"switchos-core","permission":"operate","mfa":true}
+
+stdout | tests/policy.integration.test.ts > SwitchOS policy integration > denies cross-tenant tenant access before reaching either policy engine
+{"event":"policy.decision","allowed":false,"source":"tenant-boundary","subject":"22","tenantId":"tenant-a","resourceType":"tenant","resourceId":"tenant-b","permission":"read_platform","mfa":false}
+
+ ✓ tests/policy.integration.test.ts (7 tests) 58ms
+ ✓ tests/funds-integrity.test.ts (3 tests) 454ms
+   ✓ SwitchOS finance integrity > replays monthly settlement generation for the same idempotency key instead of creating a duplicate settlement 416ms
+ ✓ tests/non_mojaloop_idempotency.test.ts (4 tests | 4 skipped) 3ms
+ ✓ tests/account-lifecycle.ui.test.ts (15 tests) 18ms
+ ✓ tests/longcat.integration.test.ts (6 tests) 15ms
+ ✓ tests/operational-events.integration.test.ts (3 tests) 67ms
+ ✓ tests/financial-admin.config.test.ts (8 tests) 14ms
+ ✓ server/growth-features.test.ts (15 tests | 14 skipped) 53ms
+ ✓ tests/edge-security.config.test.ts (5 tests) 8ms
+ ✓ tests/developer-webhook-delivery.test.ts (3 tests) 60ms
+ ✓ tests/env.security.test.ts (8 tests) 20ms
+ ✓ tests/loyalty-campaign-concurrency.test.ts (2 tests | 2 skipped) 3ms
+ ✓ tests/driver-dispatch-fairness.config.test.ts (5 tests) 7ms
+ ✓ tests/gig-worker-vehicle-access.config.test.ts (4 tests) 7ms
+ ✓ tests/external-integration-probes.contract.test.ts (1 test) 89ms
+ ✓ server/loyalty.test.ts (7 tests | 7 skipped) 3ms
+ ✓ tests/security-profile.config.test.ts (3 tests) 7ms
+ ✓ tests/stakeholder-verification.config.test.ts (3 tests) 5ms
+ ✓ tests/account-lifecycle.config.test.ts (4 tests) 7ms
+ ✓ tests/silent-mockware.regression.test.ts (4 tests) 10ms
+ ✓ tests/financial-immutability.config.test.ts (3 tests) 6ms
+ ✓ tests/pwa-shell.test.ts (2 tests) 5ms
+ ✓ tests/financial-topology.config.test.ts (3 tests) 6ms
+ ✓ server/performance.marketplace.test.ts (3 tests | 3 skipped) 46ms
+ ✓ tests/tenant-branding-invites.config.test.ts (2 tests) 7ms
+ ✓ tests/longcat.circuit-breaker.test.ts (7 tests) 2431ms
+   ✓ LongCat Circuit Breaker Simulation > opens circuit after 3 consecutive primary timeouts 605ms
+   ✓ LongCat Circuit Breaker Simulation > routes directly to fallback when circuit is open (skips primary entirely) 605ms
+   ✓ LongCat Circuit Breaker Simulation > falls through to heuristic when both primary and fallback fail 403ms
+   ✓ LongCat Circuit Breaker Simulation > reports routing_tier in all response modes for client observability 603ms
+ ✓ mobile/switchos-native/tests/auth.logout.test.ts (1 test) 8ms
+ ✓ tests/system.integration.test.ts (2 tests) 43ms
+ ✓ mobile/switchos-native/tests/mobile.manifest.test.ts (3 tests) 5ms
+ ✓ tests/promotion-contract-config.test.ts (2 tests) 5ms
+ ✓ tests/production-dependency-gates.test.ts (2 tests) 6ms
+ ✓ tests/admin-workflows.e2e.contract.test.ts (1 test) 4ms
+ ✓ tests/medusa-commerce-signature.test.ts (2 tests) 4ms
+ ✓ tests/pod-storage.test.ts (2 tests) 5ms
+ ✓ tests/staging-mailbox.config.test.ts (2 tests) 5ms
+ ✓ tests/production-gate-mock-harness.test.ts (1 test) 3ms
+
+ Test Files  47 passed (47)
+      Tests  227 passed | 30 skipped (257)
+   Start at  14:13:46
+   Duration  4.63s (transform 1.68s, setup 0ms, collect 5.11s, tests 4.29s, environment 13ms, prepare 4.25s)

@@ -1,0 +1,9 @@
+python_intelligence=healthy synthetic_mode=false bounded_synthetic_object_source=true
+rust_policy=healthy manual_review_only=true
+go_orchestrator_run_once={"claimed":2}
+processing_jobs_manual_review=2
+rust_mrz_validation={"present":true,"format":"td3_passport","valid":true,"failures":[]}
+case_state_after_processor=manual_review
+signed_provider_callbacks_passed=5
+final_human_decision=verified
+cross_language_stakeholder_verification=PASS synthetic_only=true

@@ -12,15 +12,25 @@ type ProbeResult = {
   error?: string | null;
 };
 
-function ok(target: string | null, details: Record<string, unknown> = {}): ProbeResult {
+function ok(
+  target: string | null,
+  details: Record<string, unknown> = {},
+): ProbeResult {
   return { status: "healthy", target, details, error: null };
 }
 
-function configured(target: string | null, details: Record<string, unknown> = {}): ProbeResult {
+function configured(
+  target: string | null,
+  details: Record<string, unknown> = {},
+): ProbeResult {
   return { status: "configured", target, details, error: null };
 }
 
-function degraded(target: string | null, error: unknown, details: Record<string, unknown> = {}): ProbeResult {
+function degraded(
+  target: string | null,
+  error: unknown,
+  details: Record<string, unknown> = {},
+): ProbeResult {
   return {
     status: "degraded",
     target,
@@ -55,7 +65,10 @@ async function fetchJson(url: string, init?: RequestInit) {
   return response.text();
 }
 
-async function probeUrl(url: string | null | undefined, path = "/health"): Promise<ProbeResult> {
+async function probeUrl(
+  url: string | null | undefined,
+  path = "/health",
+): Promise<ProbeResult> {
   if (!url || !url.trim()) return unconfigured(url || null);
   try {
     const base = url.replace(/\/$/, "");
@@ -73,7 +86,8 @@ function normalizeBoolean(value: unknown, fallback = false) {
   if (typeof value === "string") {
     const normalized = value.trim().toLowerCase();
     if (["true", "1", "yes", "y", "ready"].includes(normalized)) return true;
-    if (["false", "0", "no", "n", "not_ready"].includes(normalized)) return false;
+    if (["false", "0", "no", "n", "not_ready"].includes(normalized))
+      return false;
   }
   return fallback;
 }
@@ -85,8 +99,13 @@ function parseBrokerTargets(raw: string) {
     .filter(Boolean);
 }
 
-async function probeTcpSocket(address: string, defaultPort: number): Promise<ProbeResult> {
-  const normalized = address.includes("://") ? new URL(address) : new URL(`http://${address}`);
+async function probeTcpSocket(
+  address: string,
+  defaultPort: number,
+): Promise<ProbeResult> {
+  const normalized = address.includes("://")
+    ? new URL(address)
+    : new URL(`http://${address}`);
   const host = normalized.hostname;
   const port = Number.parseInt(normalized.port || `${defaultPort}`, 10);
 
@@ -126,12 +145,16 @@ export async function probeExternalOidc(): Promise<ProbeResult> {
     return unconfigured(ENV.oidcIssuerUrl || null);
   }
   try {
-    const discoveryUrl = ENV.oidcDiscoveryUrl || `${ENV.oidcIssuerUrl.replace(/\/$/, "")}/.well-known/openid-configuration`;
+    const discoveryUrl =
+      ENV.oidcDiscoveryUrl ||
+      `${ENV.oidcIssuerUrl.replace(/\/$/, "")}/.well-known/openid-configuration`;
     const discovery = await fetchJson(discoveryUrl);
     return ok(discoveryUrl, {
       issuer: (discovery as Record<string, unknown>).issuer || null,
-      authorization_endpoint: (discovery as Record<string, unknown>).authorization_endpoint || null,
-      token_endpoint: (discovery as Record<string, unknown>).token_endpoint || null,
+      authorization_endpoint:
+        (discovery as Record<string, unknown>).authorization_endpoint || null,
+      token_endpoint:
+        (discovery as Record<string, unknown>).token_endpoint || null,
       jwks_uri: (discovery as Record<string, unknown>).jwks_uri || null,
     });
   } catch (error) {
@@ -144,7 +167,9 @@ export async function probeApisix(): Promise<ProbeResult> {
     return unconfigured(null);
   }
 
-  const controlTarget = ENV.apisixControlUrl?.trim() ? `${ENV.apisixControlUrl.replace(/\/$/, "")}/v1/schema` : null;
+  const controlTarget = ENV.apisixControlUrl?.trim()
+    ? `${ENV.apisixControlUrl.replace(/\/$/, "")}/v1/schema`
+    : null;
   if (controlTarget) {
     try {
       const response = await fetchJson(controlTarget);
@@ -179,11 +204,15 @@ export async function probeOpenAppSec(): Promise<ProbeResult> {
     if (healthResult.status !== "degraded") {
       return healthResult;
     }
-    return degraded(ENV.openAppSecUrl, healthResult.error ?? "unknown Open AppSec probe failure", {
-      ...healthResult.details,
-      mode: "http",
-      policy_path: ENV.openAppSecPolicyPath || null,
-    });
+    return degraded(
+      ENV.openAppSecUrl,
+      healthResult.error ?? "unknown Open AppSec probe failure",
+      {
+        ...healthResult.details,
+        mode: "http",
+        policy_path: ENV.openAppSecPolicyPath || null,
+      },
+    );
   }
 
   try {
@@ -198,7 +227,8 @@ export async function probeOpenAppSec(): Promise<ProbeResult> {
 }
 
 export async function probePermify(): Promise<ProbeResult> {
-  if (!ENV.permifyEndpoint?.trim()) return unconfigured(ENV.permifyEndpoint || null);
+  if (!ENV.permifyEndpoint?.trim())
+    return unconfigured(ENV.permifyEndpoint || null);
   return probeUrl(ENV.permifyEndpoint, "/healthz");
 }
 
@@ -219,7 +249,10 @@ export async function probeKafka(): Promise<ProbeResult> {
       },
     };
   } catch (error) {
-    return degraded(target, error, { brokers, topic: ENV.kafkaOperationalEventsTopic || null });
+    return degraded(target, error, {
+      brokers,
+      topic: ENV.kafkaOperationalEventsTopic || null,
+    });
   }
 }
 
@@ -229,7 +262,8 @@ export async function probeDapr(): Promise<ProbeResult> {
 }
 
 export async function probeOpenSearch(): Promise<ProbeResult> {
-  if (!ENV.opensearchUrl?.trim()) return unconfigured(ENV.opensearchUrl || null);
+  if (!ENV.opensearchUrl?.trim())
+    return unconfigured(ENV.opensearchUrl || null);
   try {
     const baseUrl = ENV.opensearchUrl.replace(/\/$/, "");
     const response = await fetchJson(`${baseUrl}/_cluster/health`, {
@@ -273,21 +307,27 @@ export async function probeTemporal(): Promise<ProbeResult> {
 }
 
 export async function probeFluvio(): Promise<ProbeResult> {
-  if (!ENV.fluvioServiceUrl?.trim()) return unconfigured(ENV.fluvioServiceUrl || null);
-  const normalized = ENV.fluvioServiceUrl.startsWith("http://") || ENV.fluvioServiceUrl.startsWith("https://")
-    ? ENV.fluvioServiceUrl
-    : `http://${ENV.fluvioServiceUrl}`;
+  if (!ENV.fluvioServiceUrl?.trim())
+    return unconfigured(ENV.fluvioServiceUrl || null);
+  const normalized =
+    ENV.fluvioServiceUrl.startsWith("http://") ||
+    ENV.fluvioServiceUrl.startsWith("https://")
+      ? ENV.fluvioServiceUrl
+      : `http://${ENV.fluvioServiceUrl}`;
   return probeUrl(normalized, "/health");
 }
 
 export async function probeLongCatVoiceGateway(): Promise<ProbeResult> {
-  if (!ENV.longcatVoiceGatewayUrl?.trim()) return unconfigured(ENV.longcatVoiceGatewayUrl || null);
+  if (!ENV.longcatVoiceGatewayUrl?.trim())
+    return unconfigured(ENV.longcatVoiceGatewayUrl || null);
   try {
     const target = `${ENV.longcatVoiceGatewayUrl.replace(/\/$/, "")}/health`;
-    const payload = await fetchJson(target) as Record<string, unknown>;
+    const payload = (await fetchJson(target)) as Record<string, unknown>;
     const status = `${payload.status ?? "ok"}`.toLowerCase();
     if (status !== "ok" && status !== "healthy") {
-      return degraded(target, new Error(`gateway reported status ${status}`), { response: payload });
+      return degraded(target, new Error(`gateway reported status ${status}`), {
+        response: payload,
+      });
     }
     return ok(target, {
       service: payload.service ?? null,
@@ -302,19 +342,24 @@ export async function probeLongCatVoiceGateway(): Promise<ProbeResult> {
 }
 
 export async function probeLongCatSpeechRuntime(): Promise<ProbeResult> {
-  if (!ENV.longcatSpeechServiceUrl?.trim()) return unconfigured(ENV.longcatSpeechServiceUrl || null);
+  if (!ENV.longcatSpeechServiceUrl?.trim())
+    return unconfigured(ENV.longcatSpeechServiceUrl || null);
   try {
     const target = `${ENV.longcatSpeechServiceUrl.replace(/\/$/, "")}/health`;
-    const payload = await fetchJson(target) as Record<string, unknown>;
+    const payload = (await fetchJson(target)) as Record<string, unknown>;
     const status = `${payload.status ?? "healthy"}`.toLowerCase();
     const sttReady = normalizeBoolean(payload.stt_ready, false);
     const ttsReady = normalizeBoolean(payload.tts_ready, false);
     if (status !== "healthy" || (!sttReady && !ttsReady)) {
-      return degraded(target, new Error(`speech runtime reported status ${status}`), {
-        response: payload,
-        stt_ready: sttReady,
-        tts_ready: ttsReady,
-      });
+      return degraded(
+        target,
+        new Error(`speech runtime reported status ${status}`),
+        {
+          response: payload,
+          stt_ready: sttReady,
+          tts_ready: ttsReady,
+        },
+      );
     }
     return ok(target, {
       service: payload.service ?? null,
@@ -330,17 +375,50 @@ export async function probeLongCatSpeechRuntime(): Promise<ProbeResult> {
 }
 
 export async function probeLocalCommerceGateway(): Promise<ProbeResult> {
-  if (!ENV.localCommerceGatewayUrl?.trim()) return unconfigured(ENV.localCommerceGatewayUrl || null);
+  if (!ENV.localCommerceGatewayUrl?.trim())
+    return unconfigured(ENV.localCommerceGatewayUrl || null);
   return probeUrl(ENV.localCommerceGatewayUrl, "/health");
 }
 
 export async function probeRetailForecastService(): Promise<ProbeResult> {
-  if (!ENV.retailForecastServiceUrl?.trim()) return unconfigured(ENV.retailForecastServiceUrl || null);
+  if (!ENV.retailForecastServiceUrl?.trim())
+    return unconfigured(ENV.retailForecastServiceUrl || null);
   return probeUrl(ENV.retailForecastServiceUrl, "/health");
 }
 
+export async function probeDispatchOptimizer(): Promise<ProbeResult> {
+  if (!ENV.dispatchOptimizerUrl?.trim())
+    return unconfigured(ENV.dispatchOptimizerUrl || null);
+  return probeUrl(ENV.dispatchOptimizerUrl, "/health");
+}
+
+export async function probeProcurementPlanner(): Promise<ProbeResult> {
+  if (!ENV.procurementPlannerServiceUrl?.trim())
+    return unconfigured(ENV.procurementPlannerServiceUrl || null);
+  return probeUrl(ENV.procurementPlannerServiceUrl, "/health");
+}
+
+export async function probeInventoryControl(): Promise<ProbeResult> {
+  if (!ENV.inventoryControlServiceUrl?.trim())
+    return unconfigured(ENV.inventoryControlServiceUrl || null);
+  return probeUrl(ENV.inventoryControlServiceUrl, "/health");
+}
+
 export async function probeServices() {
-  const [mojaloop, tigerbeetle, lakehouse, verticalProvisioning, intakeOrchestrator, longcatVoiceGateway, longcatSpeechRuntime, localCommerceGateway, retailForecastService] = await Promise.all([
+  const [
+    mojaloop,
+    tigerbeetle,
+    lakehouse,
+    verticalProvisioning,
+    intakeOrchestrator,
+    longcatVoiceGateway,
+    longcatSpeechRuntime,
+    localCommerceGateway,
+    retailForecastService,
+    dispatchOptimizer,
+    procurementPlanner,
+    inventoryControl,
+  ] = await Promise.all([
     probeUrl(ENV.mojaloopServiceUrl),
     probeUrl(ENV.tigerbeetleServiceUrl),
     probeUrl(ENV.lakehouseServiceUrl),
@@ -350,6 +428,9 @@ export async function probeServices() {
     probeLongCatSpeechRuntime(),
     probeLocalCommerceGateway(),
     probeRetailForecastService(),
+    probeDispatchOptimizer(),
+    probeProcurementPlanner(),
+    probeInventoryControl(),
   ]);
 
   return {
@@ -362,11 +443,26 @@ export async function probeServices() {
     longcatSpeechRuntime,
     localCommerceGateway,
     retailForecastService,
+    dispatchOptimizer,
+    procurementPlanner,
+    inventoryControl,
   };
 }
 
 export async function getLiveIntegrationStatus() {
-  const [apisix, openAppSec, oidc, permify, kafka, redis, dapr, openSearch, temporal, fluvio, services] = await Promise.all([
+  const [
+    apisix,
+    openAppSec,
+    oidc,
+    permify,
+    kafka,
+    redis,
+    dapr,
+    openSearch,
+    temporal,
+    fluvio,
+    services,
+  ] = await Promise.all([
     probeApisix(),
     probeOpenAppSec(),
     probeExternalOidc(),

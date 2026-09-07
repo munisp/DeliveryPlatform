@@ -3,7 +3,8 @@ import { resolve } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-const source = (relativePath: string) => readFile(resolve(process.cwd(), relativePath), "utf8");
+const source = (relativePath: string) =>
+  readFile(resolve(process.cwd(), relativePath), "utf8");
 
 describe("operator security profile contracts", () => {
   it("persists revocable security sessions with hashed identifiers and assurance metadata", async () => {
@@ -28,8 +29,10 @@ describe("operator security profile contracts", () => {
       source("client/src/App.tsx"),
     ]);
 
-    expect(server).toContain('app.get("/api/auth/security"');
-    expect(server).toContain('app.delete("/api/auth/security/sessions/:id"');
+    expect(server).toMatch(/app\.get\(\s*"\/api\/auth\/security"/);
+    expect(server).toMatch(
+      /app\.delete\(\s*"\/api\/auth\/security\/sessions\/:id"/,
+    );
     expect(server).toContain("Retry-After");
     expect(page).toContain("Set up MFA");
     expect(page).toContain("Action blocked by security policy");
@@ -47,9 +50,13 @@ describe("operator security profile contracts", () => {
 
     expect(store).toContain("revokeOtherOperatorSecuritySessions");
     expect(store).toContain("listOperatorSecurityLoginActivity");
-    expect(server).toContain('app.post("/api/auth/security/sessions/revoke-others"');
+    expect(server).toMatch(
+      /app\.post\(\s*"\/api\/auth\/security\/sessions\/revoke-others"/,
+    );
     expect(server).toContain("recentLoginActivity");
-    expect(server).toContain('app.get("/api/auth/security/login-activity.csv"');
+    expect(server).toMatch(
+      /app\.get\(\s*"\/api\/auth\/security\/login-activity\.csv"/,
+    );
     expect(server).toContain("securityCsvCell");
     expect(server).toContain('filename="security-login-activity.csv"');
     expect(page).toContain("Revoke All Other Sessions");
@@ -61,6 +68,8 @@ describe("operator security profile contracts", () => {
     expect(page).toContain('href="#mfa-settings"');
     expect(page).toContain("scan the one-time QR code");
     expect(page).toContain("not by this application");
-    expect(page).toContain('MFA {security?.mfa.authenticatedForCurrentSession ? "Enabled"');
+    expect(page).toContain(
+      'MFA {security?.mfa.authenticatedForCurrentSession ? "Enabled"',
+    );
   });
 });

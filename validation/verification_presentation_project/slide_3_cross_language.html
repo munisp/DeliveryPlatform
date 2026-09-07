@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #020617; color: #f8fafc; }
+        .slide-container {
+            width: 1280px;
+            min-height: 720px;
+            background-color: #020617;
+            position: relative;
+            padding-top: 60px;
+            padding-left: 80px;
+            padding-right: 80px;
+        }
+        .header {
+            margin-bottom: 50px;
+            border-left: 6px solid #22d3ee;
+            padding-left: 24px;
+        }
+        h1 {
+            font-size: 48px;
+            font-weight: 700;
+            line-height: 1.2;
+            color: #f8fafc;
+            letter-spacing: -0.5px;
+        }
+        .central-case {
+            background-color: #0f172a;
+            border: 2px solid #22d3ee;
+            padding: 30px;
+            text-align: center;
+            margin-bottom: 40px;
+        }
+        .central-case h2 {
+            color: #22d3ee;
+            font-size: 28px;
+            margin-bottom: 12px;
+            font-family: monospace;
+        }
+        .central-case p {
+            font-size: 20px;
+            color: #cbd5e1;
+        }
+        .pillars {
+            display: flex;
+            justify-content: space-between;
+            gap: 30px;
+        }
+        .pillar {
+            flex: 1;
+            background-color: rgba(15, 23, 42, 0.6);
+            border-top: 4px solid #334155;
+            padding: 24px;
+        }
+        .pillar-icon {
+            color: #94a3b8;
+            font-size: 32px;
+            margin-bottom: 20px;
+        }
+        .pillar p {
+            font-size: 19px;
+            line-height: 1.5;
+            color: #e2e8f0;
+        }
+        .code-text {
+            font-family: monospace;
+            color: #38bdf8;
+            background: #0f172a;
+            padding: 2px 6px;
+        }
+        .highlight {
+            color: #22d3ee;
+        }
+        .footer-bar {
+            position: absolute;
+            bottom: 40px;
+            left: 80px;
+            right: 80px;
+            height: 1px;
+            background-color: #1e293b;
+            display: flex;
+            justify-content: space-between;
+            padding-top: 16px;
+            color: #64748b;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <div class="slide-container">
+        <div class="header">
+            <h1>A single accountable case connects each stakeholder check</h1>
+        </div>
+
+        <div class="central-case">
+            <h2>verification_case</h2>
+            <p>Binds subject, jurisdiction, purpose, lifecycle, decision, and expiry into one authoritative record.</p>
+        </div>
+
+        <div class="pillars">
+            <div class="pillar">
+                <div class="pillar-icon"><i class="fa-solid fa-link"></i></div>
+                <p>Dependencies like <span class="code-text">consent_receipt</span>, <span class="code-text">evidence</span>, <span class="code-text">processing_job</span>, and <span class="code-text">provider_check</span> are <span class="highlight">idempotent, bounded records</span>.</p>
+            </div>
+
+            <div class="pillar">
+                <div class="pillar-icon"><i class="fa-solid fa-clock-rotate-left"></i></div>
+                <p><span class="highlight">Append-only evidence</span> and decision events produce a defensible, immutable chronology of the verification process.</p>
+            </div>
+
+            <div class="pillar">
+                <div class="pillar-icon"><i class="fa-solid fa-ban"></i></div>
+                <p>Withdrawing consent immediately moves a verified case to a <span class="code-text">suspended</span> state, ensuring continuous compliance.</p>
+            </div>
+        </div>
+
+        <div class="footer-bar">
+            <span>Next-Generation Stakeholder Verification</span>
+            <span>2</span>
+        </div>
+    </div>
+</body>
+</html>

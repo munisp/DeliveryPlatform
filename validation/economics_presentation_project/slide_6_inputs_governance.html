@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Real-Time Inputs vs. Governed Policy</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+        .slide-container {
+            width: 1280px;
+            min-height: 720px;
+            background-color: #0f172a;
+            color: #f8fafc;
+            position: relative;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+        .header {
+            padding-top: 60px;
+            padding-left: 60px;
+            padding-right: 60px;
+            margin-bottom: 50px;
+        }
+        h1 {
+            font-size: 44px;
+            font-weight: 700;
+            color: #ffffff;
+            border-bottom: 4px solid #38bdf8;
+            display: inline-block;
+            padding-bottom: 10px;
+        }
+        .content {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            padding-left: 60px;
+            padding-right: 60px;
+            gap: 40px;
+        }
+        .columns-container {
+            display: flex;
+            gap: 40px;
+        }
+        .column {
+            flex: 1;
+            background-color: #1e293b;
+            padding: 40px;
+            border-top: 6px solid #38bdf8;
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+        }
+        .column:nth-child(2) {
+            border-top-color: #818cf8;
+        }
+        .column-icon {
+            font-size: 48px;
+            margin-bottom: 24px;
+        }
+        .column:nth-child(1) .column-icon { color: #38bdf8; }
+        .column:nth-child(2) .column-icon { color: #818cf8; }
+
+        .column-title {
+            font-size: 32px;
+            font-weight: 600;
+            color: #ffffff;
+            margin-bottom: 20px;
+        }
+        .column-list {
+            list-style: none;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+        .column-list li {
+            font-size: 24px;
+            line-height: 1.4;
+            color: #cbd5e1;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .column-list li i {
+            font-size: 16px;
+            color: #94a3b8;
+        }
+        .banner {
+            background-color: #0f172a;
+            border: 2px solid #334155;
+            border-left: 6px solid #10b981;
+            padding: 24px 30px;
+            display: flex;
+            align-items: center;
+            gap: 20px;
+        }
+        .banner-icon {
+            font-size: 36px;
+            color: #10b981;
+        }
+        .banner-text {
+            font-size: 24px;
+            color: #f8fafc;
+            line-height: 1.4;
+        }
+    </style>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" rel="stylesheet">
+</head>
+<body>
+    <div class="slide-container">
+        <div class="header">
+            <h1>Real-Time Inputs vs. Governed Policy</h1>
+        </div>
+        <div class="content">
+            <div class="columns-container">
+                <div class="column">
+                    <div class="column-icon"><i class="fa-solid fa-bolt"></i></div>
+                    <div class="column-title">Real-Time (Per Quote)</div>
+                    <ul class="column-list">
+                        <li><i class="fa-solid fa-chevron-right"></i> Route distance</li>
+                        <li><i class="fa-solid fa-chevron-right"></i> Estimated Time of Arrival (ETA)</li>
+                        <li><i class="fa-solid fa-chevron-right"></i> Gross rider fare</li>
+                    </ul>
+                </div>
+                <div class="column">
+                    <div class="column-icon"><i class="fa-solid fa-landmark"></i></div>
+                    <div class="column-title">Governed (Weekly/Monthly)</div>
+                    <ul class="column-list">
+                        <li><i class="fa-solid fa-chevron-right"></i> Fuel cost index</li>
+                        <li><i class="fa-solid fa-chevron-right"></i> Maintenance cost index</li>
+                        <li><i class="fa-solid fa-chevron-right"></i> Variable platform cost</li>
+                        <li><i class="fa-solid fa-chevron-right"></i> Contribution target</li>
+                    </ul>
+                </div>
+            </div>
+            <div class="banner">
+                <div class="banner-icon"><i class="fa-solid fa-shield-halved"></i></div>
+                <div class="banner-text"><strong>Why?</strong> Prevents real-time "surge pricing" from silently cutting driver share or hiding opaque penalties.</div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

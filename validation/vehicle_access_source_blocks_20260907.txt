@@ -1,0 +1,462 @@
+--- migration schema and conflict prevention ---
+CREATE TABLE IF NOT EXISTS vehicle_access.vehicle_asset (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  provider_id uuid NOT NULL REFERENCES vehicle_access.fleet_provider(id) ON DELETE RESTRICT,
+  registration_number citext NOT NULL UNIQUE,
+  vin_digest bytea NOT NULL UNIQUE CHECK (octet_length(vin_digest) = 32),
+  make text NOT NULL CHECK (length(make) BETWEEN 1 AND 80),
+  model text NOT NULL CHECK (length(model) BETWEEN 1 AND 120),
+  manufacture_year integer NOT NULL CHECK (manufacture_year BETWEEN 1990 AND 2100),
+  odometer_km integer NOT NULL CHECK (odometer_km >= 0),
+  passenger_capacity smallint NOT NULL CHECK (passenger_capacity BETWEEN 1 AND 8),
+  allowed_work_categories jsonb NOT NULL CHECK (jsonb_typeof(allowed_work_categories) = 'array' AND jsonb_array_length(allowed_work_categories) BETWEEN 1 AND 8),
+  state vehicle_access.asset_state NOT NULL DEFAULT 'intake',
+  compliance_verified_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  CHECK ((state <> 'available') OR compliance_verified_at IS NOT NULL)
+);
+CREATE INDEX IF NOT EXISTS vehicle_access_asset_provider_state_idx ON vehicle_access.vehicle_asset (provider_id, state, created_at);
+
+CREATE TABLE IF NOT EXISTS vehicle_access.asset_document_evidence (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  asset_id uuid NOT NULL REFERENCES vehicle_access.vehicle_asset(id) ON DELETE RESTRICT,
+  kind text NOT NULL CHECK (kind IN ('registration','roadworthiness','commercial_cover','ownership_authority','inspection')),
+  object_key text NOT NULL CHECK (length(object_key) BETWEEN 3 AND 512 AND object_key ~ '^[A-Za-z0-9][A-Za-z0-9._/-]+$'),
+  sha256_hex text NOT NULL CHECK (sha256_hex ~ '^[a-f0-9]{64}$'),
+  verified_by_user_id integer NOT NULL REFERENCES public.users(id) ON DELETE RESTRICT,
+  verified_at timestamptz NOT NULL DEFAULT now(),
+  expires_at timestamptz,
+  idempotency_key text NOT NULL CHECK (idempotency_key ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$'),
+  UNIQUE (asset_id, kind, idempotency_key),
+  UNIQUE (asset_id, kind, sha256_hex),
+  CHECK (expires_at IS NULL OR expires_at > verified_at)
+);
+CREATE INDEX IF NOT EXISTS vehicle_access_asset_evidence_active_idx ON vehicle_access.asset_document_evidence (asset_id, kind, expires_at);
+
+CREATE TABLE IF NOT EXISTS vehicle_access.vehicle_offer (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  provider_id uuid NOT NULL REFERENCES vehicle_access.fleet_provider(id) ON DELETE RESTRICT,
+  asset_id uuid NOT NULL REFERENCES vehicle_access.vehicle_asset(id) ON DELETE RESTRICT,
+  currency char(3) NOT NULL CHECK (currency ~ '^[A-Z]{3}$'),
+  weekly_price_minor bigint NOT NULL CHECK (weekly_price_minor > 0),
+  deposit_minor bigint NOT NULL DEFAULT 0 CHECK (deposit_minor >= 0),
+  included_km_per_week integer NOT NULL CHECK (included_km_per_week >= 0),
+  excess_km_price_minor bigint NOT NULL CHECK (excess_km_price_minor >= 0),
+  minimum_days smallint NOT NULL CHECK (minimum_days BETWEEN 1 AND 365),
+  active boolean NOT NULL DEFAULT true,
+  effective_from timestamptz NOT NULL DEFAULT now(),
+  effective_to timestamptz,
+  created_by_user_id integer NOT NULL REFERENCES public.users(id) ON DELETE RESTRICT,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  CHECK (effective_to IS NULL OR effective_to > effective_from)
+);
+CREATE INDEX IF NOT EXISTS vehicle_access_offer_discovery_idx ON vehicle_access.vehicle_offer (asset_id, effective_from) WHERE active;
+
+CREATE TABLE IF NOT EXISTS vehicle_access.access_contract (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  public_reference text NOT NULL UNIQUE DEFAULT ('va-' || lower(replace(gen_random_uuid()::text, '-', ''))),
+  worker_user_id integer NOT NULL REFERENCES public.users(id) ON DELETE RESTRICT,
+  provider_id uuid NOT NULL REFERENCES vehicle_access.fleet_provider(id) ON DELETE RESTRICT,
+  asset_id uuid NOT NULL REFERENCES vehicle_access.vehicle_asset(id) ON DELETE RESTRICT,
+  offer_id uuid NOT NULL REFERENCES vehicle_access.vehicle_offer(id) ON DELETE RESTRICT,
+  state vehicle_access.contract_state NOT NULL DEFAULT 'requested',
+  starts_at timestamptz NOT NULL,
+  ends_at timestamptz NOT NULL,
+  price_snapshot jsonb NOT NULL CHECK (jsonb_typeof(price_snapshot) = 'object'),
+  approved_by_user_id integer REFERENCES public.users(id) ON DELETE SET NULL,
+  activated_at timestamptz,
+  closed_at timestamptz,
+  cancellation_reason text CHECK (cancellation_reason IS NULL OR length(cancellation_reason) BETWEEN 3 AND 1000),
+  suspension_reason text CHECK (suspension_reason IS NULL OR length(suspension_reason) BETWEEN 3 AND 1000),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  CHECK (ends_at > starts_at),
+  CHECK ((state IN ('approved','active','return_pending','closed','suspended')) = (approved_by_user_id IS NOT NULL)),
+  CHECK ((state IN ('active','return_pending','closed','suspended')) = (activated_at IS NOT NULL)),
+  CHECK ((state = 'closed') = (closed_at IS NOT NULL)),
+  CHECK ((state = 'cancelled') = (cancellation_reason IS NOT NULL)),
+  CHECK (state <> 'suspended' OR suspension_reason IS NOT NULL),
+  EXCLUDE USING gist (asset_id WITH =, tstzrange(starts_at, ends_at, '[)') WITH &&)
+    WHERE (state IN ('approved','active','return_pending'))
+);
+CREATE INDEX IF NOT EXISTS vehicle_access_contract_worker_state_idx ON vehicle_access.access_contract (worker_user_id, state, starts_at DESC);
+CREATE INDEX IF NOT EXISTS vehicle_access_contract_provider_state_idx ON vehicle_access.access_contract (provider_id, state, starts_at);
+
+CREATE TABLE IF NOT EXISTS vehicle_access.inspection_evidence (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  contract_id uuid NOT NULL REFERENCES vehicle_access.access_contract(id) ON DELETE RESTRICT,
+  kind text NOT NULL CHECK (kind IN ('handover','return')),
+  captured_by_user_id integer NOT NULL REFERENCES public.users(id) ON DELETE RESTRICT,
+  object_key text NOT NULL CHECK (length(object_key) BETWEEN 3 AND 512 AND object_key ~ '^[A-Za-z0-9][A-Za-z0-9._/-]+$'),
+  content_type text NOT NULL CHECK (content_type IN ('image/jpeg','image/png','image/heic','application/pdf')),
+  sha256_hex text NOT NULL CHECK (sha256_hex ~ '^[a-f0-9]{64}$'),
+  odometer_km integer NOT NULL CHECK (odometer_km >= 0),
+  idempotency_key text NOT NULL CHECK (idempotency_key ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$'),
+  captured_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (contract_id, kind, idempotency_key),
+  UNIQUE (contract_id, kind, sha256_hex)
+);
+
+CREATE TABLE IF NOT EXISTS vehicle_access.contract_event (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  contract_id uuid NOT NULL REFERENCES vehicle_access.access_contract(id) ON DELETE RESTRICT,
+  sequence_no integer NOT NULL CHECK (sequence_no > 0),
+  actor_user_id integer REFERENCES public.users(id) ON DELETE SET NULL,
+  event_type text NOT NULL CHECK (event_type ~ '^[a-z][a-z0-9_.]{2,95}$'),
+  previous_state vehicle_access.contract_state,
+  next_state vehicle_access.contract_state NOT NULL,
+  detail jsonb NOT NULL DEFAULT '{}'::jsonb CHECK (jsonb_typeof(detail) = 'object'),
+  idempotency_key text NOT NULL CHECK (idempotency_key ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$'),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (contract_id, sequence_no),
+  UNIQUE (contract_id, idempotency_key)
+);
+CREATE TABLE IF NOT EXISTS vehicle_access.outbox_event (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  aggregate_id uuid NOT NULL,
+  event_type text NOT NULL CHECK (event_type ~ '^[a-z][a-z0-9_.]{2,95}$'),
+  payload jsonb NOT NULL CHECK (jsonb_typeof(payload) = 'object'),
+  idempotency_key text NOT NULL CHECK (idempotency_key ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$'),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  published_at timestamptz,
+  UNIQUE (aggregate_id, event_type, idempotency_key)
+);
+CREATE INDEX IF NOT EXISTS vehicle_access_outbox_pending_idx ON vehicle_access.outbox_event (created_at) WHERE published_at IS NULL;
+
+CREATE OR REPLACE FUNCTION vehicle_access.prevent_append_only_mutation()
+RETURNS trigger LANGUAGE plpgsql SET search_path = pg_catalog, vehicle_access AS $$
+BEGIN RAISE EXCEPTION 'vehicle-access evidence is append-only' USING ERRCODE = '55000'; END; $$;
+DROP TRIGGER IF EXISTS vehicle_access_contract_event_append_only ON vehicle_access.contract_event;
+CREATE TRIGGER vehicle_access_contract_event_append_only BEFORE UPDATE OR DELETE ON vehicle_access.contract_event FOR EACH ROW EXECUTE FUNCTION vehicle_access.prevent_append_only_mutation();
+DROP TRIGGER IF EXISTS vehicle_access_inspection_append_only ON vehicle_access.inspection_evidence;
+CREATE TRIGGER vehicle_access_inspection_append_only BEFORE UPDATE OR DELETE ON vehicle_access.inspection_evidence FOR EACH ROW EXECUTE FUNCTION vehicle_access.prevent_append_only_mutation();
+DROP TRIGGER IF EXISTS vehicle_access_asset_evidence_append_only ON vehicle_access.asset_document_evidence;
+CREATE TRIGGER vehicle_access_asset_evidence_append_only BEFORE UPDATE OR DELETE ON vehicle_access.asset_document_evidence FOR EACH ROW EXECUTE FUNCTION vehicle_access.prevent_append_only_mutation();
+
+CREATE OR REPLACE FUNCTION vehicle_access.is_operator(p_user_id integer)
+RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, vehicle_access AS $$
+  SELECT EXISTS (SELECT 1 FROM public.users WHERE id = p_user_id AND role = 'admin');
+$$;
+CREATE OR REPLACE FUNCTION vehicle_access.append_event(p_contract_id uuid, p_actor integer, p_event_type text, p_previous vehicle_access.contract_state, p_next vehicle_access.contract_state, p_detail jsonb, p_key text, p_now timestamptz)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, vehicle_access AS $$
+--- migration contract request and lifecycle transitions ---
+CREATE OR REPLACE FUNCTION vehicle_access.create_offer(p_actor integer,p_provider uuid,p_asset uuid,p_currency char(3),p_weekly bigint,p_deposit bigint,p_included_km integer,p_excess bigint,p_minimum_days smallint,p_now timestamptz DEFAULT clock_timestamp())
+RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,vehicle_access AS $$
+DECLARE v_id uuid;
+BEGIN
+  IF NOT vehicle_access.is_operator(p_actor) THEN RAISE EXCEPTION 'operator role required' USING ERRCODE='42501'; END IF;
+  IF NOT EXISTS(SELECT 1 FROM vehicle_access.vehicle_asset WHERE id=p_asset AND provider_id=p_provider AND state='available') THEN RAISE EXCEPTION 'available provider asset required' USING ERRCODE='23514'; END IF;
+  INSERT INTO vehicle_access.vehicle_offer(provider_id,asset_id,currency,weekly_price_minor,deposit_minor,included_km_per_week,excess_km_price_minor,minimum_days,created_by_user_id,created_at)
+  VALUES(p_provider,p_asset,p_currency,p_weekly,p_deposit,p_included_km,p_excess,p_minimum_days,p_actor,p_now) RETURNING id INTO v_id;
+  RETURN v_id;
+END; $$;
+CREATE OR REPLACE FUNCTION vehicle_access.request_contract(p_worker integer,p_offer uuid,p_starts timestamptz,p_ends timestamptz,p_key text,p_now timestamptz DEFAULT clock_timestamp())
+RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,vehicle_access AS $$
+DECLARE v_offer vehicle_access.vehicle_offer%ROWTYPE; v_id uuid;
+BEGIN
+  IF p_starts < p_now OR p_ends <= p_starts OR p_key !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$' THEN RAISE EXCEPTION 'invalid contract request' USING ERRCODE='22023'; END IF;
+  SELECT * INTO v_offer FROM vehicle_access.vehicle_offer WHERE id=p_offer AND active AND effective_from <= p_now AND (effective_to IS NULL OR effective_to > p_now) FOR UPDATE;
+  IF NOT FOUND OR NOT EXISTS(SELECT 1 FROM vehicle_access.vehicle_asset WHERE id=v_offer.asset_id AND state='available') THEN RAISE EXCEPTION 'available offer required' USING ERRCODE='23514'; END IF;
+  IF NOT EXISTS(
+    SELECT 1
+    FROM vehicle_access.worker_eligibility eligibility
+    JOIN vehicle_access.vehicle_asset asset ON asset.id=v_offer.asset_id
+    WHERE eligibility.worker_user_id=p_worker
+      AND eligibility.state='verified'
+      AND eligibility.expires_at > p_now
+      AND EXISTS (
+        SELECT 1
+        FROM jsonb_array_elements_text(eligibility.allowed_work_categories) AS worker_category(category)
+        JOIN jsonb_array_elements_text(asset.allowed_work_categories) AS asset_category(category)
+          ON asset_category.category=worker_category.category
+      )
+  ) THEN RAISE EXCEPTION 'verified worker eligibility required' USING ERRCODE='23514'; END IF;
+  IF p_ends < p_starts + make_interval(days => v_offer.minimum_days) THEN RAISE EXCEPTION 'minimum contract term not met' USING ERRCODE='23514'; END IF;
+  SELECT contract_id INTO v_id FROM (SELECT contract_id FROM vehicle_access.contract_event WHERE idempotency_key=p_key AND actor_user_id=p_worker) q LIMIT 1;
+  IF v_id IS NOT NULL THEN RETURN v_id; END IF;
+  INSERT INTO vehicle_access.access_contract(worker_user_id,provider_id,asset_id,offer_id,starts_at,ends_at,price_snapshot,created_at,updated_at)
+  VALUES(p_worker,v_offer.provider_id,v_offer.asset_id,v_offer.id,p_starts,p_ends,jsonb_build_object('currency',v_offer.currency,'weekly_price_minor',v_offer.weekly_price_minor,'deposit_minor',v_offer.deposit_minor,'included_km_per_week',v_offer.included_km_per_week,'excess_km_price_minor',v_offer.excess_km_price_minor),p_now,p_now) RETURNING id INTO v_id;
+  PERFORM vehicle_access.append_event(v_id,p_worker,'vehicle_access.contract.requested',NULL,'requested',jsonb_build_object('offer_id',p_offer),p_key,p_now);
+  PERFORM vehicle_access.enqueue_event(v_id,'vehicle_access.contract.requested',p_key,p_now);
+  RETURN v_id;
+END; $$;
+
+CREATE OR REPLACE FUNCTION vehicle_access.transition_contract(p_actor integer,p_contract uuid,p_action text,p_reason text,p_key text,p_now timestamptz DEFAULT clock_timestamp())
+RETURNS vehicle_access.contract_state LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,vehicle_access AS $$
+DECLARE v_contract vehicle_access.access_contract%ROWTYPE; v_next vehicle_access.contract_state; v_event text;
+BEGIN
+  SELECT * INTO v_contract FROM vehicle_access.access_contract WHERE id=p_contract FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'contract not found' USING ERRCODE='P0002'; END IF;
+  IF EXISTS(SELECT 1 FROM vehicle_access.contract_event WHERE contract_id=p_contract AND idempotency_key=p_key) THEN RETURN v_contract.state; END IF;
+  IF p_action='cancel' AND p_actor=v_contract.worker_user_id AND v_contract.state IN ('requested','approved') THEN
+    IF p_reason IS NULL OR length(p_reason) NOT BETWEEN 3 AND 1000 THEN RAISE EXCEPTION 'cancellation reason required' USING ERRCODE='22023'; END IF;
+    v_next='cancelled'; v_event='vehicle_access.contract.cancelled';
+    IF v_contract.state='approved' THEN UPDATE vehicle_access.vehicle_asset SET state='available',updated_at=p_now WHERE id=v_contract.asset_id; END IF;
+  ELSIF p_action='begin_return' AND p_actor=v_contract.worker_user_id AND v_contract.state='active' THEN
+    v_next='return_pending'; v_event='vehicle_access.contract.return_pending'; UPDATE vehicle_access.vehicle_asset SET state='return_pending',updated_at=p_now WHERE id=v_contract.asset_id;
+  ELSIF NOT vehicle_access.is_operator(p_actor) THEN RAISE EXCEPTION 'operator role required' USING ERRCODE='42501';
+  ELSIF p_action='approve' AND v_contract.state='requested' THEN
+    IF NOT EXISTS(SELECT 1 FROM vehicle_access.vehicle_asset WHERE id=v_contract.asset_id AND state='available') THEN RAISE EXCEPTION 'asset unavailable' USING ERRCODE='23514'; END IF;
+    v_next='approved'; v_event='vehicle_access.contract.approved'; UPDATE vehicle_access.vehicle_asset SET state='reserved',updated_at=p_now WHERE id=v_contract.asset_id;
+  ELSIF p_action='handover' AND v_contract.state='approved' THEN
+    IF NOT EXISTS(SELECT 1 FROM vehicle_access.inspection_evidence WHERE contract_id=p_contract AND kind='handover') THEN RAISE EXCEPTION 'handover inspection required' USING ERRCODE='23514'; END IF;
+    v_next='active'; v_event='vehicle_access.contract.activated'; UPDATE vehicle_access.vehicle_asset SET state='active_access',updated_at=p_now WHERE id=v_contract.asset_id;
+  ELSIF p_action='close' AND v_contract.state='return_pending' THEN
+    IF NOT EXISTS(SELECT 1 FROM vehicle_access.inspection_evidence WHERE contract_id=p_contract AND kind='return') THEN RAISE EXCEPTION 'return inspection required' USING ERRCODE='23514'; END IF;
+    v_next='closed'; v_event='vehicle_access.contract.closed'; UPDATE vehicle_access.vehicle_asset SET state='available',updated_at=p_now WHERE id=v_contract.asset_id;
+  ELSIF p_action='suspend' AND v_contract.state IN ('approved','active','return_pending') THEN
+    IF p_reason IS NULL OR length(p_reason) NOT BETWEEN 3 AND 1000 THEN RAISE EXCEPTION 'suspension reason required' USING ERRCODE='22023'; END IF;
+    v_next='suspended'; v_event='vehicle_access.contract.suspended'; UPDATE vehicle_access.vehicle_asset SET state='safety_hold',updated_at=p_now WHERE id=v_contract.asset_id;
+  ELSIF p_action='begin_safe_return' AND v_contract.state='suspended' THEN
+    v_next='return_pending'; v_event='vehicle_access.contract.return_pending'; UPDATE vehicle_access.vehicle_asset SET state='return_pending',updated_at=p_now WHERE id=v_contract.asset_id;
+  ELSE RAISE EXCEPTION 'invalid contract transition' USING ERRCODE='23514'; END IF;
+  UPDATE vehicle_access.access_contract SET state=v_next,approved_by_user_id=CASE WHEN v_next='approved' THEN p_actor ELSE approved_by_user_id END,activated_at=CASE WHEN v_next='active' THEN p_now ELSE activated_at END,closed_at=CASE WHEN v_next='closed' THEN p_now ELSE closed_at END,cancellation_reason=CASE WHEN v_next='cancelled' THEN p_reason ELSE cancellation_reason END,suspension_reason=CASE WHEN v_next='suspended' THEN p_reason ELSE suspension_reason END,updated_at=p_now WHERE id=p_contract;
+  PERFORM vehicle_access.append_event(p_contract,p_actor,v_event,v_contract.state,v_next,jsonb_build_object('reason',p_reason),p_key,p_now);
+  PERFORM vehicle_access.enqueue_event(p_contract,v_event,p_key,p_now);
+  RETURN v_next;
+END; $$;
+CREATE OR REPLACE FUNCTION vehicle_access.record_inspection(p_actor integer,p_contract uuid,p_kind text,p_object_key text,p_content_type text,p_sha256 text,p_odometer integer,p_key text,p_now timestamptz DEFAULT clock_timestamp())
+RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,vehicle_access AS $$
+DECLARE v_contract vehicle_access.access_contract%ROWTYPE; v_id uuid;
+BEGIN
+  SELECT * INTO v_contract FROM vehicle_access.access_contract WHERE id=p_contract FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'contract not found' USING ERRCODE='P0002'; END IF;
+  IF p_actor<>v_contract.worker_user_id AND NOT vehicle_access.is_operator(p_actor) THEN RAISE EXCEPTION 'contract actor required' USING ERRCODE='42501'; END IF;
+  IF (p_kind='handover' AND v_contract.state<>'approved') OR (p_kind='return' AND v_contract.state NOT IN ('active','return_pending')) THEN RAISE EXCEPTION 'inspection not permitted in current state' USING ERRCODE='23514'; END IF;
+  INSERT INTO vehicle_access.inspection_evidence(contract_id,kind,captured_by_user_id,object_key,content_type,sha256_hex,odometer_km,idempotency_key,captured_at)
+  VALUES(p_contract,p_kind,p_actor,p_object_key,p_content_type,p_sha256,p_odometer,p_key,p_now)
+  ON CONFLICT (contract_id,kind,idempotency_key) DO NOTHING RETURNING id INTO v_id;
+  IF v_id IS NULL THEN SELECT id INTO v_id FROM vehicle_access.inspection_evidence WHERE contract_id=p_contract AND kind=p_kind AND idempotency_key=p_key; END IF;
+  RETURN v_id;
+END; $$;
+CREATE OR REPLACE FUNCTION vehicle_access.list_contracts_for_actor(p_actor integer,p_limit integer DEFAULT 50)
+RETURNS TABLE(id uuid,public_reference text,worker_user_id integer,asset_id uuid,state vehicle_access.contract_state,starts_at timestamptz,ends_at timestamptz,updated_at timestamptz)
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path=pg_catalog,vehicle_access AS $$
+  SELECT c.id,c.public_reference,c.worker_user_id,c.asset_id,c.state,c.starts_at,c.ends_at,c.updated_at FROM vehicle_access.access_contract c
+  WHERE vehicle_access.is_operator(p_actor) OR c.worker_user_id=p_actor ORDER BY c.updated_at DESC LIMIT LEAST(GREATEST(p_limit,1),100);
+$$;
+CREATE OR REPLACE FUNCTION vehicle_access.list_active_offers(p_limit integer DEFAULT 50)
+RETURNS TABLE(id uuid,asset_id uuid,provider_id uuid,make text,model text,manufacture_year integer,odometer_km integer,currency char(3),weekly_price_minor bigint,deposit_minor bigint,included_km_per_week integer,minimum_days smallint)
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path=pg_catalog,vehicle_access AS $$
+  SELECT o.id,o.asset_id,o.provider_id,a.make,a.model,a.manufacture_year,a.odometer_km,o.currency,o.weekly_price_minor,o.deposit_minor,o.included_km_per_week,o.minimum_days
+  FROM vehicle_access.vehicle_offer o JOIN vehicle_access.vehicle_asset a ON a.id=o.asset_id JOIN vehicle_access.fleet_provider p ON p.id=o.provider_id
+  WHERE o.active AND o.effective_from<=clock_timestamp() AND (o.effective_to IS NULL OR o.effective_to>clock_timestamp()) AND a.state='available' AND p.state='active'
+  ORDER BY o.weekly_price_minor,o.created_at LIMIT LEAST(GREATEST(p_limit,1),100);
+$$;
+
+REVOKE ALL ON ALL TABLES IN SCHEMA vehicle_access FROM PUBLIC;
+REVOKE ALL ON ALL FUNCTIONS IN SCHEMA vehicle_access FROM PUBLIC;
+DO $$ BEGIN
+  IF EXISTS(SELECT 1 FROM pg_roles WHERE rolname='vehicle_access_service') THEN
+    GRANT USAGE ON SCHEMA vehicle_access TO vehicle_access_service;
+    GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA vehicle_access TO vehicle_access_service;
+  END IF;
+END $$;
+--- router vehicle access ---
+        }),
+      )
+      .mutation(({ ctx, input }) =>
+        cancelWorkOrder({ actorUserId: ctx.user!.id, ...input }),
+      ),
+  }),
+
+  vehicleAccess: router({
+    listOffers: authenticatedProcedure
+      .input(
+        z
+          .object({ limit: z.number().int().min(1).max(100).optional() })
+          .optional(),
+      )
+      .query(({ input }) => listVehicleAccessOffers(input?.limit ?? 50)),
+    listContracts: authenticatedProcedure
+      .input(
+        z
+          .object({ limit: z.number().int().min(1).max(100).optional() })
+          .optional(),
+      )
+      .query(({ ctx, input }) =>
+        listVehicleAccessContracts({
+          actorUserId: ctx.user!.id,
+          limit: input?.limit ?? 50,
+        }),
+      ),
+    requestContract: authenticatedProcedure
+      .input(
+        z.object({
+          offerId: z.string().uuid(),
+          startsAt: z.string().datetime(),
+          endsAt: z.string().datetime(),
+          idempotencyKey: z
+            .string()
+            .trim()
+            .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
+        }),
+      )
+      .mutation(({ ctx, input }) =>
+        requestVehicleAccess({ workerUserId: ctx.user!.id, ...input }),
+      ),
+    recordInspection: authenticatedProcedure
+      .input(
+        z.object({
+          contractId: z.string().uuid(),
+          kind: z.enum(["handover", "return"]),
+          objectKey: z.string().trim().min(3).max(512),
+          contentType: z.enum([
+            "image/jpeg",
+            "image/png",
+            "image/heic",
+            "application/pdf",
+          ]),
+          sha256Hex: z.string().regex(/^[a-f0-9]{64}$/),
+          odometerKm: z.number().int().min(0).max(5000000),
+          idempotencyKey: z
+            .string()
+            .trim()
+            .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
+        }),
+      )
+      .mutation(({ ctx, input }) =>
+        recordVehicleInspection({ actorUserId: ctx.user!.id, ...input }),
+      ),
+    transition: authenticatedProcedure
+      .input(
+        z.object({
+          contractId: z.string().uuid(),
+          action: z.enum(["begin_return", "cancel"]),
+          reason: z.string().trim().min(3).max(1000).nullable(),
+          idempotencyKey: z
+            .string()
+            .trim()
+            .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
+        }),
+      )
+      .mutation(({ ctx, input }) =>
+        transitionVehicleAccessContract({
+          actorUserId: ctx.user!.id,
+          ...input,
+        }),
+      ),
+    createProvider: protectedProcedure
+      .input(
+        z.object({
+          displayName: z.string().trim().min(2).max(160),
+          legalName: z.string().trim().min(2).max(255),
+        }),
+      )
+      .mutation(({ ctx, input }) =>
+        createFleetProvider({ actorUserId: ctx.user!.id, ...input }),
+      ),
+    verifyWorkerEligibility: protectedProcedure
+      .input(
+        z.object({
+          workerUserId: z.number().int().positive(),
+          allowedWorkCategories: z
+            .array(
+              z.enum(["ride_hailing", "delivery", "courier", "field_service"]),
+            )
+            .min(1)
+            .max(4),
+          expiresAt: z.string().datetime(),
+        }),
+      )
+      .mutation(({ ctx, input }) =>
+        upsertWorkerVehicleEligibility({ actorUserId: ctx.user!.id, ...input }),
+      ),
+    registerAsset: protectedProcedure
+      .input(
+        z.object({
+          providerId: z.string().uuid(),
+          registrationNumber: z.string().trim().min(3).max(32),
+          vinSha256: z.string().regex(/^[a-f0-9]{64}$/),
+          make: z.string().trim().min(1).max(80),
+          model: z.string().trim().min(1).max(120),
+          manufactureYear: z.number().int().min(1990).max(2100),
+          odometerKm: z.number().int().min(0).max(5000000),
+          passengerCapacity: z.number().int().min(1).max(8),
+          allowedWorkCategories: z
+            .array(
+              z.enum(["ride_hailing", "delivery", "courier", "field_service"]),
+            )
+            .min(1)
+            .max(4),
+        }),
+      )
+      .mutation(({ ctx, input }) =>
+        registerVehicleAsset({ actorUserId: ctx.user!.id, ...input }),
+      ),
+    recordAssetEvidence: protectedProcedure
+      .input(
+        z.object({
+          assetId: z.string().uuid(),
+          kind: z.enum([
+            "registration",
+            "roadworthiness",
+            "commercial_cover",
+            "ownership_authority",
+            "inspection",
+          ]),
+          objectKey: z.string().trim().min(3).max(512),
+          sha256Hex: z.string().regex(/^[a-f0-9]{64}$/),
+          expiresAt: z.string().datetime().nullable(),
+          idempotencyKey: z
+            .string()
+            .trim()
+            .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
+        }),
+      )
+      .mutation(({ ctx, input }) =>
+        recordAssetEvidence({ actorUserId: ctx.user!.id, ...input }),
+      ),
+    activateAsset: protectedProcedure
+      .input(
+        z.object({
+          assetId: z.string().uuid(),
+          idempotencyKey: z
+            .string()
+            .trim()
+            .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
+        }),
+      )
+      .mutation(({ ctx, input }) =>
+        activateVehicleAsset({ actorUserId: ctx.user!.id, ...input }),
+      ),
+    createOffer: protectedProcedure
+      .input(
+        z.object({
+          providerId: z.string().uuid(),
+          assetId: z.string().uuid(),
+          currency: z.string().regex(/^[A-Z]{3}$/),
+          weeklyPriceMinor: z.number().int().positive().max(1000000000),
+          depositMinor: z.number().int().min(0).max(1000000000),
+          includedKmPerWeek: z.number().int().min(0).max(100000),
+          excessKmPriceMinor: z.number().int().min(0).max(100000000),
+          minimumDays: z.number().int().min(1).max(365),
+        }),
+      )
+      .mutation(({ ctx, input }) =>
+        createVehicleOffer({ actorUserId: ctx.user!.id, ...input }),
+      ),
+    operateTransition: protectedProcedure
+      .input(
+        z.object({
+          contractId: z.string().uuid(),
+          action: z.enum([
+            "approve",
+            "handover",
+            "close",
+            "suspend",
+            "begin_safe_return",
+          ]),
+          reason: z.string().trim().min(3).max(1000).nullable(),
+          idempotencyKey: z
+            .string()
+            .trim()
+            .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
+        }),
+      )
+      .mutation(({ ctx, input }) =>
+        transitionVehicleAccessContract({
+          actorUserId: ctx.user!.id,
+          ...input,
+        }),

@@ -1,0 +1,31 @@
+name: Self-hosted runner smoke test
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  runner-smoke:
+    runs-on: [self-hosted, linux, x64, deliveryplatform-ci]
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Record non-sensitive runner capabilities
+        shell: bash
+        run: |
+          set -euo pipefail
+          uname -a
+          git --version
+          node --version || true
+          pnpm --version || true
+          python3 --version
+          psql --version
+          docker version
+      - name: Verify private repository checkout only
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -d .git
+          git status --short

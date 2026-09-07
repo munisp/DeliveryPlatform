@@ -1,0 +1,23 @@
+CREATE EXTENSION
+CREATE TYPE
+CREATE TABLE
+INSERT 0 2
+SET
+DO
+RESET
+DO
+   state   | count
+-----------+-------
+ suspended |     1
+(1 row)
+
+    check_type     | state
+-------------------+--------
+ identity_document | passed
+ liveness          | passed
+ driving_licence   | passed
+ criminal_record   | passed
+ sanctions         | passed
+(5 rows)
+
+stakeholder_verification_result=PASS database=stakeholder_verification_validation_340455_1788790364 evidence=synthetic_only

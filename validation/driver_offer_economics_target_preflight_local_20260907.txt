@@ -1,0 +1,6 @@
+driver_offer_economics_preflight=PASS
+database_contract=verified
+least_privilege=verified
+runtime_identity=verified
+environment=local
+worker_configuration=DATABASE_URL,REDIS_URL,INTERNAL_SERVICE_TOKEN,MATCH_MIN_LOCATION_INTEGRITY

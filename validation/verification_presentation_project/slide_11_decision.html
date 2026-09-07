@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #020617; color: #f8fafc; }
+        .slide-container {
+            width: 1280px;
+            min-height: 720px;
+            background-color: #020617;
+            position: relative;
+            padding-top: 60px;
+            padding-left: 80px;
+            padding-right: 80px;
+        }
+        .header {
+            margin-bottom: 60px;
+            border-left: 6px solid #22d3ee;
+            padding-left: 24px;
+        }
+        h1 {
+            font-size: 48px;
+            font-weight: 700;
+            line-height: 1.2;
+            color: #f8fafc;
+            letter-spacing: -0.5px;
+        }
+        .content-list {
+            display: flex;
+            flex-direction: column;
+            gap: 40px;
+        }
+        .list-item {
+            display: flex;
+            align-items: flex-start;
+            gap: 30px;
+            background-color: rgba(15, 23, 42, 0.4);
+            padding: 24px;
+            border-left: 4px solid #334155;
+        }
+        .icon-box {
+            color: #22d3ee;
+            font-size: 36px;
+            min-width: 48px;
+            display: flex;
+            justify-content: center;
+        }
+        .text-box p {
+            font-size: 24px;
+            line-height: 1.5;
+            color: #e2e8f0;
+        }
+        .highlight {
+            color: #22d3ee;
+            font-weight: 600;
+        }
+        .footer-bar {
+            position: absolute;
+            bottom: 40px;
+            left: 80px;
+            right: 80px;
+            height: 1px;
+            background-color: #1e293b;
+            display: flex;
+            justify-content: space-between;
+            padding-top: 16px;
+            color: #64748b;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <div class="slide-container">
+        <div class="header">
+            <h1>Decision: keep humans accountable, keep systems verifiable</h1>
+        </div>
+
+        <div class="content-list">
+            <div class="list-item">
+                <div class="icon-box"><i class="fa-solid fa-user-check"></i></div>
+                <div class="text-box">
+                    <p>Preserve the <span class="highlight">manual-review default</span> as providers and models are introduced.</p>
+                </div>
+            </div>
+
+            <div class="list-item">
+                <div class="icon-box"><i class="fa-solid fa-file-signature"></i></div>
+                <div class="text-box">
+                    <p>Promote only after provider contracts, privacy/compliance approval, security review, target-environment tests, and measurable accuracy/appeal controls.</p>
+                </div>
+            </div>
+
+            <div class="list-item">
+                <div class="icon-box"><i class="fa-solid fa-triangle-exclamation"></i></div>
+                <div class="text-box">
+                    <p><span class="highlight">Never use OCR/VLM/liveness score alone</span> as an eligibility or adverse-action decision.</p>
+                </div>
+            </div>
+        </div>
+
+        <div class="footer-bar">
+            <span>Next-Generation Stakeholder Verification</span>
+            <span>11</span>
+        </div>
+    </div>
+</body>
+</html>

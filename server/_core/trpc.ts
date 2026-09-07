@@ -133,7 +133,8 @@ function requirePolicy(
   });
 }
 
-export const protectedProcedure = t.procedure.use(requireUser).use(requireOperator);
+export const authenticatedProcedure = t.procedure.use(requireUser);
+export const protectedProcedure = authenticatedProcedure.use(requireOperator);
 export const platformReadProcedure = protectedProcedure.use(requirePolicy("read_platform", "tenant"));
 export const analyticsReadProcedure = protectedProcedure.use(requirePolicy("read_analytics", "tenant"));
 export const workspaceReadProcedure = protectedProcedure.use(requirePolicy("read", "workspace", () => "switchos-operator-workspaces"));

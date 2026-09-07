@@ -1,0 +1,65 @@
+erDiagram
+    USERS ||--o{ FLEET_PROVIDER : creates
+    USERS ||--o| WORKER_ELIGIBILITY : receives
+    FLEET_PROVIDER ||--o{ VEHICLE_ASSET : owns
+    VEHICLE_ASSET ||--o{ ASSET_DOCUMENT_EVIDENCE : has
+    VEHICLE_ASSET ||--o{ VEHICLE_OFFER : listed_as
+    VEHICLE_ASSET ||--o{ ACCESS_CONTRACT : allocated_by
+    VEHICLE_OFFER ||--o{ ACCESS_CONTRACT : snapshots
+    WORKER_ELIGIBILITY ||--o{ ACCESS_CONTRACT : authorizes
+    ACCESS_CONTRACT ||--o{ INSPECTION_EVIDENCE : proves
+    ACCESS_CONTRACT ||--o{ CONTRACT_EVENT : appends
+    ACCESS_CONTRACT ||--o{ OUTBOX_EVENT : emits
+
+    FLEET_PROVIDER {
+      uuid id PK
+      provider_state state
+      text legal_name
+    }
+    WORKER_ELIGIBILITY {
+      int worker_user_id PK
+      text state
+      jsonb allowed_work_categories
+      timestamptz expires_at
+    }
+    VEHICLE_ASSET {
+      uuid id PK
+      uuid provider_id FK
+      asset_state state
+      bytea vin_digest UK
+      int odometer_km
+    }
+    ASSET_DOCUMENT_EVIDENCE {
+      uuid id PK
+      uuid asset_id FK
+      text kind
+      text sha256_hex
+    }
+    VEHICLE_OFFER {
+      uuid id PK
+      uuid asset_id FK
+      bigint weekly_price_minor
+      bigint deposit_minor
+    }
+    ACCESS_CONTRACT {
+      uuid id PK
+      int worker_user_id FK
+      uuid asset_id FK
+      contract_state state
+      jsonb price_snapshot
+      timestamptz starts_at
+      timestamptz ends_at
+    }
+    INSPECTION_EVIDENCE {
+      uuid id PK
+      uuid contract_id FK
+      text kind
+      int odometer_km
+      text sha256_hex
+    }
+    CONTRACT_EVENT {
+      uuid id PK
+      uuid contract_id FK
+      int sequence_no
+      text event_type
+    }

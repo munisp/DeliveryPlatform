@@ -1,0 +1,87 @@
+CREATE EXTENSION
+CREATE EXTENSION
+CREATE TYPE
+CREATE TABLE
+INSERT 0 3
+NOTICE:  trigger "vehicle_access_contract_event_append_only" for relation "vehicle_access.contract_event" does not exist, skipping
+NOTICE:  trigger "vehicle_access_inspection_append_only" for relation "vehicle_access.inspection_evidence" does not exist, skipping
+NOTICE:  trigger "vehicle_access_asset_evidence_append_only" for relation "vehicle_access.asset_document_evidence" does not exist, skipping
+SET
+        record_asset_evidence
+--------------------------------------
+ dd33c01f-875a-44b3-8a31-827430381304
+ 7d21416f-a85a-4a3a-84a9-b80c881c17ad
+ 27bf49db-0772-4584-83a1-c8b0fb9499ae
+ e59f084e-27d0-4af1-9e09-1fcb8d635f7d
+ 3488644e-6682-48b3-b768-5d8525f078a9
+(5 rows)
+
+ asset_state
+-------------
+ available
+(1 row)
+
+ discoverable_offer_count
+--------------------------
+                        1
+(1 row)
+
+DO
+ worker_eligibility_state
+--------------------------
+ verified
+(1 row)
+
+ approved_state
+----------------
+ approved
+(1 row)
+
+         handover_evidence_id
+--------------------------------------
+ d8e369b0-1c49-4437-b61c-cd9ad0ced0c3
+(1 row)
+
+ active_state
+--------------
+ active
+(1 row)
+
+ return_pending_state
+----------------------
+ return_pending
+(1 row)
+
+          return_evidence_id
+--------------------------------------
+ 01bf83eb-6078-4f5d-bab3-e1ffd5539e44
+(1 row)
+
+ closed_state
+--------------
+ closed
+(1 row)
+
+RESET
+ final_contract_state
+----------------------
+ closed
+(1 row)
+
+ final_asset_state
+-------------------
+ available
+(1 row)
+
+ immutable_event_count
+-----------------------
+                     5
+(1 row)
+
+ outbox_count
+--------------
+            5
+(1 row)
+
+RESET
+vehicle_access_result=PASS database=vehicle_access_validation_309454_1788753637 lifecycle=requested-approved-active-return_pending-closed

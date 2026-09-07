@@ -158,6 +158,30 @@ type matchResponse struct {
 	AlgorithmVersion string   `json:"algorithm_version"`
 }
 
+type driverOfferDeclineRequest struct {
+	OfferID        string `json:"offer_id"`
+	DriverUserID   int64  `json:"driver_user_id"`
+	Reason         string `json:"reason"`
+	IdempotencyKey string `json:"idempotency_key"`
+}
+
+type driverOfferDisclosureResponse struct {
+	OfferID                string `json:"offer_id"`
+	TripID                 string `json:"trip_id"`
+	ExpiresAt              string `json:"expires_at"`
+	PickupDistanceM        int64  `json:"pickup_distance_m"`
+	PickupETASeconds       int64  `json:"pickup_eta_seconds"`
+	DestinationAddress     string `json:"destination_address"`
+	DestinationDistanceM   int64  `json:"destination_distance_m"`
+	DestinationDurationS   int64  `json:"destination_duration_s"`
+	GrossFareKobo          int64  `json:"gross_fare_kobo"`
+	TaxesAndFeesKobo       int64  `json:"taxes_and_fees_kobo"`
+	PlatformCommissionBP   int64  `json:"platform_commission_bp"`
+	PlatformCommissionKobo int64  `json:"platform_commission_kobo"`
+	ExpectedDriverNetKobo  int64  `json:"expected_driver_net_kobo"`
+	DisclosureVersion      string `json:"disclosure_version"`
+}
+
 type candidate struct {
 	DriverUserID   int64
 	Latitude       float64
@@ -224,6 +248,8 @@ func main() {
 	mux.HandleFunc("/telematics/location-consents", svc.locationConsentHandler)
 	mux.HandleFunc("/queries/spatial-candidates", svc.spatialCandidateQueryHandler)
 	mux.HandleFunc("/events/reconcile-cache", svc.cacheReconcileHandler)
+	mux.HandleFunc("/offers/disclosures", svc.offerDisclosuresHandler)
+	mux.HandleFunc("/offers/decline", svc.declineOfferHandler)
 
 	server := &http.Server{
 		Addr:              cfg.BindHost + ":" + cfg.Port,
@@ -592,6 +618,100 @@ func (s *service) cacheReconcileHandler(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, map[string]any{"projected_drivers": count})
 }
 
+func (s *service) offerDisclosuresHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed")
+		return
+	}
+	if !s.requireInternalAccess(w, r) {
+		return
+	}
+	driverID, err := strconv.ParseInt(strings.TrimSpace(r.URL.Query().Get("driver_user_id")), 10, 64)
+	if err != nil || driverID <= 0 {
+		writeError(w, http.StatusBadRequest, "driver_user_id_is_required")
+		return
+	}
+	rows, err := s.db.QueryContext(r.Context(), `
+		SELECT offer_id::text, trip_id::text, expires_at, pickup_distance_m, pickup_eta_s,
+			destination_address, destination_distance_m, destination_duration_s,
+			gross_fare_kobo, taxes_and_fees_kobo, platform_commission_bp,
+			platform_commission_kobo, expected_driver_net_kobo, disclosure_version
+		FROM mobility.list_driver_offer_disclosures($1)`, driverID)
+	if err != nil {
+		log.Printf("load transparent offer disclosures driver=%d: %v", driverID, err)
+		writeError(w, http.StatusServiceUnavailable, "driver_offer_disclosures_unavailable")
+		return
+	}
+	defer rows.Close()
+	items := make([]driverOfferDisclosureResponse, 0)
+	for rows.Next() {
+		var item driverOfferDisclosureResponse
+		var expiresAt time.Time
+		if err := rows.Scan(
+			&item.OfferID, &item.TripID, &expiresAt, &item.PickupDistanceM, &item.PickupETASeconds,
+			&item.DestinationAddress, &item.DestinationDistanceM, &item.DestinationDurationS,
+			&item.GrossFareKobo, &item.TaxesAndFeesKobo, &item.PlatformCommissionBP,
+			&item.PlatformCommissionKobo, &item.ExpectedDriverNetKobo, &item.DisclosureVersion,
+		); err != nil {
+			log.Printf("scan transparent offer disclosures driver=%d: %v", driverID, err)
+			writeError(w, http.StatusServiceUnavailable, "driver_offer_disclosures_unavailable")
+			return
+		}
+		item.ExpiresAt = expiresAt.UTC().Format(time.RFC3339Nano)
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		log.Printf("iterate transparent offer disclosures driver=%d: %v", driverID, err)
+		writeError(w, http.StatusServiceUnavailable, "driver_offer_disclosures_unavailable")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"driver_user_id": driverID, "offers": items})
+}
+
+func (s *service) declineOfferHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed")
+		return
+	}
+	if !s.requireInternalAccess(w, r) {
+		return
+	}
+	var request driverOfferDeclineRequest
+	if !decodeJSON(w, r, &request) {
+		return
+	}
+	request.OfferID = strings.TrimSpace(request.OfferID)
+	request.Reason = strings.TrimSpace(request.Reason)
+	request.IdempotencyKey = strings.TrimSpace(request.IdempotencyKey)
+	if request.DriverUserID <= 0 || !isCanonicalUUID(request.OfferID) || !validIdempotencyKey(request.IdempotencyKey) || !validDriverOfferDeclineReason(request.Reason) {
+		writeError(w, http.StatusBadRequest, "invalid_driver_offer_decline")
+		return
+	}
+	var tripID, state string
+	var rematchRequired bool
+	err := s.db.QueryRowContext(r.Context(), `
+		SELECT trip_id::text, state::text, rematch_required
+		FROM mobility.decline_driver_offer_fairly($1::uuid,$2,$3::mobility.driver_offer_decline_reason,$4)`,
+		request.OfferID, request.DriverUserID, request.Reason, request.IdempotencyKey,
+	).Scan(&tripID, &state, &rematchRequired)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "driver_offer_not_found")
+			return
+		}
+		if databaseConstraintError(err) {
+			writeError(w, http.StatusConflict, "driver_offer_not_declineable")
+			return
+		}
+		log.Printf("decline transparent driver offer offer=%s driver=%d: %v", request.OfferID, request.DriverUserID, err)
+		writeError(w, http.StatusServiceUnavailable, "driver_offer_decline_unavailable")
+		return
+	}
+	_ = s.rdb.Del(r.Context(), fmt.Sprintf("rh:driver:{%d}:offer", request.DriverUserID)).Err()
+	logCorrelationEvent(r.Context(), "matching.driver_offer_declined", "trip_id", tripID, "offer_id", request.OfferID, "driver_user_id", request.DriverUserID, "reason", request.Reason, "rematch_required", rematchRequired)
+	writeJSON(w, http.StatusAccepted, map[string]any{"trip_id": tripID, "offer_id": request.OfferID, "state": state, "rematch_required": rematchRequired})
+}
+
 func (s *service) requireInternalAccess(w http.ResponseWriter, r *http.Request) bool {
 	provided := strings.TrimSpace(r.Header.Get("X-Internal-Service-Token"))
 	if provided == "" || subtle.ConstantTimeCompare([]byte(provided), []byte(s.cfg.InternalServiceToken)) != 1 {
@@ -714,38 +834,24 @@ func (s *service) matchTripOnce(ctx context.Context, request matchRequest) (matc
 		if err != nil {
 			return matchResponse{}, fmt.Errorf("marshal offer explanation: %w", err)
 		}
-		reservationResult, err := tx.ExecContext(ctx, `
-			WITH reservable AS (
-				SELECT p.driver_user_id
-				FROM mobility.driver_presence p
-				JOIN mobility.driver_eligibility e ON e.driver_user_id = p.driver_user_id
-				JOIN mobility.driver_profile d ON d.user_id = p.driver_user_id
-				WHERE p.driver_user_id = $1 AND p.state = 'available' AND p.location_valid_until > NOW()
-				  AND p.integrity_score >= $9 AND e.eligible = true AND e.eligible_until > NOW()
-				  AND d.account_state = 'active' AND d.safety_state = 'clear'
-				FOR UPDATE OF p SKIP LOCKED
-			), offer AS (
-				INSERT INTO mobility.driver_offer (id, match_attempt_id, trip_id, driver_user_id, rank, score, score_explanation, expires_at)
-				SELECT $2, $3, $4, reservable.driver_user_id, $5, $6, $7::jsonb, $8
-				FROM reservable
-				ON CONFLICT DO NOTHING
-				RETURNING driver_user_id
-			)
-			UPDATE mobility.driver_presence p
-			SET state = 'offer_pending', active_offer_id = $2, offer_expires_at = $8, version = version + 1, updated_at = NOW()
-			FROM offer
-			WHERE p.driver_user_id = offer.driver_user_id`,
-			item.DriverUserID, offerID, attemptID, trip.ID, index+1, item.Score, string(explanation), expiresAt, s.cfg.LocationMinIntegrity)
+		var issued bool
+		var issueReason string
+		err = tx.QueryRowContext(ctx, `
+				SELECT issued, reason
+				FROM mobility.create_transparent_driver_offer(
+					$1::uuid,$2::uuid,$3::uuid,$4,$5::smallint,$6::numeric,$7::jsonb,$8::timestamptz,$9,$10,$11
+				)`,
+			offerID, attemptID, trip.ID, item.DriverUserID, index+1, item.Score, string(explanation), expiresAt,
+			int(math.Round(item.DistanceM)), item.ETASeconds, s.cfg.LocationMinIntegrity,
+		).Scan(&issued, &issueReason)
 		if err != nil {
-			return matchResponse{}, fmt.Errorf("conditionally reserve and insert driver offer: %w", err)
+			return matchResponse{}, fmt.Errorf("issue transparent driver offer: %w", err)
 		}
-		rowsAffected, err := reservationResult.RowsAffected()
-		if err != nil {
-			return matchResponse{}, fmt.Errorf("verify driver offer reservation: %w", err)
-		}
-		if rowsAffected != 1 {
+		if !issued {
+			logCorrelationEvent(ctx, "matching.offer_not_issued", "trip_id", trip.ID, "driver_user_id", item.DriverUserID, "reason", issueReason)
 			continue
 		}
+
 		offers = append(offers, offerProjection{OfferID: offerID, TripID: trip.ID, ZoneID: trip.ZoneID, DriverID: item.DriverUserID, ExpiresAt: expiresAt})
 		response.OfferIDs = append(response.OfferIDs, offerID)
 	}
@@ -1440,6 +1546,39 @@ func getenvFloat(key string, fallback float64) float64 {
 		return fallback
 	}
 	return parsed
+}
+
+func validDriverOfferDeclineReason(value string) bool {
+	return map[string]bool{
+		"pickup_distance_unprofitable": true,
+		"pickup_time_unprofitable":     true,
+		"fare_insufficient":            true,
+		"destination_unsuitable":       true,
+		"safety_preference":            true,
+		"vehicle_constraint":           true,
+		"other":                        true,
+	}[value]
+}
+
+func validIdempotencyKey(value string) bool {
+	if len(value) < 8 || len(value) > 128 {
+		return false
+	}
+	for index, character := range value {
+		alphaNumeric := (character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') || (character >= '0' && character <= '9')
+		if index == 0 && !alphaNumeric {
+			return false
+		}
+		if !alphaNumeric && character != '.' && character != '_' && character != ':' && character != '-' {
+			return false
+		}
+	}
+	return true
+}
+
+func databaseConstraintError(err error) bool {
+	var databaseError *pq.Error
+	return errors.As(err, &databaseError) && (databaseError.Code == "23514" || databaseError.Code == "P0002")
 }
 
 func isCanonicalUUID(value string) bool {

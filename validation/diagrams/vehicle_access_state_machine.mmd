@@ -1,0 +1,30 @@
+stateDiagram-v2
+    direction LR
+    [*] --> intake
+    intake --> available: operator activates\nall 5 evidence types valid
+    available --> reserved: operator approves\nrequested contract
+    reserved --> active_access: handover evidence\noperator handover
+    active_access --> return_pending: worker begins return
+    return_pending --> available: return evidence\noperator closes contract
+    reserved --> available: worker cancels approved contract
+    available --> retired: operator retires asset
+    available --> maintenance_hold: operator maintenance hold
+    reserved --> safety_hold: operator suspends contract
+    active_access --> safety_hold: operator suspends contract
+    return_pending --> safety_hold: operator suspends contract
+    safety_hold --> return_pending: operator begins safe return
+    maintenance_hold --> intake: remediation and re-verification
+
+    state contract_flow {
+      [*] --> requested
+      requested --> approved: operator approve
+      approved --> active: handover proof + operator handover
+      active --> return_pending: worker begins return
+      return_pending --> closed: return proof + operator close
+      requested --> cancelled: worker cancel
+      approved --> cancelled: worker cancel
+      approved --> suspended: operator suspend
+      active --> suspended: operator suspend
+      return_pending --> suspended: operator suspend
+      suspended --> return_pending: operator safe return
+    }

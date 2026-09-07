@@ -1,0 +1,133 @@
+{
+  "project_info": {
+    "title": "Verification is an evidence workflow—not an automated identity verdict",
+    "created": 1788792051.85,
+    "last_updated": 1788792176.916,
+    "total_slides": 11
+  },
+  "slides": [
+    {
+      "id": "slide_1_evidence_workflow",
+      "state": "edited",
+      "pageNum": 1
+    },
+    {
+      "id": "slide_2_accountable_case",
+      "state": "edited",
+      "pageNum": 2
+    },
+    {
+      "id": "slide_3_cross_language",
+      "state": "edited",
+      "pageNum": 3
+    },
+    {
+      "id": "slide_4_provider_callbacks",
+      "state": "edited",
+      "pageNum": 4
+    },
+    {
+      "id": "slide_5_paddleocr_pipeline",
+      "state": "edited",
+      "pageNum": 5
+    },
+    {
+      "id": "slide_6_liveness_artifact",
+      "state": "edited",
+      "pageNum": 6
+    },
+    {
+      "id": "slide_7_processor_jobs",
+      "state": "edited",
+      "pageNum": 7
+    },
+    {
+      "id": "slide_8_final_verification",
+      "state": "edited",
+      "pageNum": 8
+    },
+    {
+      "id": "slide_9_local_evidence",
+      "state": "edited",
+      "pageNum": 9
+    },
+    {
+      "id": "slide_10_production_integration",
+      "state": "edited",
+      "pageNum": 10
+    },
+    {
+      "id": "slide_11_decision",
+      "state": "edited",
+      "pageNum": 11
+    }
+  ],
+  "outline": [
+    {
+      "id": "slide_1_evidence_workflow",
+      "title": "Verification is an evidence workflow—not an automated identity verdict",
+      "summary": "Covers the scope of stakeholders, consent requirements, evidence-only processor outputs, and PostgreSQL authority.",
+      "image_plan": "Use a suitable image if needed"
+    },
+    {
+      "id": "slide_2_accountable_case",
+      "title": "A single accountable case connects each stakeholder check",
+      "summary": "Details the verification_case structure, idempotent records, append-only events, and consent withdrawal behavior.",
+      "image_plan": "Use a suitable image if needed"
+    },
+    {
+      "id": "slide_3_cross_language",
+      "title": "The cross-language system separates speed from authority",
+      "summary": "Explains the roles of TypeScript, Go, Python, and Rust in the verification architecture.",
+      "image_plan": "Use a suitable image if needed"
+    },
+    {
+      "id": "slide_4_provider_callbacks",
+      "title": "Provider callbacks are authenticated before persistence",
+      "summary": "Details the HMAC-SHA-256 authentication, error handling, and database checks for provider callbacks.",
+      "image_plan": "Use a suitable image if needed"
+    },
+    {
+      "id": "slide_5_paddleocr_pipeline",
+      "title": "PaddleOCR pipeline protects integrity before extraction",
+      "summary": "Explains the Python intelligence service pipeline, SHA-256 byte-integrity checks, and manual-review fallback.",
+      "image_plan": "Use a suitable image if needed"
+    },
+    {
+      "id": "slide_6_liveness_artifact",
+      "title": "Liveness is a bounded artifact gate today",
+      "summary": "Describes the current liveness checks and the manual-review-only output for liveness artifacts.",
+      "image_plan": "Use a suitable image if needed"
+    },
+    {
+      "id": "slide_7_processor_jobs",
+      "title": "Processor jobs are lease-fenced and retry safely",
+      "summary": "Details the PostgreSQL FOR UPDATE SKIP LOCKED claim mechanism, claim tokens, and exponential retry behavior.",
+      "image_plan": "Use a suitable image if needed"
+    },
+    {
+      "id": "slide_8_final_verification",
+      "title": "Final verification requires all controls, not a model score",
+      "summary": "Explains the operator-only decision function, consent prerequisites, required checks, and human decision paths.",
+      "image_plan": "Use a suitable image if needed"
+    },
+    {
+      "id": "slide_9_local_evidence",
+      "title": "Local evidence validates the full control chain",
+      "summary": "Summarizes the local cross-language simulation results and the verified final decision flow.",
+      "image_plan": "Use a suitable image if needed"
+    },
+    {
+      "id": "slide_10_production_integration",
+      "title": "Production integration is provider-specific and approval-gated",
+      "summary": "Lists the required external providers, legal/compliance prerequisites, and security controls for production.",
+      "image_plan": "Use a suitable image if needed"
+    },
+    {
+      "id": "slide_11_decision",
+      "title": "Decision: keep humans accountable, keep systems verifiable",
+      "summary": "Concludes with the recommendation to maintain manual review and formal approval gates before automation.",
+      "image_plan": "Use a suitable image if needed"
+    }
+  ]
+}

@@ -1,0 +1,214 @@
+
+ RUN  v2.1.9 /home/ubuntu/DeliveryPlatform-commerce-field
+      Coverage enabled with v8
+
+ ✓ tests/medusa-commerce-signature.test.ts > Medusa commerce event signatures > accepts a matching SHA-256 signature with or without its conventional prefix
+ ✓ tests/medusa-commerce-signature.test.ts > Medusa commerce event signatures > rejects malformed, mismatched, and replay-altered raw bodies
+ ✓ tests/developer-webhook-delivery.test.ts > developer webhook delivery dispatcher > delivers a signed event and durably records a successful completion
+ ✓ tests/developer-webhook-delivery.test.ts > developer webhook delivery dispatcher > records a retriable delivery outcome when an endpoint rejects the signed event
+ ✓ tests/developer-webhook-delivery.test.ts > developer webhook delivery dispatcher > classifies a loopback connection reset as a retriable transport failure
+
+ Test Files  2 passed (2)
+      Tests  5 passed (5)
+   Start at  01:10:08
+   Duration  4.42s (transform 136ms, setup 0ms, collect 305ms, tests 76ms, environment 1ms, prepare 206ms)
+
+ % Coverage report from v8
+-------------------|---------|----------|---------|---------|-------------------
+File               | % Stmts | % Branch | % Funcs | % Lines | Uncovered Line #s
+-------------------|---------|----------|---------|---------|-------------------
+All files          |    1.17 |    17.16 |   16.57 |    1.17 |
+ ...commerce-field |       0 |        0 |       0 |       0 |
+  ...ght.config.ts |       0 |        0 |       0 |       0 | 1-12
+ ...eld/client/src |       0 |        0 |       0 |       0 |
+  App.tsx          |       0 |        0 |       0 |       0 | 1-427
+  const.ts         |       0 |        0 |       0 |       0 | 1-3
+  main.tsx         |       0 |        0 |       0 |       0 | 1-100
+ ...src/components |       0 |        0 |       0 |       0 |
+  ...ardLayout.tsx |       0 |        0 |       0 |       0 | 1-129
+  ...mmaryPage.tsx |       0 |        0 |       0 |       0 | 1-150
+ .../components/ui |       0 |        0 |       0 |       0 |
+  badge.tsx        |       0 |        0 |       0 |       0 | 1-34
+  card.tsx         |       0 |        0 |       0 |       0 | 1-25
+ ...client/src/lib |       0 |        0 |       0 |       0 |
+  trpc.ts          |       0 |        0 |       0 |       0 | 1-4
+ ...ient/src/pages |       0 |        0 |       0 |       0 |
+  ...Lifecycle.tsx |       0 |        0 |       0 |       0 | 1-346
+  Analytics.tsx    |       0 |        0 |       0 |       0 | 1-217
+  ...lfillment.tsx |       0 |        0 |       0 |       0 | 1-249
+  ...xperience.tsx |       0 |        0 |       0 |       0 | 1-21
+  ...rPlatform.tsx |       0 |        0 |       0 |       0 | 1-433
+  ...rMobility.tsx |       0 |        0 |       0 |       0 | 1-76
+  ...perations.tsx |       0 |        0 |       0 |       0 | 1-510
+  ...istration.tsx |       0 |        0 |       0 |       0 | 1-70
+  ...trolTower.tsx |       0 |        0 |       0 |       0 | 1-550
+  ...tChannels.tsx |       0 |        0 |       0 |       0 | 1-168
+  ...ingStudio.tsx |       0 |        0 |       0 |       0 | 1-124
+  ...tyProfile.tsx |       0 |        0 |       0 |       0 | 1-200
+  ...eRecovery.tsx |       0 |        0 |       0 |       0 | 1-72
+  ...eCommerce.tsx |       0 |        0 |       0 |       0 | 1-38
+  ...inActions.tsx |       0 |        0 |       0 |       0 | 1-269
+  ...LabelApps.tsx |       0 |        0 |       0 |       0 | 1-38
+ ...lience-test/k6 |       0 |        0 |       0 |       0 |
+  ...nt_ingress.js |       0 |        0 |       0 |       0 | 1-306
+ ...-field/drizzle |       0 |      100 |     100 |       0 |
+  schema.ts        |       0 |      100 |     100 |       0 | 11-57
+ ...witchos-native |       0 |        0 |       0 |       0 |
+  app.config.ts    |       0 |        0 |       0 |       0 | 1-130
+  ...zle.config.ts |       0 |        0 |       0 |       0 | 1-15
+  metro.config.js  |       0 |        0 |       0 |       0 | 1-11
+  ...ind.config.js |       0 |        0 |       0 |       0 | 1-33
+  theme.config.js  |       0 |        0 |       0 |       0 | 1-15
+ ...hos-native/app |       0 |        0 |       0 |       0 |
+  _layout.tsx      |       0 |        0 |       0 |       0 | 1-43
+ ...ive/app/(tabs) |       0 |        0 |       0 |       0 |
+  _layout.tsx      |       0 |        0 |       0 |       0 | 1-76
+  dispatch.tsx     |       0 |        0 |       0 |       0 | 1-379
+  growth.tsx       |       0 |        0 |       0 |       0 | 1-519
+  index.tsx        |       0 |        0 |       0 |       0 | 1-200
+  logistics.tsx    |       0 |        0 |       0 |       0 | 1-545
+  queue.tsx        |       0 |        0 |       0 |       0 | 1-411
+ ...native/app/dev |       0 |        0 |       0 |       0 |
+  theme-lab.tsx    |       0 |        0 |       0 |       0 | 1-241
+ ...tive/app/oauth |       0 |        0 |       0 |       0 |
+  callback.tsx     |       0 |        0 |       0 |       0 | 1-271
+ ...ive/components |       0 |        0 |       0 |       0 |
+  ...rnal-link.tsx |       0 |        0 |       0 |       0 | 1-25
+  haptic-tab.tsx   |       0 |        0 |       0 |       0 | 1-18
+  hello-wave.tsx   |       0 |        0 |       0 |       0 | 1-20
+  ...roll-view.tsx |       0 |        0 |       0 |       0 | 1-80
+  ...container.tsx |       0 |        0 |       0 |       0 | 1-68
+  themed-view.tsx  |       0 |        0 |       0 |       0 | 1-15
+ ...ponents/mobile |       0 |        0 |       0 |       0 |
+  ...ations-ui.tsx |       0 |        0 |       0 |       0 | 1-629
+  ...ion-sheet.tsx |       0 |        0 |       0 |       0 | 1-208
+  ...rch-panel.tsx |       0 |        0 |       0 |       0 | 1-151
+ .../components/ui |       0 |        0 |       0 |       0 |
+  collapsible.tsx  |       0 |        0 |       0 |       0 | 1-30
+  ...ymbol.ios.tsx |       0 |        0 |       0 |       0 | 1-32
+  icon-symbol.tsx  |       0 |        0 |       0 |       0 | 1-38
+ ...tive/constants |       0 |        0 |       0 |       0 |
+  const.ts         |       0 |        0 |       0 |       0 | 1-5
+  oauth.ts         |       0 |        0 |       0 |       0 | 1-131
+  theme.ts         |       0 |        0 |       0 |       0 | 1
+ ...native/drizzle |       0 |       50 |      50 |       0 |
+  relations.ts     |       0 |        0 |       0 |       0 |
+  schema.ts        |       0 |        0 |       0 |       0 | 1-23
+ ...s-native/hooks |       0 |        0 |       0 |       0 |
+  use-auth.ts      |       0 |        0 |       0 |       0 | 1-143
+  ...lor-scheme.ts |       0 |        0 |       0 |       0 | 1-5
+  ...scheme.web.ts |       0 |        0 |       0 |       0 | 1-21
+  use-colors.ts    |       0 |        0 |       0 |       0 | 1-12
+ ...hos-native/lib |       0 |        0 |       0 |       0 |
+  ...-provider.tsx |       0 |        0 |       0 |       0 | 1-103
+  trpc.ts          |       0 |        0 |       0 |       0 | 1-42
+  utils.ts         |       0 |        0 |       0 |       0 | 1-15
+ ...tive/lib/_core |       0 |        0 |       0 |       0 |
+  api.ts           |       0 |        0 |       0 |       0 | 1-172
+  auth.ts          |       0 |        0 |       0 |       0 | 1-129
+  manus-runtime.ts |       0 |        0 |       0 |       0 | 1-121
+  ...-pressable.ts |       0 |        0 |       0 |       0 | 1-5
+  theme.ts         |       0 |        0 |       0 |       0 | 1-85
+ ...ive/lib/mobile |       0 |    28.57 |   28.57 |       0 |
+  analytics.ts     |       0 |        0 |       0 |       0 | 1-51
+  api.ts           |       0 |        0 |       0 |       0 | 1-477
+  attachments.ts   |       0 |        0 |       0 |       0 | 1-24
+  haptics.ts       |       0 |        0 |       0 |       0 | 1-39
+  provider.tsx     |       0 |        0 |       0 |       0 | 1-589
+  types.ts         |       0 |        0 |       0 |       0 |
+  workspace.ts     |       0 |      100 |     100 |       0 | 28-186
+ ...native/scripts |       0 |        0 |       0 |       0 |
+  generate_qr.mjs  |       0 |        0 |       0 |       0 | 1-12
+  load-env.js      |       0 |        0 |       0 |       0 | 1-49
+  reset-project.js |       0 |        0 |       0 |       0 | 1-112
+ ...-native/server |       0 |        0 |       0 |       0 |
+  db.ts            |       0 |        0 |       0 |       0 | 1-90
+  routers.ts       |       0 |        0 |       0 |       0 | 1-55
+  smart-search.ts  |       0 |        0 |       0 |       0 | 1-130
+  storage.ts       |       0 |        0 |       0 |       0 | 1-97
+ ...e/server/_core |       0 |     6.66 |    6.66 |       0 |
+  context.ts       |       0 |        0 |       0 |       0 | 1-26
+  cookies.ts       |       0 |      100 |     100 |       0 | 3-69
+  dataApi.ts       |       0 |        0 |       0 |       0 | 1-64
+  env.ts           |       0 |        0 |       0 |       0 | 1-10
+  heartbeat.ts     |       0 |        0 |       0 |       0 | 1-213
+  ...Generation.ts |       0 |        0 |       0 |       0 | 1-143
+  index.ts         |       0 |        0 |       0 |       0 | 1-85
+  llm.ts           |       0 |        0 |       0 |       0 | 1-428
+  notification.ts  |       0 |        0 |       0 |       0 | 1-107
+  oauth.ts         |       0 |        0 |       0 |       0 | 1-174
+  sdk.ts           |       0 |        0 |       0 |       0 | 1-319
+  storageProxy.ts  |       0 |        0 |       0 |       0 | 1-48
+  systemRouter.ts  |       0 |        0 |       0 |       0 | 1-29
+  trpc.ts          |       0 |        0 |       0 |       0 | 1-45
+  ...nscription.ts |       0 |        0 |       0 |       0 | 1-241
+ ...er/_core/types |       0 |        0 |       0 |       0 |
+  manusTypes.ts    |       0 |        0 |       0 |       0 |
+ ...-native/shared |       0 |        0 |       0 |       0 |
+  const.ts         |       0 |        0 |       0 |       0 | 1-5
+  types.ts         |       0 |        0 |       0 |       0 | 1-7
+ ...e/shared/_core |       0 |      100 |     100 |       0 |
+  errors.ts        |       0 |      100 |     100 |       0 | 5-19
+ ...e-field/public |       0 |        0 |       0 |       0 |
+  sw.js            |       0 |        0 |       0 |       0 | 1-69
+ ...-field/scripts |       0 |        0 |       0 |       0 |
+  ...ry-floors.cjs |       0 |        0 |       0 |       0 | 1-12
+  ...cy-server.cjs |       0 |        0 |       0 |       0 | 1-39
+  ...ion-audit.cjs |       0 |        0 |       0 |       0 | 1-30
+  ...ped-tests.cjs |       0 |        0 |       0 |       0 | 1-34
+  ...cns-patch.cjs |       0 |        0 |       0 |       0 | 1-44
+  ...ntegration.ts |       0 |        0 |       0 |       0 | 1-12
+  ...ion-audit.cjs |       0 |        0 |       0 |       0 | 1-44
+ ...cripts/testing |       0 |        0 |       0 |       0 |
+  ...mail-sink.mjs |       0 |        0 |       0 |       0 | 1-58
+  ...n-h3-load.mjs |       0 |        0 |       0 |       0 | 1-137
+  ...r-fixture.mjs |       0 |        0 |       0 |       0 | 1-47
+  ...peak-load.mjs |       0 |        0 |       0 |       0 | 1-97
+ ...e-field/server |       0 |        0 |       0 |       0 |
+  db.ts            |       0 |        0 |       0 |       0 | 1-8458
+  routers.ts       |       0 |        0 |       0 |       0 | 1-868
+ ...d/server/_core |    3.46 |    30.55 |      44 |    3.46 |
+  ...cycleStore.ts |       0 |        0 |       0 |       0 | 1-1208
+  auth.ts          |       0 |        0 |       0 |       0 | 1-357
+  ...ulfillment.ts |       0 |        0 |       0 |       0 | 1-101
+  cookies.ts       |       0 |        0 |       0 |       0 | 1-14
+  ...ckingStore.ts |       0 |        0 |       0 |       0 | 1-30
+  developerApi.ts  |       0 |        0 |       0 |       0 | 1-391
+  ...perOpenApi.ts |       0 |        0 |       0 |       0 | 1-224
+  ...Dispatcher.ts |   84.66 |       50 |   83.33 |   84.66 | ...,76-79,161-171
+  ...hOptimizer.ts |       0 |      100 |     100 |       0 | 18-53
+  env.ts           |   79.37 |    25.49 |     100 |   79.37 | ...40-141,148-149
+  fieldService.ts  |       0 |        0 |       0 |       0 | 1-323
+  ...AdminStore.ts |       0 |        0 |       0 |       0 | 1-178
+  index.ts         |       0 |        0 |       0 |       0 | 1-2910
+  ...tionProbes.ts |       0 |        0 |       0 |       0 | 1-390
+  ...perGateway.ts |       0 |        0 |       0 |       0 | 1-840
+  longcat.ts       |       0 |        0 |       0 |       0 | 1-682
+  ...catActions.ts |       0 |        0 |       0 |       0 | 1-220
+  longcatVoice.ts  |       0 |        0 |       0 |       0 | 1-1625
+  ...saCommerce.ts |   17.64 |    83.33 |      25 |   17.64 | 7-49,70-120
+  ...ionGateway.ts |       0 |        0 |       0 |       0 | 1-174
+  ...onalEvents.ts |       0 |        0 |       0 |       0 | 1-277
+  ...rAuthStore.ts |       0 |        0 |       0 |       0 | 1-253
+  podStorage.ts    |       0 |      100 |     100 |       0 | 7-19
+  policy.ts        |       0 |        0 |       0 |       0 | 1-280
+  ...tification.ts |       0 |      100 |     100 |       0 | 20-116
+  rateLimiter.ts   |       0 |        0 |       0 |       0 | 1-108
+  scheduledJobs.ts |       0 |        0 |       0 |       0 | 1-233
+  ...mandCenter.ts |       0 |        0 |       0 |       0 | 1-297
+  systemRouter.ts  |       0 |        0 |       0 |       0 | 1-70
+  trpc.ts          |       0 |        0 |       0 |       0 | 1-140
+ ...eld/server/lib |       0 |        0 |       0 |       0 |
+  lakehouse.ts     |       0 |        0 |       0 |       0 | 1-224
+  ...Workspaces.ts |       0 |        0 |       0 |       0 | 1-463
+ .../commerce-core |       0 |        0 |       0 |       0 |
+  medusa-config.js |       0 |        0 |       0 |       0 | 1-26
+ ...rc/subscribers |       0 |        0 |       0 |       0 |
+  ...m-commerce.ts |       0 |        0 |       0 |       0 | 1-41
+ ...e-field/shared |       0 |        0 |       0 |       0 |
+  const.ts         |       0 |        0 |       0 |       0 | 1-20
+ ...eld/validation |       0 |        0 |       0 |       0 |
+  ...nvoice_e2e.ts |       0 |        0 |       0 |       0 | 1-139
+  ...erformance.ts |       0 |        0 |       0 |       0 | 1-326
+  ...pgrade_e2e.ts |       0 |        0 |       0 |       0 | 1-108
+-------------------|---------|----------|---------|---------|-------------------

@@ -1,0 +1,20 @@
+{
+  "name": "deliveryplatform-medusa-commerce-core",
+  "private": true,
+  "version": "1.0.0",
+  "description": "MIT-core Medusa commerce service with DeliveryPlatform fulfillment event forwarding.",
+  "scripts": {
+    "build": "medusa build",
+    "develop": "medusa develop",
+    "start": "medusa start",
+    "migrate": "medusa db:migrate"
+  },
+  "dependencies": {
+    "@medusajs/admin-sdk": "2.20.1",
+    "@medusajs/medusa": "2.20.1",
+    "pg": "8.16.3",
+    "ts-node": "10.9.2",
+    "typescript": "5.9.3"
+  },
+  "engines": { "node": ">=22.12.0" }
+}

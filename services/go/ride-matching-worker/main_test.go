@@ -43,3 +43,43 @@ func TestH3SearchRingIsBoundedForConfiguredLagosRadius(t *testing.T) {
 		t.Fatal("expected a bounded H3 grid disk")
 	}
 }
+
+func TestValidDriverOfferDeclineReason(t *testing.T) {
+	for _, reason := range []string{
+		"pickup_distance_unprofitable",
+		"pickup_time_unprofitable",
+		"fare_insufficient",
+		"destination_unsuitable",
+		"safety_preference",
+		"vehicle_constraint",
+		"other",
+	} {
+		if !validDriverOfferDeclineReason(reason) {
+			t.Fatalf("expected reason %q to be accepted", reason)
+		}
+	}
+	for _, reason := range []string{"", "account_block", "pickup_distance_unprofitable;DROP"} {
+		if validDriverOfferDeclineReason(reason) {
+			t.Fatalf("expected reason %q to be rejected", reason)
+		}
+	}
+}
+
+func TestValidIdempotencyKey(t *testing.T) {
+	for _, key := range []string{"fair-decline-0001", "offer.1234:retry_1"} {
+		if !validIdempotencyKey(key) {
+			t.Fatalf("expected key %q to be accepted", key)
+		}
+	}
+	for _, key := range []string{"short", " leading-key", "bad/key", ""} {
+		if validIdempotencyKey(key) {
+			t.Fatalf("expected key %q to be rejected", key)
+		}
+	}
+}
+
+func TestFairnessEndpointsRegistered(t *testing.T) {
+	if !validDriverOfferDeclineReason("pickup_distance_unprofitable") {
+		t.Fatal("fair decline endpoint must retain a pickup-economics refusal reason")
+	}
+}

@@ -1,0 +1,188 @@
+{
+  "project_info": {
+    "title": "Gig-Worker Vehicle Access & Fair Dispatch",
+    "created": 1788783723.743,
+    "last_updated": 1788784071.125,
+    "total_slides": 16
+  },
+  "slides": [
+    {
+      "id": "cover",
+      "state": "edited",
+      "pageNum": 1
+    },
+    {
+      "id": "slide_1_problem",
+      "state": "edited",
+      "pageNum": 2
+    },
+    {
+      "id": "slide_2_vehicle_access",
+      "state": "edited",
+      "pageNum": 3
+    },
+    {
+      "id": "slide_3_vehicle_schema",
+      "state": "edited",
+      "pageNum": 4
+    },
+    {
+      "id": "slide_4_vehicle_state",
+      "state": "edited",
+      "pageNum": 5
+    },
+    {
+      "id": "slide_5_fair_offers",
+      "state": "edited",
+      "pageNum": 6
+    },
+    {
+      "id": "slide_6_fair_decline",
+      "state": "edited",
+      "pageNum": 7
+    },
+    {
+      "id": "slide_7_fairness_schema",
+      "state": "edited",
+      "pageNum": 8
+    },
+    {
+      "id": "slide_8_fairness_state",
+      "state": "edited",
+      "pageNum": 9
+    },
+    {
+      "id": "slide_9_win_win_floors",
+      "state": "edited",
+      "pageNum": 10
+    },
+    {
+      "id": "slide_10_dynamic_prices",
+      "state": "edited",
+      "pageNum": 11
+    },
+    {
+      "id": "slide_11_fee_residual",
+      "state": "edited",
+      "pageNum": 12
+    },
+    {
+      "id": "slide_12_governance",
+      "state": "edited",
+      "pageNum": 13
+    },
+    {
+      "id": "slide_13_status",
+      "state": "edited",
+      "pageNum": 14
+    },
+    {
+      "id": "slide_14_decision",
+      "state": "edited",
+      "pageNum": 15
+    },
+    {
+      "id": "references",
+      "state": "edited",
+      "pageNum": 16
+    }
+  ],
+  "outline": [
+    {
+      "id": "cover",
+      "title": "Gig-Worker Vehicle Access & Fair Dispatch",
+      "summary": "A clean-room architecture for transparent offers, safe vehicle access, and positive contribution economics",
+      "image_plan": "Use a suitable image if needed"
+    },
+    {
+      "id": "slide_1_problem",
+      "title": "The operating problem: hidden economics destroy supply trust",
+      "summary": "Outlines the verified problems of opaque commissions, punitive cancellations, and unviable pickups based on driver complaints.",
+      "image_plan": "Use a suitable image if needed"
+    },
+    {
+      "id": "slide_2_vehicle_access",
+      "title": "Vehicle access makes productive assets available safely",
+      "summary": "Introduces the PostgreSQL-authoritative vehicle access module that keeps asset and contract states separate from ride dispatch.",
+      "image_plan": "Use a suitable image if needed"
+    },
+    {
+      "id": "slide_3_vehicle_schema",
+      "title": "Vehicle-Access Schema Architecture",
+      "summary": "Visualizes the vehicle access database schema relationships.",
+      "image_plan": "Use a suitable image if needed"
+    },
+    {
+      "id": "slide_4_vehicle_state",
+      "title": "Vehicle-Access Lifecycle State Machine",
+      "summary": "Visualizes the vehicle asset and contract state machine transitions.",
+      "image_plan": "Use a suitable image if needed"
+    },
+    {
+      "id": "slide_5_fair_offers",
+      "title": "Fair offers are transparent before acceptance",
+      "summary": "Explains the 15.00% commission cap, pickup limits, full destination disclosure, and database trigger protection.",
+      "image_plan": "Use a suitable image if needed"
+    },
+    {
+      "id": "slide_6_fair_decline",
+      "title": "A fair decline restores availability, not punishment",
+      "summary": "Explains the reason-coded idempotent decline that restores driver availability without mutating rating or account state.",
+      "image_plan": "Use a suitable image if needed"
+    },
+    {
+      "id": "slide_7_fairness_schema",
+      "title": "Driver-Dispatch Fairness Schema Architecture",
+      "summary": "Visualizes the driver dispatch fairness database schema relationships.",
+      "image_plan": "Use a suitable image if needed"
+    },
+    {
+      "id": "slide_8_fairness_state",
+      "title": "Driver-Dispatch Fairness State Machine",
+      "summary": "Visualizes the transparent offer and fair decline state machine flow.",
+      "image_plan": "Use a suitable image if needed"
+    },
+    {
+      "id": "slide_9_win_win_floors",
+      "title": "Win-win economics starts with two hard floors",
+      "summary": "Defines the mandatory driver proceeds floor and platform contribution target required before an offer is dispatched.",
+      "image_plan": "Use a suitable image if needed"
+    },
+    {
+      "id": "slide_10_dynamic_prices",
+      "title": "Dynamic prices should be observable, bounded, and explained",
+      "summary": "Details the quote components, appropriate input update frequencies, and prohibited opaque scoring uses.",
+      "image_plan": "Use a suitable image if needed"
+    },
+    {
+      "id": "slide_11_fee_residual",
+      "title": "Pick the fee only after protecting driver economics",
+      "summary": "Explains calculating the platform fee as a residual within the published cap, rather than a fixed percentage.",
+      "image_plan": "Use a suitable image if needed"
+    },
+    {
+      "id": "slide_12_governance",
+      "title": "Governance keeps dynamic policy credible",
+      "summary": "Outlines the required two-key approval process, key metrics, and phased rollout for dynamic pricing policies.",
+      "image_plan": "Use a suitable image if needed"
+    },
+    {
+      "id": "slide_13_status",
+      "title": "Implementation status and evidence boundary",
+      "summary": "Summarizes the implemented local controls, passing tests, and external operational prerequisites.",
+      "image_plan": "Use a suitable image if needed"
+    },
+    {
+      "id": "slide_14_decision",
+      "title": "Decision: build trust as an operating advantage",
+      "summary": "Concludes with the strategic recommendation to compete on transparent choice and honest platform contribution.",
+      "image_plan": "Use a suitable image if needed"
+    },
+    {
+      "id": "references",
+      "title": "References",
+      "summary": "Lists the cited video and public data sources.",
+      "image_plan": "Use a suitable image if needed"
+    }
+  ]
+}

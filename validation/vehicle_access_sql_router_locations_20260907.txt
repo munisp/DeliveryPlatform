@@ -1,0 +1,87 @@
+--- migration locations ---
+40:CREATE TABLE IF NOT EXISTS vehicle_access.vehicle_asset (
+57:CREATE INDEX IF NOT EXISTS vehicle_access_asset_provider_state_idx ON vehicle_access.vehicle_asset (provider_id, state, created_at);
+61:  asset_id uuid NOT NULL REFERENCES vehicle_access.vehicle_asset(id) ON DELETE RESTRICT,
+78:  asset_id uuid NOT NULL REFERENCES vehicle_access.vehicle_asset(id) ON DELETE RESTRICT,
+99:  asset_id uuid NOT NULL REFERENCES vehicle_access.vehicle_asset(id) ON DELETE RESTRICT,
+104:  price_snapshot jsonb NOT NULL CHECK (jsonb_typeof(price_snapshot) = 'object'),
+118:  EXCLUDE USING gist (asset_id WITH =, tstzrange(starts_at, ends_at, '[)') WITH &&)
+175:CREATE OR REPLACE FUNCTION vehicle_access.is_operator(p_user_id integer)
+201:  IF NOT vehicle_access.is_operator(p_actor) THEN RAISE EXCEPTION 'operator role required' USING ERRCODE='42501'; END IF;
+208:  IF NOT vehicle_access.is_operator(p_actor) THEN RAISE EXCEPTION 'operator role required' USING ERRCODE='42501'; END IF;
+219:  IF NOT vehicle_access.is_operator(p_actor) THEN RAISE EXCEPTION 'operator role required' USING ERRCODE='42501'; END IF;
+222:  INSERT INTO vehicle_access.vehicle_asset(provider_id,registration_number,vin_digest,make,model,manufacture_year,odometer_km,passenger_capacity,allowed_work_categories,state,created_at,updated_at)
+230:  IF NOT vehicle_access.is_operator(p_actor) THEN RAISE EXCEPTION 'operator role required' USING ERRCODE='42501'; END IF;
+242:  IF NOT vehicle_access.is_operator(p_actor) THEN RAISE EXCEPTION 'operator role required' USING ERRCODE='42501'; END IF;
+243:  SELECT state INTO v_state FROM vehicle_access.vehicle_asset WHERE id=p_asset FOR UPDATE;
+247:  UPDATE vehicle_access.vehicle_asset SET state='available',compliance_verified_at=p_now,updated_at=p_now WHERE id=p_asset;
+254:  IF NOT vehicle_access.is_operator(p_actor) THEN RAISE EXCEPTION 'operator role required' USING ERRCODE='42501'; END IF;
+255:  IF NOT EXISTS(SELECT 1 FROM vehicle_access.vehicle_asset WHERE id=p_asset AND provider_id=p_provider AND state='available') THEN RAISE EXCEPTION 'available provider asset required' USING ERRCODE='23514'; END IF;
+260:CREATE OR REPLACE FUNCTION vehicle_access.request_contract(p_worker integer,p_offer uuid,p_starts timestamptz,p_ends timestamptz,p_key text,p_now timestamptz DEFAULT clock_timestamp())
+266:  IF NOT FOUND OR NOT EXISTS(SELECT 1 FROM vehicle_access.vehicle_asset WHERE id=v_offer.asset_id AND state='available') THEN RAISE EXCEPTION 'available offer required' USING ERRCODE='23514'; END IF;
+270:    JOIN vehicle_access.vehicle_asset asset ON asset.id=v_offer.asset_id
+284:  INSERT INTO vehicle_access.access_contract(worker_user_id,provider_id,asset_id,offer_id,starts_at,ends_at,price_snapshot,created_at,updated_at)
+291:CREATE OR REPLACE FUNCTION vehicle_access.transition_contract(p_actor integer,p_contract uuid,p_action text,p_reason text,p_key text,p_now timestamptz DEFAULT clock_timestamp())
+301:    IF v_contract.state='approved' THEN UPDATE vehicle_access.vehicle_asset SET state='available',updated_at=p_now WHERE id=v_contract.asset_id; END IF;
+303:    v_next='return_pending'; v_event='vehicle_access.contract.return_pending'; UPDATE vehicle_access.vehicle_asset SET state='return_pending',updated_at=p_now WHERE id=v_contract.asset_id;
+304:  ELSIF NOT vehicle_access.is_operator(p_actor) THEN RAISE EXCEPTION 'operator role required' USING ERRCODE='42501';
+306:    IF NOT EXISTS(SELECT 1 FROM vehicle_access.vehicle_asset WHERE id=v_contract.asset_id AND state='available') THEN RAISE EXCEPTION 'asset unavailable' USING ERRCODE='23514'; END IF;
+307:    v_next='approved'; v_event='vehicle_access.contract.approved'; UPDATE vehicle_access.vehicle_asset SET state='reserved',updated_at=p_now WHERE id=v_contract.asset_id;
+310:    v_next='active'; v_event='vehicle_access.contract.activated'; UPDATE vehicle_access.vehicle_asset SET state='active_access',updated_at=p_now WHERE id=v_contract.asset_id;
+313:    v_next='closed'; v_event='vehicle_access.contract.closed'; UPDATE vehicle_access.vehicle_asset SET state='available',updated_at=p_now WHERE id=v_contract.asset_id;
+316:    v_next='suspended'; v_event='vehicle_access.contract.suspended'; UPDATE vehicle_access.vehicle_asset SET state='safety_hold',updated_at=p_now WHERE id=v_contract.asset_id;
+318:    v_next='return_pending'; v_event='vehicle_access.contract.return_pending'; UPDATE vehicle_access.vehicle_asset SET state='return_pending',updated_at=p_now WHERE id=v_contract.asset_id;
+331:  IF p_actor<>v_contract.worker_user_id AND NOT vehicle_access.is_operator(p_actor) THEN RAISE EXCEPTION 'contract actor required' USING ERRCODE='42501'; END IF;
+343:  WHERE vehicle_access.is_operator(p_actor) OR c.worker_user_id=p_actor ORDER BY c.updated_at DESC LIMIT LEAST(GREATEST(p_limit,1),100);
+349:  FROM vehicle_access.vehicle_offer o JOIN vehicle_access.vehicle_asset a ON a.id=o.asset_id JOIN vehicle_access.fleet_provider p ON p.id=o.provider_id
+354:REVOKE ALL ON ALL TABLES IN SCHEMA vehicle_access FROM PUBLIC;
+355:REVOKE ALL ON ALL FUNCTIONS IN SCHEMA vehicle_access FROM PUBLIC;
+359:    GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA vehicle_access TO vehicle_access_service;
+--- router locations ---
+6:  authenticatedProcedure,
+7:  protectedProcedure,
+229:    queueReplenishment: protectedProcedure
+276:    loyaltyIntervention: protectedProcedure
+289:    merchantGrowthCampaign: protectedProcedure
+307:    plan: protectedProcedure
+365:    listWorkOrders: authenticatedProcedure
+391:    workOrderDetail: authenticatedProcedure
+399:    upsertServiceArea: protectedProcedure
+422:    upsertTechnician: protectedProcedure
+436:    setTechnicianServiceArea: protectedProcedure
+447:    createWorkOrder: protectedProcedure
+473:    scheduleWorkOrder: protectedProcedure
+488:    assignWorkOrder: protectedProcedure
+502:    advanceWorkOrder: authenticatedProcedure
+517:    recordWorkOrderProof: authenticatedProcedure
+539:    completeWorkOrder: authenticatedProcedure
+561:    cancelWorkOrder: protectedProcedure
+577:  vehicleAccess: router({
+578:    listOffers: authenticatedProcedure
+585:    listContracts: authenticatedProcedure
+597:    requestContract: authenticatedProcedure
+612:    recordInspection: authenticatedProcedure
+635:    transition: authenticatedProcedure
+653:    createProvider: protectedProcedure
+663:    verifyWorkerEligibility: protectedProcedure
+679:    registerAsset: protectedProcedure
+701:    recordAssetEvidence: protectedProcedure
+724:    activateAsset: protectedProcedure
+737:    createOffer: protectedProcedure
+743:          weeklyPriceMinor: z.number().int().positive().max(1000000000),
+753:    operateTransition: protectedProcedure
+780:    list: protectedProcedure
+792:    transition: protectedProcedure
+814:    upsertMedusaStore: protectedProcedure
+830:    listClients: protectedProcedure.query(({ ctx }) =>
+833:    listKeys: protectedProcedure
+838:    listWebhookEndpoints: protectedProcedure
+843:    createClient: protectedProcedure
+853:    createKey: protectedProcedure
+877:    revokeKey: protectedProcedure
+882:    createWebhookEndpoint: protectedProcedure
+946:    startVoiceSession: protectedProcedure
+972:    startMessagingSession: protectedProcedure
+998:    appendVoiceTurn: protectedProcedure
+1017:    appendMessagingTurn: protectedProcedure
+1038:    executeAction: protectedProcedure
