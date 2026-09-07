@@ -1,0 +1,5 @@
+k6_production_target_refusal_exit=1
+toxiproxy_production_target_refusal_exit=1
+k6_binary_present=no
+network_calls_performed=0
+result=PASS

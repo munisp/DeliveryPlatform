@@ -33,7 +33,7 @@ var allowedAlerts = map[string]bool{
 var errUnsafeBreakerState = errors.New("breaker is not safely openable")
 
 type config struct {
-	token, namespace, configMap, kubeAPI, certFile, keyFile string
+	token, namespace, configMap, kubeAPI, kubeScheme, certFile, keyFile, serviceAccountTokenFile, serviceAccountCAFile string
 }
 
 type alertmanagerPayload struct {
@@ -136,13 +136,14 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	client, err := kubeClient()
+	client, err := kubeClient(cfg)
 	if err != nil {
 		log.Fatal(err)
 	}
+	tokenReader := func() ([]byte, error) { return os.ReadFile(cfg.serviceAccountTokenFile) }
 	server := &http.Server{
 		Addr:              ":8443",
-		Handler:           newHandler(cfg, client, readServiceAccountToken, newReceiverMetrics()),
+		Handler:           newHandler(cfg, client, tokenReader, newReceiverMetrics()),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      10 * time.Second,
@@ -166,15 +167,21 @@ func newHandler(cfg config, client *http.Client, tokenReader func() ([]byte, err
 
 func loadConfig() (config, error) {
 	cfg := config{
-		token:     strings.TrimSpace(os.Getenv("ALERTMANAGER_WEBHOOK_TOKEN")),
-		namespace: getenv("TARGET_NAMESPACE", "resilience-test"),
-		configMap: getenv("TARGET_CONFIGMAP", "resilience-validation-circuit-breaker"),
-		kubeAPI:   getenv("KUBERNETES_SERVICE_HOST", "kubernetes.default.svc"),
-		certFile:  getenv("TLS_CERT_FILE", "/var/run/receiver-tls/tls.crt"),
-		keyFile:   getenv("TLS_KEY_FILE", "/var/run/receiver-tls/tls.key"),
+		token:                   strings.TrimSpace(os.Getenv("ALERTMANAGER_WEBHOOK_TOKEN")),
+		namespace:               getenv("TARGET_NAMESPACE", "resilience-test"),
+		configMap:               getenv("TARGET_CONFIGMAP", "resilience-validation-circuit-breaker"),
+		kubeAPI:                 getenv("KUBERNETES_SERVICE_HOST", "kubernetes.default.svc"),
+		kubeScheme:              getenv("KUBERNETES_API_SCHEME", "https"),
+		certFile:                getenv("TLS_CERT_FILE", "/var/run/receiver-tls/tls.crt"),
+		keyFile:                 getenv("TLS_KEY_FILE", "/var/run/receiver-tls/tls.key"),
+		serviceAccountTokenFile: getenv("SERVICE_ACCOUNT_TOKEN_FILE", serviceAccountTokenPath),
+		serviceAccountCAFile:    getenv("SERVICE_ACCOUNT_CA_FILE", serviceAccountCAPath),
 	}
 	if len(cfg.token) < 32 || cfg.namespace != "resilience-test" || cfg.configMap != "resilience-validation-circuit-breaker" {
 		return config{}, errors.New("invalid fixed-scope receiver configuration")
+	}
+	if cfg.kubeScheme != "https" && !(cfg.kubeScheme == "http" && getenv("LOCAL_RESILIENCE_TEST", "") == "true") {
+		return config{}, errors.New("Kubernetes API must use HTTPS outside explicit local testing")
 	}
 	return cfg, nil
 }
@@ -186,20 +193,22 @@ func getenv(key, fallback string) string {
 	return fallback
 }
 
-func kubeClient() (*http.Client, error) {
-	ca, err := os.ReadFile(serviceAccountCAPath)
+func kubeClient(cfg config) (*http.Client, error) {
+	if cfg.kubeScheme == "http" {
+		if getenv("LOCAL_RESILIENCE_TEST", "") != "true" {
+			return nil, errors.New("plaintext Kubernetes API is restricted to explicit local testing")
+		}
+		return &http.Client{Timeout: 8 * time.Second}, nil
+	}
+	ca, err := os.ReadFile(cfg.serviceAccountCAFile)
 	if err != nil {
 		return nil, err
 	}
 	pool := x509.NewCertPool()
 	if !pool.AppendCertsFromPEM(ca) {
-		return nil, errors.New("invalid kubernetes CA")
+		return nil, errors.New("invalid Kubernetes CA")
 	}
 	return &http.Client{Timeout: 8 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}}}, nil
-}
-
-func readServiceAccountToken() ([]byte, error) {
-	return os.ReadFile(serviceAccountTokenPath)
 }
 
 func handleAlert(w http.ResponseWriter, r *http.Request, cfg config, client *http.Client, tokenReader func() ([]byte, error), metrics *receiverMetrics) {
@@ -261,7 +270,7 @@ func openBreaker(cfg config, client *http.Client, tokenReader func() ([]byte, er
 	if err != nil {
 		return false, fmt.Errorf("service account token: %w", err)
 	}
-	url := fmt.Sprintf("https://%s/api/v1/namespaces/%s/configmaps/%s", cfg.kubeAPI, cfg.namespace, cfg.configMap)
+	url := fmt.Sprintf("%s://%s/api/v1/namespaces/%s/configmaps/%s", cfg.kubeScheme, cfg.kubeAPI, cfg.namespace, cfg.configMap)
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		return false, err
@@ -279,14 +288,16 @@ func openBreaker(cfg config, client *http.Client, tokenReader func() ([]byte, er
 	if err := json.NewDecoder(response.Body).Decode(&breaker); err != nil {
 		return false, fmt.Errorf("decode breaker: %w", err)
 	}
-	if breaker.Data["state"] == "open" {
+	currentState := breaker.Data["state"]
+	if currentState == "open" {
 		return false, nil
 	}
-	if breaker.Data["state"] != "closed" || breaker.Metadata.ResourceVersion == "" {
+	if (currentState != "closed" && currentState != "half_open") || breaker.Metadata.ResourceVersion == "" {
 		return false, errUnsafeBreakerState
 	}
 	patches := []map[string]string{
-		{"op": "test", "path": "/data/state", "value": "closed"},
+		{"op": "test", "path": "/metadata/resourceVersion", "value": breaker.Metadata.ResourceVersion},
+		{"op": "test", "path": "/data/state", "value": currentState},
 		{"op": "replace", "path": "/data/state", "value": "open"},
 		{"op": "replace", "path": "/data/incident_id", "value": a.Fingerprint},
 		{"op": "replace", "path": "/data/opened_at", "value": time.Now().UTC().Format(time.RFC3339)},

@@ -1,0 +1,1 @@
+circuit breaker is closed following the explicit recovery evidence reference. This does not authorize a new scenario without its own change approval.

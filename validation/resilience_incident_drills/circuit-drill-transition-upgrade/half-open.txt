@@ -1,0 +1,1 @@
+circuit breaker is half_open. Run exactly one approved bounded validation; any critical alert re-opens the breaker.
