@@ -1,19 +1,42 @@
 use axum::{
     extract::State,
-    http::{HeaderMap, StatusCode},
+    http::{HeaderMap, HeaderValue, StatusCode},
+    middleware,
+    response::IntoResponse,
     routing::{get, post},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
-use std::{cmp::Ordering, env, net::SocketAddr, sync::Arc};
+use std::{
+    cmp::Ordering,
+    env,
+            net::SocketAddr,
+        time::{SystemTime, UNIX_EPOCH},
+
+    sync::{
+        atomic::{AtomicUsize, Ordering as AtomicOrdering},
+        Arc,
+    },
+};
 use tokio_postgres::{Client, NoTls};
-use tracing::{info, Level};
+use tracing::{info, info_span, Instrument, Level};
+
+const RESILIENCE_RUN_HEADER: &str = "x-resilience-run-id";
+const REQUEST_ID_HEADER: &str = "x-request-id";
+
+
+#[derive(Clone)]
+struct DatabasePool {
+    clients: Arc<Vec<Arc<Client>>>,
+    next: Arc<AtomicUsize>,
+}
 
 #[derive(Clone)]
 struct AppState {
     service_name: String,
-    database_url: String,
+    database: DatabasePool,
     internal_service_token: String,
+    request_sequence: Arc<AtomicUsize>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -276,8 +299,42 @@ struct RankedDriver {
 
 #[derive(Debug, Serialize)]
 struct HealthResponse {
-    status: &'static str,
-    service: &'static str,
+    status: String,
+    service: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct RoutePlanRequest {
+    work_order_id: String,
+    created_by: Option<i32>,
+}
+
+#[derive(Debug, Clone)]
+struct RouteStopInput {
+    id: String,
+    sequence_no: i32,
+    stop_kind: String,
+    latitude: f64,
+    longitude: f64,
+}
+
+#[derive(Debug, Serialize)]
+struct RoutePlanStopResponse {
+    work_order_stop_id: String,
+    stop_kind: String,
+    visit_sequence: i32,
+    leg_distance_m: f64,
+    estimated_arrival_offset_s: i32,
+}
+
+#[derive(Debug, Serialize)]
+struct RoutePlanResponse {
+    route_plan_id: String,
+    work_order_id: String,
+    plan_version: i32,
+    algorithm_version: String,
+    total_distance_m: f64,
+    stops: Vec<RoutePlanStopResponse>,
 }
 
 #[tokio::main]
@@ -288,16 +345,30 @@ async fn main() {
         .init();
 
     let database_url = env::var("DATABASE_URL")
-        .unwrap_or_else(|_| "postgresql://ubuntu:ubuntu@127.0.0.1:5432/switchos?sslmode=disable".to_string());
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .expect("DATABASE_URL must be explicitly configured");
     let internal_service_token = env::var("INTERNAL_SERVICE_TOKEN")
-        .unwrap_or_else(|_| "switchos-internal-dev-token-change-before-production".to_string());
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| value.len() >= 32)
+        .expect("INTERNAL_SERVICE_TOKEN must be explicitly configured with at least 32 characters");
 
-    if let Err(error) = ensure_schema(&database_url).await {
+    let database = create_pool(&database_url)
+        .await
+        .unwrap_or_else(|error| panic!("failed to initialize dispatch connection pool: {error}"));
+    if let Err(error) = ensure_schema(&database).await {
         panic!("failed to initialize dispatch optimizer schema: {error}");
     }
 
-    let app = Router::new()
-        .route("/health", get(health))
+    let state = Arc::new(AppState {
+        service_name: "switchos-dispatch-optimizer".to_string(),
+        database,
+        internal_service_token,
+        request_sequence: Arc::new(AtomicUsize::new(1)),
+    });
+    let protected_routes = Router::new()
         .route("/optimize", post(optimize_dispatch))
         .route("/trip-radar", post(trip_radar))
         .route("/batch-orders", post(batch_orders))
@@ -305,11 +376,13 @@ async fn main() {
         .route("/voice-priority", post(voice_priority))
         .route("/instant-retail-allocation", post(instant_retail_allocation))
         .route("/supply-shock-rebalance", post(supply_shock_rebalance))
-        .with_state(Arc::new(AppState {
-            service_name: "switchos-dispatch-optimizer".to_string(),
-            database_url,
-            internal_service_token,
-        }));
+        .route("/operations/route-plans", post(create_route_plan))
+        .route_layer(middleware::from_fn_with_state(state.clone(), require_internal_access_middleware));
+    let app = Router::new()
+        .route("/health", get(health))
+        .merge(protected_routes)
+        .layer(middleware::from_fn_with_state(state.clone(), correlation_middleware))
+        .with_state(state);
 
     let bind_host = std::env::var("BIND_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
     let addr: SocketAddr = std::env::var("PORT")
@@ -322,11 +395,73 @@ async fn main() {
     axum::serve(listener, app).await.expect("serve application");
 }
 
-async fn health() -> Json<HealthResponse> {
-    Json(HealthResponse {
-        status: "ok",
-        service: "switchos-dispatch-optimizer",
-    })
+async fn correlation_middleware(
+    State(state): State<Arc<AppState>>,
+    request: axum::extract::Request,
+    next: middleware::Next,
+) -> axum::response::Response {
+    let request_id = correlation_header(request.headers(), REQUEST_ID_HEADER).unwrap_or_else(|| generated_request_id(&state));
+    let resilience_run_id = correlation_header(request.headers(), RESILIENCE_RUN_HEADER);
+    let method = request.method().to_string();
+    let path = request.uri().path().to_string();
+    let span = info_span!("http.request", service = %state.service_name, request_id = %request_id, resilience_run_id = %resilience_run_id.as_deref().unwrap_or(""), method = %method, path = %path);
+    let mut response = next.run(request).instrument(span).await;
+    if let Ok(value) = HeaderValue::from_str(&request_id) {
+        response.headers_mut().insert(REQUEST_ID_HEADER, value);
+    }
+    if let Some(run_id) = resilience_run_id {
+        if let Ok(value) = HeaderValue::from_str(&run_id) {
+            response.headers_mut().insert(RESILIENCE_RUN_HEADER, value);
+        }
+        info!(service = %state.service_name, event = "http.request.completed", request_id = %request_id, resilience_run_id = %run_id, method = %method, path = %path, status = response.status().as_u16());
+    }
+    response
+}
+
+fn generated_request_id(state: &AppState) -> String {
+    let micros = SystemTime::now().duration_since(UNIX_EPOCH).map(|duration| duration.as_micros()).unwrap_or(0);
+    let sequence = state.request_sequence.fetch_add(1, AtomicOrdering::Relaxed);
+    format!("{}-{}-{}", state.service_name, micros, sequence)
+}
+
+fn correlation_header(headers: &HeaderMap, name: &str) -> Option<String> {
+    headers.get(name).and_then(|value| value.to_str().ok()).map(str::trim).filter(|value| is_correlation_identifier(value)).map(str::to_owned)
+}
+
+fn is_correlation_identifier(value: &str) -> bool {
+    (3..=81).contains(&value.len()) && value.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+}
+
+async fn require_internal_access_middleware(
+    State(state): State<Arc<AppState>>,
+    request: axum::extract::Request,
+    next: middleware::Next,
+) -> axum::response::Response {
+    match require_internal_access(request.headers(), &state) {
+        Ok(()) => next.run(request).await,
+        Err((status, message)) => (status, message).into_response(),
+    }
+}
+
+async fn health(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    match acquire_client(&state.database).await {
+        Ok(client) if client.query_one("SELECT 1", &[]).await.is_ok() => (
+            StatusCode::OK,
+            Json(HealthResponse {
+                status: "healthy".to_string(),
+                service: state.service_name.clone(),
+            }),
+        )
+            .into_response(),
+        _ => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(HealthResponse {
+                status: "degraded".to_string(),
+                service: state.service_name.clone(),
+            }),
+        )
+            .into_response(),
+    }
 }
 
 async fn optimize_dispatch(
@@ -335,7 +470,7 @@ async fn optimize_dispatch(
     Json(mut request): Json<DispatchRequest>,
 ) -> Result<Json<DispatchResponse>, (StatusCode, String)> {
     require_internal_access(&headers, &state)?;
-    let client = open_db(&state.database_url).await?;
+    let client = acquire_client(&state.database).await?;
 
     if request.drivers.is_empty() {
         request.drivers = load_candidate_drivers(&client).await?;
@@ -434,7 +569,7 @@ async fn trip_radar(
     Json(mut request): Json<TripRadarRequest>,
 ) -> Result<Json<TripRadarResponse>, (StatusCode, String)> {
     require_internal_access(&headers, &state)?;
-    let client = open_db(&state.database_url).await?;
+    let client = acquire_client(&state.database).await?;
 
     if request.orders.is_empty() {
         request.orders = load_trip_radar_orders(&client).await?;
@@ -495,7 +630,7 @@ async fn batch_orders(
     Json(mut request): Json<BatchRequest>,
 ) -> Result<Json<BatchResponse>, (StatusCode, String)> {
     require_internal_access(&headers, &state)?;
-    let client = open_db(&state.database_url).await?;
+    let client = acquire_client(&state.database).await?;
 
     if request.orders.is_empty() {
         request.orders = load_batchable_orders(&client).await?;
@@ -627,7 +762,7 @@ async fn supply_shock_rebalance(
     Json(request): Json<SupplyShockRebalanceRequest>,
 ) -> Result<Json<SupplyShockRebalanceResponse>, (StatusCode, String)> {
     require_internal_access(&headers, &state)?;
-    let client = open_db(&state.database_url).await?;
+    let client = acquire_client(&state.database).await?;
     let started_at = std::time::Instant::now();
     let trace_id = headers
         .get("x-trace-id")
@@ -847,7 +982,7 @@ async fn estimate_eta(
     Json(request): Json<EtaRequest>,
 ) -> Result<Json<EtaResponse>, (StatusCode, String)> {
     require_internal_access(&headers, &state)?;
-    let client = open_db(&state.database_url).await?;
+    let client = acquire_client(&state.database).await?;
 
     if request.distance_km < 0.0 || request.merchant_prep_minutes < 0.0 {
         return Err((StatusCode::BAD_REQUEST, "invalid eta request".to_string()));
@@ -983,20 +1118,196 @@ fn score_driver(
     }
 }
 
-async fn open_db(database_url: &str) -> Result<Client, (StatusCode, String)> {
-    let (client, connection) = tokio_postgres::connect(database_url, NoTls)
+async fn create_route_plan(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(request): Json<RoutePlanRequest>,
+) -> Result<Json<RoutePlanResponse>, (StatusCode, String)> {
+    require_internal_access(&headers, &state)?;
+    if !canonical_uuid(&request.work_order_id) {
+        return Err((StatusCode::BAD_REQUEST, "work_order_id must be a canonical UUID".to_string()));
+    }
+    let client = acquire_client(&state.database).await?;
+    let order = client
+        .query_opt(
+            "SELECT tenant_id, state::text FROM operations.work_order WHERE id = ($1::text)::uuid",
+            &[&request.work_order_id],
+        )
+        .await
+        .map_err(internal_error)?
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "work order not found".to_string()))?;
+    let state_name: String = order.get("state");
+    if !matches!(state_name.as_str(), "queued" | "allocated" | "in_progress") {
+        return Err((StatusCode::CONFLICT, "work order is not eligible for route planning".to_string()));
+    }
+    let tenant_id: String = order.get("tenant_id");
+    let rows = client
+        .query(
+            "SELECT id::text, sequence_no, stop_kind::text, ST_Y(location::geometry)::float8 AS latitude, ST_X(location::geometry)::float8 AS longitude FROM operations.work_order_stop WHERE work_order_id = ($1::text)::uuid AND completed_at IS NULL ORDER BY sequence_no",
+            &[&request.work_order_id],
+        )
         .await
         .map_err(internal_error)?;
-    tokio::spawn(async move {
-        if let Err(error) = connection.await {
-            tracing::error!("dispatch optimizer postgres connection error: {}", error);
-        }
+    let stops: Vec<RouteStopInput> = rows
+        .into_iter()
+        .map(|row| RouteStopInput {
+            id: row.get("id"),
+            sequence_no: row.get("sequence_no"),
+            stop_kind: row.get("stop_kind"),
+            latitude: row.get("latitude"),
+            longitude: row.get("longitude"),
+        })
+        .collect();
+    if stops.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "work order requires at least one incomplete stop".to_string()));
+    }
+    let planned_stops = plan_route_stops(stops)?;
+    let total_distance_m = planned_stops.iter().map(|stop| stop.leg_distance_m).sum::<f64>();
+    let snapshot = serde_json::json!({
+        "algorithm": "independent_nearest_neighbor_pickup_safe",
+        "algorithm_version": "v1",
+        "stop_count": planned_stops.len(),
+        "total_distance_m": round2(total_distance_m),
+        "source": "operations.work_order_stop",
     });
-    Ok(client)
+    let mut persisted = None;
+    for _ in 0..3 {
+        let row = client
+            .query_opt(
+                "WITH next_version AS (SELECT COALESCE(MAX(plan_version), 0) + 1 AS value FROM operations.route_plan WHERE work_order_id = ($1::text)::uuid) INSERT INTO operations.route_plan (tenant_id, work_order_id, plan_version, algorithm_version, state, total_distance_m, planning_snapshot, created_by) SELECT $2, ($1::text)::uuid, next_version.value, 'independent_nearest_neighbor_pickup_safe_v1', 'planned', $3::float8, $4::jsonb, $5 FROM next_version ON CONFLICT (work_order_id, plan_version) DO NOTHING RETURNING id::text, plan_version",
+                &[&request.work_order_id, &tenant_id, &total_distance_m, &snapshot, &request.created_by],
+            )
+            .await
+            .map_err(internal_error)?;
+        if let Some(row) = row {
+            persisted = Some((row.get::<_, String>("id"), row.get::<_, i32>("plan_version")));
+            break;
+        }
+    }
+    let (route_plan_id, plan_version) = persisted.ok_or_else(|| (StatusCode::CONFLICT, "route plan contention; retry request".to_string()))?;
+    for stop in &planned_stops {
+        client
+            .execute(
+                "INSERT INTO operations.route_plan_stop (route_plan_id, work_order_stop_id, visit_sequence, leg_distance_m, estimated_arrival_offset_s) VALUES (($1::text)::uuid, ($2::text)::uuid, $3, $4::float8, $5)",
+                &[&route_plan_id, &stop.work_order_stop_id, &stop.visit_sequence, &stop.leg_distance_m, &stop.estimated_arrival_offset_s],
+            )
+            .await
+            .map_err(internal_error)?;
+    }
+    client
+        .execute(
+            "UPDATE operations.route_plan SET state = 'superseded' WHERE work_order_id = ($1::text)::uuid AND id <> ($2::text)::uuid AND state = 'planned'",
+            &[&request.work_order_id, &route_plan_id],
+        )
+        .await
+        .map_err(internal_error)?;
+    Ok(Json(RoutePlanResponse {
+        route_plan_id,
+        work_order_id: request.work_order_id,
+        plan_version,
+        algorithm_version: "independent_nearest_neighbor_pickup_safe_v1".to_string(),
+        total_distance_m: round2(total_distance_m),
+        stops: planned_stops,
+    }))
 }
 
-async fn ensure_schema(database_url: &str) -> Result<(), String> {
-    let client = open_db(database_url).await.map_err(|(_, message)| message)?;
+fn plan_route_stops(stops: Vec<RouteStopInput>) -> Result<Vec<RoutePlanStopResponse>, (StatusCode, String)> {
+    let mut remaining = stops;
+    let mut selected: Option<RouteStopInput> = None;
+    let mut output = Vec::new();
+    let mut elapsed_seconds = 0i32;
+    while !remaining.is_empty() {
+        let pickup_remaining = remaining.iter().any(|stop| stop.stop_kind == "pickup");
+        let candidate_index = if let Some(previous) = selected.as_ref() {
+            remaining
+                .iter()
+                .enumerate()
+                .filter(|(_, stop)| !pickup_remaining || stop.stop_kind == "pickup")
+                .min_by(|(_, left), (_, right)| {
+                    haversine_m(previous.latitude, previous.longitude, left.latitude, left.longitude)
+                        .partial_cmp(&haversine_m(previous.latitude, previous.longitude, right.latitude, right.longitude))
+                        .unwrap_or(Ordering::Equal)
+                        .then_with(|| left.sequence_no.cmp(&right.sequence_no))
+                })
+                .map(|(index, _)| index)
+                .ok_or_else(|| internal_error("no pickup-safe route candidate"))?
+        } else {
+            remaining
+                .iter()
+                .enumerate()
+                .filter(|(_, stop)| !pickup_remaining || stop.stop_kind == "pickup")
+                .min_by_key(|(_, stop)| stop.sequence_no)
+                .map(|(index, _)| index)
+                .ok_or_else(|| internal_error("no initial route candidate"))?
+        };
+        let next = remaining.remove(candidate_index);
+        let leg_distance_m = selected
+            .as_ref()
+            .map(|previous| haversine_m(previous.latitude, previous.longitude, next.latitude, next.longitude))
+            .unwrap_or(0.0);
+        elapsed_seconds = elapsed_seconds.saturating_add((leg_distance_m / 8.0).ceil() as i32);
+        output.push(RoutePlanStopResponse {
+            work_order_stop_id: next.id.clone(),
+            stop_kind: next.stop_kind.clone(),
+            visit_sequence: output.len() as i32 + 1,
+            leg_distance_m: round2(leg_distance_m),
+            estimated_arrival_offset_s: elapsed_seconds,
+        });
+        selected = Some(next);
+    }
+    Ok(output)
+}
+
+fn haversine_m(latitude_a: f64, longitude_a: f64, latitude_b: f64, longitude_b: f64) -> f64 {
+    let earth_radius_m = 6_371_008.8_f64;
+    let d_lat = (latitude_b - latitude_a).to_radians();
+    let d_lng = (longitude_b - longitude_a).to_radians();
+    let a = (d_lat / 2.0).sin().powi(2)
+        + latitude_a.to_radians().cos() * latitude_b.to_radians().cos() * (d_lng / 2.0).sin().powi(2);
+    earth_radius_m * 2.0 * a.sqrt().atan2((1.0 - a).sqrt())
+}
+
+fn canonical_uuid(value: &str) -> bool {
+    value.len() == 36
+        && value.chars().enumerate().all(|(index, character)| {
+            if [8, 13, 18, 23].contains(&index) { character == '-' } else { character.is_ascii_hexdigit() }
+        })
+}
+
+async fn create_pool(database_url: &str) -> Result<DatabasePool, String> {
+    let max_size = env::var("DATABASE_POOL_MAX_SIZE")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(24)
+        .clamp(4, 48);
+    let mut clients = Vec::with_capacity(max_size);
+    for slot in 0..max_size {
+        let (client, connection) = tokio_postgres::connect(database_url, NoTls)
+            .await
+            .map_err(|error| format!("open dispatch database connection {slot}: {error}"))?;
+        tokio::spawn(async move {
+            if let Err(error) = connection.await {
+                tracing::error!("dispatch optimizer pooled postgres connection error: {}", error);
+            }
+        });
+        clients.push(Arc::new(client));
+    }
+    Ok(DatabasePool {
+        clients: Arc::new(clients),
+        next: Arc::new(AtomicUsize::new(0)),
+    })
+}
+
+async fn acquire_client(pool: &DatabasePool) -> Result<Arc<Client>, (StatusCode, String)> {
+    if pool.clients.is_empty() {
+        return Err(internal_error("database pool unavailable"));
+    }
+    let index = pool.next.fetch_add(1, AtomicOrdering::Relaxed) % pool.clients.len();
+    Ok(Arc::clone(&pool.clients[index]))
+}
+
+async fn ensure_schema(pool: &DatabasePool) -> Result<(), String> {
+    let client = acquire_client(pool).await.map_err(|(_, message)| message)?;
     client
         .batch_execute(
             r#"
@@ -1052,16 +1363,16 @@ async fn load_candidate_drivers(client: &Client) -> Result<Vec<DriverInput>, (St
                     WHEN COALESCE(active_orders, 0) >= 3 THEN 90.0
                     WHEN COALESCE(active_orders, 0) >= 1 THEN 60.0
                     ELSE 30.0
-                END AS utilization_rate,
+                END::float8 AS utilization_rate,
                 CASE
                     WHEN current_location ILIKE '%airport%' THEN 3.0
                     WHEN current_location IS NOT NULL AND current_location <> '' THEN 6.0
                     ELSE 10.0
-                END AS distance_km,
+                END::float8 AS distance_km,
                 CASE
                     WHEN COALESCE(active_orders, 0) = 0 THEN 18.0
                     ELSE 4.0
-                END AS idle_minutes,
+                END::float8 AS idle_minutes,
                 0 AS recent_rejections,
                 CASE WHEN availability = 'available' AND status = 'online' THEN false ELSE true END AS on_trip,
                 CASE
@@ -1083,7 +1394,7 @@ async fn load_candidate_drivers(client: &Client) -> Result<Vec<DriverInput>, (St
     Ok(rows
         .into_iter()
         .map(|row| DriverInput {
-            driver_id: row.get("id"),
+            driver_id: i64::from(row.get::<_, i32>("id")),
             name: Some(row.get::<_, String>("name")),
             tier: Some(row.get::<_, String>("tier")),
             acceptance_rate: Some(row.get::<_, f64>("acceptance_rate")),
@@ -1265,4 +1576,23 @@ fn internal_error<E: std::fmt::Display>(error: E) -> (StatusCode, String) {
 
 fn round2(value: f64) -> f64 {
     (value * 100.0).round() / 100.0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{round2, subtle_equal};
+
+    #[test]
+    fn secure_comparison_accepts_only_equal_values() {
+        assert!(subtle_equal("32-character-internal-service-token", "32-character-internal-service-token"));
+        assert!(!subtle_equal("32-character-internal-service-token", "32-character-internal-service-t0ken"));
+        assert!(!subtle_equal("short", "longer"));
+    }
+
+    #[test]
+    fn rounding_preserves_two_decimal_dispatch_precision() {
+        assert_eq!(round2(12.345), 12.35);
+        assert_eq!(round2(12.344), 12.34);
+        assert_eq!(round2(-1.235), -1.24);
+    }
 }

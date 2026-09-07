@@ -86,6 +86,7 @@ import {
   getAlertActionHistory,
   getAlertEscalations,
 } from "./financialAdminStore";
+import { logStructuredEvent } from "./structuredLogger";
 import {
   getFinancialTopology,
   getLatestDeliveryLocation,
@@ -101,6 +102,38 @@ import {
 import { startDeveloperWebhookDispatcher } from "./developerWebhookDispatcher";
 import { developerOpenApi } from "./developerOpenApi";
 import { ingestMedusaWebhook, MedusaCommerceError } from "./medusaCommerce";
+import {
+  assertWorkOrderTenant,
+  createGeofence,
+  createServiceZone,
+  createWebhookSubscription,
+  createWorkflowDefinition,
+  createWorkOrder,
+  deliverDueOperationalWebhooks,
+  listOperationsSnapshot,
+  logisticsErrorStatus,
+  publishWorkflowDefinition,
+  recordGeofenceEventsForPosition,
+  recordTrackingPosition,
+  transitionWorkOrder,
+} from "./logisticsOperationsStore";
+import {
+  ingestPartnerEvent,
+  listPartnerClients,
+  partnerErrorStatus,
+  registerPartnerClient,
+  revokePartnerCredential,
+} from "./partnerIntegrationStore";
+import {
+  createInvoice,
+  decideDispute,
+  financialOperationsErrorStatus,
+  generateDueReports,
+  listFinancialOperations,
+  openDispute,
+  requestReport,
+  transitionInvoice,
+} from "./financialOperationsStore";
 import coverageBaseline from "../../assurance/CODE_COVERAGE_BASELINE.json";
 import coverageHistory from "../../assurance/CODE_COVERAGE_HISTORY.json";
 import playwrightExecutions from "../../assurance/PLAYWRIGHT_EXECUTION_HISTORY.json";
@@ -112,7 +145,7 @@ const OIDC_NONCE_COOKIE = "switchos_oidc_nonce";
 const OIDC_VERIFIER_COOKIE = "switchos_oidc_verifier";
 const OIDC_RETURN_TO_COOKIE = "switchos_oidc_return_to";
 
-type AppRequest = express.Request & { user: SessionUser | null };
+type AppRequest = express.Request & { user: SessionUser | null; rawBody?: Buffer; requestId?: string; resilienceRunId?: string };
 
 const app = express();
 // The application is reachable only through Caddy and APISIX in promoted deployments.
@@ -122,6 +155,19 @@ const allowedOrigins = ENV.allowedOrigins
   .split(",")
   .map((origin) => origin.trim())
   .filter(Boolean);
+
+function normalizeCorrelationId(value: unknown) {
+  const candidate = `${value ?? ""}`.trim();
+  return /^[A-Za-z0-9][A-Za-z0-9._-]{2,80}$/.test(candidate) ? candidate : "";
+}
+
+function correlationHeaders(req: express.Request) {
+  const request = req as AppRequest;
+  return {
+    "x-request-id": request.requestId ?? randomUUID(),
+    ...(request.resilienceRunId ? { "x-resilience-run-id": request.resilienceRunId } : {}),
+  };
+}
 
 function readOrigin(originHeader?: string) {
   if (!originHeader) return "";
@@ -309,7 +355,22 @@ app.set("trust proxy", 1);
 app.use(cookieParser());
 
 app.use((req, res, next) => {
-  res.setHeader("X-Request-Id", randomUUID());
+  const request = req as AppRequest;
+  request.requestId = normalizeCorrelationId(req.get("x-request-id")) || randomUUID();
+  request.resilienceRunId = ENV.isProduction ? "" : normalizeCorrelationId(req.get("x-resilience-run-id"));
+  res.setHeader("X-Request-Id", request.requestId);
+  if (request.resilienceRunId) res.setHeader("X-Resilience-Run-Id", request.resilienceRunId);
+  res.on("finish", () => {
+    if (request.resilienceRunId) {
+      logStructuredEvent("http.request.completed", {
+        request_id: request.requestId ?? null,
+        resilience_run_id: request.resilienceRunId,
+        method: req.method,
+        path: req.path,
+        status: res.statusCode,
+      });
+    }
+  });
   setSecurityHeaders(req, res);
   applyCors(req, res);
   if (req.method === "OPTIONS") {
@@ -379,7 +440,14 @@ app.post(
   },
 );
 
-app.use(express.json({ limit: ENV.apiBodyLimit }));
+app.use(
+  express.json({
+    limit: ENV.apiBodyLimit,
+    verify: (req, _res, buffer) => {
+      (req as AppRequest).rawBody = Buffer.from(buffer);
+    },
+  }),
+);
 app.use(express.urlencoded({ extended: true, limit: ENV.apiBodyLimit }));
 
 app.get("/api/health", async (req, res) => {
@@ -940,6 +1008,320 @@ function requireFinancialAdministrator(
   }
   return user;
 }
+
+function observabilityText(value: unknown, maximum: number) {
+  return `${value ?? ""}`.replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, maximum);
+}
+
+function observabilityContext(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return Object.fromEntries(
+    Object.entries(value)
+      .slice(0, 12)
+      .flatMap(([key, entry]) => {
+        if (!/^[a-zA-Z0-9._-]{1,80}$/.test(key)) return [];
+        if (typeof entry === "string") return [[key, observabilityText(entry, 250)]];
+        if (typeof entry === "boolean" || (typeof entry === "number" && Number.isFinite(entry)) || entry === null) return [[key, entry]];
+        return [];
+      }),
+  );
+}
+
+app.post("/api/telemetry/client-errors", rateLimit(30), async (req, res) => {
+  const user = requireAuthenticatedOperator(req, res);
+  if (!user) return;
+  const event = observabilityText(req.body?.event, 80);
+  const errorName = observabilityText(req.body?.errorName, 120) || "Error";
+  const message = observabilityText(req.body?.message, 1000);
+  const path = observabilityText(req.body?.path, 250);
+  if (!/^[a-zA-Z0-9._-]{1,80}$/.test(event) || !message || (path && !path.startsWith("/"))) {
+    res.status(400).json({ error: "invalid_client_observability_event" });
+    return;
+  }
+  try {
+    await recordOperationalEvent({
+      eventType: `client.${event}`,
+      actorId: `${user.id}`,
+      actorRole: user.role ?? null,
+      tenantId: user.tenantId ?? null,
+      route: path || req.path,
+      outcome: "failure",
+      payload: { errorName, message, context: observabilityContext(req.body?.context) },
+    });
+    res.status(202).json({ accepted: true });
+  } catch {
+    res.status(503).json({ error: "client_observability_unavailable" });
+  }
+});
+
+function requireOperationsActor(req: express.Request, res: express.Response) {
+  const user = requireAuthenticatedOperator(req, res);
+  if (!user) return null;
+  if (!new Set(["admin", "operator", "ops", "platform_admin", "super_admin"]).has(`${user.role ?? ""}`.toLowerCase())) {
+    res.status(403).json({ error: "operations_role_required" });
+    return null;
+  }
+  if (!user.tenantId) {
+    res.status(409).json({ error: "tenant_context_required" });
+    return null;
+  }
+  return { id: Number(user.id), tenantId: user.tenantId, role: user.role ?? null };
+}
+
+async function operationsRoute(req: express.Request, res: express.Response, operation: (actor: { id: number; tenantId: string; role: string | null }) => Promise<unknown>) {
+  const actor = requireOperationsActor(req, res);
+  if (!actor) return;
+  try {
+    const result = await operation(actor);
+    await recordOperationalEvent({ eventType: "operations.api", actorId: `${actor.id}`, actorRole: actor.role, tenantId: actor.tenantId, route: req.path, outcome: "success" });
+    res.status(200).json(result);
+  } catch (error) {
+    const mapped = logisticsErrorStatus(error);
+    await recordOperationalEvent({ eventType: "operations.api", actorId: `${actor.id}`, actorRole: actor.role, tenantId: actor.tenantId, route: req.path, outcome: "failure", payload: { code: mapped.code } });
+    res.status(mapped.status).json({ error: mapped.code });
+  }
+}
+
+app.get("/api/operations/snapshot", rateLimit(60), async (req, res) => {
+  await operationsRoute(req, res, (actor) => listOperationsSnapshot(actor));
+});
+app.post("/api/operations/zones", rateLimit(20), async (req, res) => {
+  await operationsRoute(req, res, (actor) => createServiceZone(actor, { code: req.body?.code, displayName: req.body?.displayName, polygon: req.body?.polygon, metadata: req.body?.metadata }));
+});
+app.post("/api/operations/workflows", rateLimit(15), async (req, res) => {
+  await operationsRoute(req, res, (actor) => createWorkflowDefinition(actor, { workflowCode: req.body?.workflowCode, displayName: req.body?.displayName, transitions: req.body?.transitions, requiredStopKinds: req.body?.requiredStopKinds, inputSchema: req.body?.inputSchema, policyVersion: req.body?.policyVersion }));
+});
+app.post("/api/operations/workflows/:id/publish", rateLimit(15), async (req, res) => {
+  await operationsRoute(req, res, (actor) => publishWorkflowDefinition(actor, { workflowId: req.params.id, idempotencyKey: req.body?.idempotencyKey }));
+});
+app.post("/api/operations/geofences", rateLimit(20), async (req, res) => {
+  await operationsRoute(req, res, (actor) => createGeofence(actor, { code: req.body?.code, displayName: req.body?.displayName, polygon: req.body?.polygon, dwellThresholdSeconds: req.body?.dwellThresholdSeconds, metadata: req.body?.metadata }));
+});
+app.post("/api/operations/work-orders", rateLimit(30), async (req, res) => {
+  await operationsRoute(req, res, (actor) => createWorkOrder(actor, { externalReference: req.body?.externalReference, title: req.body?.title, priority: req.body?.priority, serviceZoneId: req.body?.serviceZoneId, scheduledFor: req.body?.scheduledFor, stops: req.body?.stops, metadata: req.body?.metadata }));
+});
+app.post("/api/operations/work-orders/:id/transition", rateLimit(30), async (req, res) => {
+  await operationsRoute(req, res, (actor) => transitionWorkOrder(actor, { workOrderId: req.params.id, nextState: req.body?.nextState, idempotencyKey: req.body?.idempotencyKey, assigneeUserId: req.body?.assigneeUserId, payload: req.body?.payload }));
+});
+app.post("/api/operations/work-orders/:id/tracking", rateLimit(120), async (req, res) => {
+  await operationsRoute(req, res, (actor) => recordTrackingPosition(actor, { workOrderId: req.params.id, latitude: req.body?.latitude, longitude: req.body?.longitude, observedAt: req.body?.observedAt, accuracyM: req.body?.accuracyM, integrityScore: req.body?.integrityScore, source: req.body?.source }));
+});
+app.post("/api/operations/work-orders/:id/tracking/:positionId/geofence-events", rateLimit(60), async (req, res) => {
+  await operationsRoute(req, res, (actor) => recordGeofenceEventsForPosition(actor, { workOrderId: req.params.id, positionId: req.params.positionId, idempotencyKey: req.body?.idempotencyKey }));
+});
+app.post("/api/operations/work-orders/:id/route-plans", rateLimit(15), async (req, res) => {
+  const actor = requireOperationsActor(req, res);
+  if (!actor) return;
+  try {
+    const workOrderId = await assertWorkOrderTenant(actor, req.params.id);
+    const response = await fetch(`${ENV.dispatchOptimizerUrl.replace(/\/$/, "")}/operations/route-plans`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-internal-service-token": ENV.internalServiceToken, ...correlationHeaders(req) },
+      body: JSON.stringify({ work_order_id: workOrderId, created_by: actor.id }),
+      signal: AbortSignal.timeout(8_000),
+    });
+    const payload = await response.json().catch(() => ({ error: "route_planner_invalid_response" }));
+    if (!response.ok) {
+      res.status(response.status >= 500 ? 503 : response.status).json({ error: "route_planner_rejected", detail: payload?.error ?? payload?.message ?? null });
+      return;
+    }
+    await recordOperationalEvent({ eventType: "operations.route_plan.created", actorId: `${actor.id}`, actorRole: actor.role, tenantId: actor.tenantId, route: req.path, outcome: "success", payload: { workOrderId } });
+    res.status(201).json(payload);
+  } catch (error) {
+    const mapped = logisticsErrorStatus(error);
+    res.status(mapped.status).json({ error: mapped.code });
+  }
+});
+
+async function complianceServiceRequest(req: express.Request, path: string, method: "POST", payload?: unknown, actorUserId?: number) {
+  const response = await fetch(`${ENV.complianceReviewServiceUrl.replace(/\/$/, "")}${path}`, {
+    method,
+    headers: {
+      "content-type": "application/json",
+      "x-internal-service-token": ENV.internalServiceToken,
+      ...(actorUserId ? { "x-actor-user-id": `${actorUserId}` } : {}),
+      ...correlationHeaders(req),
+    },
+    body: payload === undefined ? undefined : JSON.stringify(payload),
+    signal: AbortSignal.timeout(10_000),
+  });
+  const body = await response.json().catch(() => ({ detail: "compliance_service_invalid_response" }));
+  return { response, body };
+}
+
+function requireComplianceReviewer(req: express.Request, res: express.Response) {
+  const actor = requireOperationsActor(req, res);
+  if (!actor) return null;
+  if (!new Set(["admin", "platform_admin", "super_admin"]).has(`${actor.role ?? ""}`.toLowerCase())) {
+    res.status(403).json({ error: "compliance_reviewer_role_required" });
+    return null;
+  }
+  return actor;
+}
+
+app.post("/api/compliance/evidence", rateLimit(20), async (req, res) => {
+  const actor = requireComplianceReviewer(req, res);
+  if (!actor) return;
+  try {
+    const { response, body } = await complianceServiceRequest(req, "/evidence", "POST", req.body, actor.id);
+    res.status(response.status >= 500 ? 503 : response.status).json(body);
+  } catch {
+    res.status(503).json({ error: "compliance_service_unavailable" });
+  }
+});
+app.post("/api/compliance/evidence/:id/verify", rateLimit(15), async (req, res) => {
+  const actor = requireComplianceReviewer(req, res);
+  if (!actor) return;
+  try {
+    const { response, body } = await complianceServiceRequest(req, `/evidence/${encodeURIComponent(req.params.id)}/verify`, "POST");
+    await recordOperationalEvent({ eventType: "compliance.evidence.verify", actorId: `${actor.id}`, actorRole: actor.role, tenantId: actor.tenantId, route: req.path, outcome: response.ok ? "success" : "failure" });
+    res.status(response.status >= 500 ? 503 : response.status).json(body);
+  } catch {
+    res.status(503).json({ error: "compliance_service_unavailable" });
+  }
+});
+app.post("/api/compliance/evidence/:id/approve", rateLimit(15), async (req, res) => {
+  const actor = requireComplianceReviewer(req, res);
+  if (!actor) return;
+  try {
+    const payload = { reviewer_user_id: actor.id, approved: req.body?.approved, reason: req.body?.reason };
+    const { response, body } = await complianceServiceRequest(req, `/evidence/${encodeURIComponent(req.params.id)}/approve`, "POST", payload);
+    await recordOperationalEvent({ eventType: "compliance.evidence.decision", actorId: `${actor.id}`, actorRole: actor.role, tenantId: actor.tenantId, route: req.path, outcome: response.ok ? "success" : "failure" });
+    res.status(response.status >= 500 ? 503 : response.status).json(body);
+  } catch {
+    res.status(503).json({ error: "compliance_service_unavailable" });
+  }
+});
+app.get("/api/compliance/drivers/:id/eligibility", rateLimit(30), async (req, res) => {
+  const actor = requireComplianceReviewer(req, res);
+  if (!actor) return;
+  const driverId = Number(req.params.id);
+  if (!Number.isInteger(driverId) || driverId < 1) {
+    res.status(400).json({ error: "invalid_driver_id" });
+    return;
+  }
+  try {
+    const response = await fetch(`${ENV.complianceReviewServiceUrl.replace(/\/$/, "")}/drivers/${driverId}/eligibility`, {
+      headers: { "x-internal-service-token": ENV.internalServiceToken },
+      signal: AbortSignal.timeout(5_000),
+    });
+    const body = await response.json().catch(() => ({ detail: "compliance_service_invalid_response" }));
+    res.status(response.status >= 500 ? 503 : response.status).json(body);
+  } catch {
+    res.status(503).json({ error: "compliance_service_unavailable" });
+  }
+});
+app.post("/api/compliance/reconcile-expiry", rateLimit(5), async (req, res) => {
+  const actor = requireComplianceReviewer(req, res);
+  if (!actor) return;
+  try {
+    const { response, body } = await complianceServiceRequest(req, "/reconcile-expiry", "POST");
+    await recordOperationalEvent({ eventType: "compliance.expiry.reconciled", actorId: `${actor.id}`, actorRole: actor.role, tenantId: actor.tenantId, route: req.path, outcome: response.ok ? "success" : "failure" });
+    res.status(response.status >= 500 ? 503 : response.status).json(body);
+  } catch {
+    res.status(503).json({ error: "compliance_service_unavailable" });
+  }
+});
+function requireIntegrationAdmin(req: express.Request, res: express.Response) {
+  const actor = requireOperationsActor(req, res);
+  if (!actor) return null;
+  if (!new Set(["admin", "platform_admin", "super_admin"]).has(`${actor.role ?? ""}`.toLowerCase())) {
+    res.status(403).json({ error: "integration_admin_role_required" });
+    return null;
+  }
+  return actor;
+}
+
+app.get("/api/integrations/clients", rateLimit(30), async (req, res) => {
+  const actor = requireIntegrationAdmin(req, res);
+  if (!actor) return;
+  try { res.status(200).json(await listPartnerClients(actor)); }
+  catch (error) { const mapped = partnerErrorStatus(error); res.status(mapped.status).json({ error: mapped.code }); }
+});
+app.post("/api/integrations/clients", rateLimit(8), async (req, res) => {
+  const actor = requireIntegrationAdmin(req, res);
+  if (!actor) return;
+  try {
+    const result = await registerPartnerClient(actor, { displayName: req.body?.displayName, scopes: req.body?.scopes, callbackSecretRef: req.body?.callbackSecretRef, expiresAt: req.body?.expiresAt });
+    await recordOperationalEvent({ eventType: "integration.client.created", actorId: `${actor.id}`, actorRole: actor.role, tenantId: actor.tenantId, route: req.path, outcome: "success", payload: { clientId: result.client.id, credentialPrefix: result.credential.credential_prefix } });
+    res.status(201).json(result);
+  } catch (error) { const mapped = partnerErrorStatus(error); res.status(mapped.status).json({ error: mapped.code }); }
+});
+app.post("/api/integrations/credentials/:id/revoke", rateLimit(8), async (req, res) => {
+  const actor = requireIntegrationAdmin(req, res);
+  if (!actor) return;
+  try {
+    const result = await revokePartnerCredential(actor, req.params.id);
+    await recordOperationalEvent({ eventType: "integration.credential.revoked", actorId: `${actor.id}`, actorRole: actor.role, tenantId: actor.tenantId, route: req.path, outcome: "success", payload: { credentialId: result.id } });
+    res.status(200).json(result);
+  } catch (error) { const mapped = partnerErrorStatus(error); res.status(mapped.status).json({ error: mapped.code }); }
+});
+app.post("/api/partner/events", rateLimit(120), async (req: AppRequest, res) => {
+  try {
+    const rawBody = req.rawBody;
+    if (!rawBody || rawBody.length === 0) { res.status(400).json({ error: "partner_raw_body_required" }); return; }
+    const result = await ingestPartnerEvent({
+      apiKey: req.get("x-operations-api-key"), eventType: req.get("x-operations-event-type"), externalEventId: req.get("x-operations-event-id"),
+      signature: req.get("x-operations-signature"), rawBody, parsedBody: req.body,
+    });
+    res.status(result.idempotent ? 200 : 202).json(result);
+  } catch (error) { const mapped = partnerErrorStatus(error); res.status(mapped.status).json({ error: mapped.code }); }
+});
+
+async function financialOperationsRoute(req: express.Request, res: express.Response, operation: (actor: { id: number; tenantId: string; role: string | null }) => Promise<unknown>, status = 200) {
+  const actor = requireOperationsActor(req, res);
+  if (!actor) return;
+  try {
+    const result = await operation(actor);
+    await recordOperationalEvent({ eventType: "financial_operations.api", actorId: `${actor.id}`, actorRole: actor.role, tenantId: actor.tenantId, route: req.path, outcome: "success" });
+    res.status(status).json(result);
+  } catch (error) {
+    const mapped = financialOperationsErrorStatus(error);
+    await recordOperationalEvent({ eventType: "financial_operations.api", actorId: `${actor.id}`, actorRole: actor.role, tenantId: actor.tenantId, route: req.path, outcome: "failure", payload: { code: mapped.code } });
+    res.status(mapped.status).json({ error: mapped.code });
+  }
+}
+app.get("/api/financial-operations/snapshot", rateLimit(30), async (req, res) => {
+  await financialOperationsRoute(req, res, (actor) => listFinancialOperations(actor));
+});
+app.post("/api/financial-operations/invoices", rateLimit(15), async (req, res) => {
+  await financialOperationsRoute(req, res, (actor) => createInvoice(actor, { invoiceNumber: req.body?.invoiceNumber, customerReference: req.body?.customerReference, currency: req.body?.currency, taxMinor: req.body?.taxMinor, dueAt: req.body?.dueAt, lines: req.body?.lines }), 201);
+});
+app.post("/api/financial-operations/invoices/:id/transition", rateLimit(15), async (req, res) => {
+  await financialOperationsRoute(req, res, (actor) => transitionInvoice(actor, { invoiceId: req.params.id, nextState: req.body?.nextState }));
+});
+app.post("/api/financial-operations/disputes", rateLimit(15), async (req, res) => {
+  await financialOperationsRoute(req, res, (actor) => openDispute(actor, { invoiceId: req.body?.invoiceId, paymentReference: req.body?.paymentReference, disputeType: req.body?.disputeType, amountMinor: req.body?.amountMinor, currency: req.body?.currency, reason: req.body?.reason, evidenceRefs: req.body?.evidenceRefs }), 201);
+});
+app.post("/api/financial-operations/disputes/:id/decision", rateLimit(15), async (req, res) => {
+  await financialOperationsRoute(req, res, (actor) => decideDispute(actor, { disputeId: req.params.id, nextState: req.body?.nextState, outcomeNote: req.body?.outcomeNote }));
+});
+app.post("/api/financial-operations/reports", rateLimit(10), async (req, res) => {
+  await financialOperationsRoute(req, res, (actor) => requestReport(actor, { reportKind: req.body?.reportKind, filterSpec: req.body?.filterSpec }), 202);
+});
+app.post("/api/internal/financial-operations/reports/generate", rateLimit(10), async (req, res) => {
+  if (!requireInternalServiceAccess(req, res)) return;
+  try { res.status(200).json(await generateDueReports(Number(req.body?.limit ?? 20))); }
+  catch { res.status(503).json({ error: "financial_report_generation_unavailable" }); }
+});
+
+app.post("/api/operations/webhook-subscriptions", rateLimit(10), async (req, res) => {
+  await operationsRoute(req, res, (actor) => createWebhookSubscription(actor, { displayName: req.body?.displayName, endpointUrl: req.body?.endpointUrl, secretRef: req.body?.secretRef, eventTypes: req.body?.eventTypes }));
+});
+app.post("/api/internal/operations/webhook-deliveries", rateLimit(20), async (req, res) => {
+  if (!requireInternalServiceAccess(req, res)) return;
+  try {
+    const limit = Number(req.body?.limit ?? 25);
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+      res.status(400).json({ error: "invalid_delivery_limit" });
+      return;
+    }
+    const result = await deliverDueOperationalWebhooks(limit);
+    res.status(200).json(result);
+  } catch (error) {
+    res.status(503).json({ error: "operations_webhook_delivery_unavailable" });
+  }
+});
 
 async function dependencyHealth(name: string, baseUrl: string | undefined) {
   const checkedAt = new Date().toISOString();

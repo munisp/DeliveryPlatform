@@ -7,6 +7,7 @@ import "./index.css";
 import { trpc } from "@/lib/trpc";
 import { UNAUTHED_ERR_MSG } from "@shared/const";
 import { getLoginUrl } from "./const";
+import { reportClientError } from "./lib/logger";
 
 declare const __APP_BUILD_VERSION__: string;
 
@@ -44,7 +45,7 @@ queryClient.getQueryCache().subscribe((event) => {
   if (event.type === "updated" && event.action.type === "error") {
     const error = event.query.state.error;
     redirectToLoginIfUnauthorized(error);
-    console.error("[API Query Error]", error);
+    reportClientError("api.query_error", error);
   }
 });
 
@@ -52,7 +53,7 @@ queryClient.getMutationCache().subscribe((event) => {
   if (event.type === "updated" && event.action.type === "error") {
     const error = event.mutation.state.error;
     redirectToLoginIfUnauthorized(error);
-    console.error("[API Mutation Error]", error);
+    reportClientError("api.mutation_error", error);
   }
 });
 
@@ -84,7 +85,7 @@ if (typeof window !== "undefined" && "serviceWorker" in navigator) {
         }
       });
     } catch (error) {
-      console.error("[SwitchOS] Service worker registration failed", error);
+      reportClientError("pwa.service_worker_registration_failed", error, { buildVersion });
     }
   });
 }
