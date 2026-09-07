@@ -10,6 +10,9 @@ const productionEnvironment = {
 	OPA_ENDPOINT: "https://opa.switchos.test",
 	OPA_AUTH_TOKEN: "a-high-entropy-test-opa-token",
 	PUBLIC_APP_ORIGIN: "https://app.switchos.test",
+	PICKUP_CODE_HMAC_KEY: "test-pickup-code-hmac-key-with-sufficient-entropy-20260905",
+	SAFETY_CONTACT_ENCRYPTION_KEY: "test-safety-contact-encryption-key-with-sufficient-entropy-20260905",
+	SAFETY_SHARE_TOKEN_KEY: "test-safety-share-token-key-with-sufficient-entropy-20260905",
 };
 
 async function loadEnvironment(
