@@ -1,0 +1,133 @@
+name: Settlement Migration Controls
+
+on:
+  pull_request:
+    paths:
+      - "drizzle/0026_ride_hailing_dispatch.sql"
+      - "drizzle/0027_h3_dispatch_spatial_index.sql"
+      - "drizzle/0038_payment_webhook_verification_queue.sql"
+      - "drizzle/0039_payment_webhook_correlation.sql"
+      - "drizzle/0040_payment_settlement_reconciliation.sql"
+      - "scripts/testing/validate-settlement-reconciliation-db.sh"
+      - "scripts/testing/validate-settlement-reconciliation-staging.sh"
+      - "scripts/testing/generate-payment-migration-validation-report.sh"
+      - "scripts/testing/test-settlement-reconciliation-redis-isolation.sh"
+      - "services/python/payment-webhook/**"
+      - ".github/workflows/settlement-migration-controls.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: settlement-migration-controls-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  migration-controls:
+    name: Ordered migrations, reconciliation controls, and cache isolation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgis/postgis:16-3.5
+        env:
+          POSTGRES_DB: deliveryplatform
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d deliveryplatform"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      POSTGRES_URL: postgresql://postgres:postgres@127.0.0.1:5432/deliveryplatform
+      SETTLEMENT_VALIDATION_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/deliveryplatform
+      MIGRATION_VALIDATION_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/deliveryplatform
+      EVIDENCE_DIR: ${{ github.workspace }}/.ci-evidence/settlement-migration-controls
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Prepare non-secret evidence directory
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE_DIR"
+          psql --version
+
+      - name: Apply ordered payment and settlement migration chain
+        run: |
+          set -euo pipefail
+          psql "$POSTGRES_URL" -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE ROLE settlement_reconciliation_ingestor NOLOGIN;
+          CREATE ROLE settlement_reconciliation_reviewer NOLOGIN;
+          SQL
+          for migration in \
+            drizzle/0000_jittery_pride.sql \
+            drizzle/0026_ride_hailing_dispatch.sql \
+            drizzle/0038_payment_webhook_verification_queue.sql \
+            drizzle/0039_payment_webhook_correlation.sql \
+            drizzle/0040_payment_settlement_reconciliation.sql; do
+            psql "$POSTGRES_URL" -X -v ON_ERROR_STOP=1 -f "$migration"
+          done
+
+      - name: Verify baseline reconciliation schema and least privilege
+        run: |
+          set -euo pipefail
+          chmod +x scripts/testing/validate-settlement-reconciliation-staging.sh
+          scripts/testing/validate-settlement-reconciliation-staging.sh \
+            | tee "$EVIDENCE_DIR/baseline-validator.txt"
+
+      - name: Verify disabled append-only trigger is detected
+        run: |
+          set -euo pipefail
+          psql "$POSTGRES_URL" -X -v ON_ERROR_STOP=1 \
+            -c 'ALTER TABLE mobility.settlement_report_row DISABLE TRIGGER settlement_row_append_only'
+          set +e
+          scripts/testing/validate-settlement-reconciliation-staging.sh \
+            > "$EVIDENCE_DIR/disabled-trigger-validator.txt" 2>&1
+          status=$?
+          set -e
+          test "$status" -ne 0
+          grep -Fq \
+            'required enabled trigger is absent or bound to the wrong function: settlement_row_append_only' \
+            "$EVIDENCE_DIR/disabled-trigger-validator.txt"
+          psql "$POSTGRES_URL" -X -v ON_ERROR_STOP=1 \
+            -c 'ALTER TABLE mobility.settlement_report_row ENABLE TRIGGER settlement_row_append_only'
+          scripts/testing/validate-settlement-reconciliation-staging.sh \
+            | tee "$EVIDENCE_DIR/restored-trigger-validator.txt"
+
+      - name: Generate migration validation report
+        run: |
+          set -euo pipefail
+          chmod +x scripts/testing/generate-payment-migration-validation-report.sh
+          scripts/testing/generate-payment-migration-validation-report.sh \
+            > "$EVIDENCE_DIR/migration-0026-0040-validation-report.md"
+
+      - name: Run settlement reconciliation unit tests
+        run: |
+          set -euo pipefail
+          python3 -m unittest -v services/python/payment-webhook/test_settlement_reconciliation.py \
+            | tee "$EVIDENCE_DIR/settlement-unit-tests.txt"
+
+      - name: Validate bounded Redis isolation scenario syntax
+        run: |
+          set -euo pipefail
+          chmod +x scripts/testing/test-settlement-reconciliation-redis-isolation.sh \
+            scripts/testing/resilience/redis-chaos-faults.sh
+          bash -n scripts/testing/test-settlement-reconciliation-redis-isolation.sh
+          bash -n scripts/testing/resilience/redis-chaos-faults.sh
+          printf '%s\n' 'redis isolation and bounded fault-controller syntax passed' \
+            | tee "$EVIDENCE_DIR/redis-isolation-syntax.txt"
+
+      - name: Upload non-secret evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: settlement-migration-controls-${{ github.run_id }}
+          path: ${{ runner.temp }}/settlement-migration-controls
+          if-no-files-found: warn
+          retention-days: 14

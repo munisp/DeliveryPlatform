@@ -1,0 +1,23 @@
+INSERT 0 2
+INSERT 0 1
+INSERT 0 1
+INSERT 0 1
+INSERT 0 1
+INSERT 0 1
+INSERT 0 1
+INSERT 0 1
+INSERT 0 1
+INSERT 0 1
+INSERT 0 1
+UPDATE 1
+               trip_id                | driver_user_id | new_trip_state  
+--------------------------------------+----------------+-----------------
+ 00000000-0000-0000-0000-000000000041 |           1001 | driver_reserved
+(1 row)
+
+DO
+ assignment_guards |   trip_state    | presence_state | offer_state 
+-------------------+-----------------+----------------+-------------
+                 1 | driver_reserved | reserved       | accepted
+(1 row)
+

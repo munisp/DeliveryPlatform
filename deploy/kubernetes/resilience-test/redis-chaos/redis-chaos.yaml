@@ -1,0 +1,227 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis-chaos-target
+  namespace: resilience-test
+  labels:
+    app.kubernetes.io/name: redis-chaos-target
+    app.kubernetes.io/part-of: delivery-platform-resilience-testing
+    resilience.delivery-platform.io/environment: non-production
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: redis-chaos-target
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: redis-chaos-target
+        app.kubernetes.io/part-of: delivery-platform-resilience-testing
+        resilience.delivery-platform.io/environment: non-production
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        fsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: redis
+          image: redis:7.4.2-alpine
+          imagePullPolicy: IfNotPresent
+          args:
+            - redis-server
+            - --bind
+            - 0.0.0.0
+            - --port
+            - "6379"
+            - --save
+            - ""
+            - --appendonly
+            - "no"
+            - --protected-mode
+            - "yes"
+            - --dir
+            - /data
+          ports:
+            - name: redis
+              containerPort: 6379
+          readinessProbe:
+            exec:
+              command: ["redis-cli", "-h", "127.0.0.1", "-p", "6379", "ping"]
+            initialDelaySeconds: 2
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 6
+          livenessProbe:
+            exec:
+              command: ["redis-cli", "-h", "127.0.0.1", "-p", "6379", "ping"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              cpu: "250m"
+              memory: "256Mi"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 999
+            runAsGroup: 999
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-chaos-target
+  namespace: resilience-test
+  labels:
+    app.kubernetes.io/name: redis-chaos-target
+    app.kubernetes.io/part-of: delivery-platform-resilience-testing
+    resilience.delivery-platform.io/environment: non-production
+spec:
+  selector:
+    app.kubernetes.io/name: redis-chaos-target
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: redis
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis-chaos-toxiproxy
+  namespace: resilience-test
+  labels:
+    app.kubernetes.io/name: redis-chaos-toxiproxy
+    app.kubernetes.io/part-of: delivery-platform-resilience-testing
+    resilience.delivery-platform.io/environment: non-production
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: redis-chaos-toxiproxy
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: redis-chaos-toxiproxy
+        app.kubernetes.io/part-of: delivery-platform-resilience-testing
+        resilience.delivery-platform.io/environment: non-production
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: toxiproxy
+          image: shopify/toxiproxy:2.12.0
+          imagePullPolicy: IfNotPresent
+          args: ["-host", "0.0.0.0"]
+          ports:
+            - name: control
+              containerPort: 8474
+            - name: redis-proxy
+              containerPort: 8667
+          readinessProbe:
+            httpGet:
+              path: /version
+              port: control
+            initialDelaySeconds: 2
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /version
+              port: control
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              cpu: "250m"
+              memory: "256Mi"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-chaos-toxiproxy
+  namespace: resilience-test
+  labels:
+    app.kubernetes.io/name: redis-chaos-toxiproxy
+    app.kubernetes.io/part-of: delivery-platform-resilience-testing
+    resilience.delivery-platform.io/environment: non-production
+spec:
+  selector:
+    app.kubernetes.io/name: redis-chaos-toxiproxy
+  ports:
+    - name: control
+      port: 8474
+      targetPort: control
+    - name: redis-proxy
+      port: 8667
+      targetPort: redis-proxy
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: redis-chaos-isolation
+  namespace: resilience-test
+  labels:
+    app.kubernetes.io/part-of: delivery-platform-resilience-testing
+    resilience.delivery-platform.io/environment: non-production
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/name
+        operator: In
+        values: ["redis-chaos-target", "redis-chaos-toxiproxy"]
+  policyTypes: ["Ingress", "Egress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: redis-chaos-toxiproxy
+      ports:
+        - protocol: TCP
+          port: 6379
+    - from:
+        - podSelector:
+            matchLabels:
+              resilience.delivery-platform.io/redis-chaos-client: "true"
+      ports:
+        - protocol: TCP
+          port: 8474
+        - protocol: TCP
+          port: 8667
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: redis-chaos-target
+      ports:
+        - protocol: TCP
+          port: 6379
