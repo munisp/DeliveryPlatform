@@ -5,11 +5,15 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { HapticTab } from "@/components/haptic-tab";
 import { IconSymbol } from "@/components/ui/icon-symbol";
 import { useColors } from "@/hooks/use-colors";
+import { useNativeOperatorSession } from "@/lib/mobile/operator-session";
 
 export default function TabLayout() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const bottomPadding = Platform.OS === "web" ? 14 : Math.max(insets.bottom, 10);
+  const { role, isLoading } = useNativeOperatorSession();
+  const isAdministrator = !isLoading && role === "admin";
+  const bottomPadding =
+    Platform.OS === "web" ? 14 : Math.max(insets.bottom, 10);
   const tabBarHeight = 62 + bottomPadding;
 
   return (
@@ -40,35 +44,47 @@ export default function TabLayout() {
         name="index"
         options={{
           title: "Home",
-          tabBarIcon: ({ color }) => <IconSymbol size={24} name="house.fill" color={color} />,
+          tabBarIcon: ({ color }) => (
+            <IconSymbol size={24} name="house.fill" color={color} />
+          ),
         }}
       />
       <Tabs.Screen
         name="logistics"
         options={{
           title: "Logistics",
-          tabBarIcon: ({ color }) => <IconSymbol size={24} name="tray.full.fill" color={color} />,
+          tabBarIcon: ({ color }) => (
+            <IconSymbol size={24} name="tray.full.fill" color={color} />
+          ),
         }}
       />
       <Tabs.Screen
         name="dispatch"
         options={{
           title: "Dispatch",
-          tabBarIcon: ({ color }) => <IconSymbol size={24} name="truck.box.fill" color={color} />,
+          tabBarIcon: ({ color }) => (
+            <IconSymbol size={24} name="truck.box.fill" color={color} />
+          ),
         }}
       />
       <Tabs.Screen
         name="growth"
         options={{
+          href: isAdministrator ? undefined : null,
           title: "Growth",
-          tabBarIcon: ({ color }) => <IconSymbol size={24} name="storefront.fill" color={color} />,
+          tabBarIcon: ({ color }) => (
+            <IconSymbol size={24} name="storefront.fill" color={color} />
+          ),
         }}
       />
       <Tabs.Screen
         name="queue"
         options={{
+          href: isAdministrator ? undefined : null,
           title: "Queue",
-          tabBarIcon: ({ color }) => <IconSymbol size={24} name="arrow.clockwise" color={color} />,
+          tabBarIcon: ({ color }) => (
+            <IconSymbol size={24} name="arrow.clockwise" color={color} />
+          ),
         }}
       />
     </Tabs>

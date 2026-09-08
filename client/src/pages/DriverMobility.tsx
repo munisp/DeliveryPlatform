@@ -1,4 +1,7 @@
+import { Suspense, lazy } from "react";
+import { useQuery } from "@tanstack/react-query";
 import PlatformSummaryPage from "@/components/PlatformSummaryPage";
+import type { DurableTrackingPosition } from "@/components/VehicleTrackingMap";
 import { trpc } from "@/lib/trpc";
 import { CarFront } from "lucide-react";
 
@@ -11,10 +14,42 @@ type LogisticsTowerSummary = {
   };
 };
 
+type OperationsTrackingSnapshot = {
+  positions: DurableTrackingPosition[];
+};
+
+const VehicleTrackingMap = lazy(
+  () => import("@/components/VehicleTrackingMap"),
+);
+
+async function fetchDurableVehiclePositions(): Promise<OperationsTrackingSnapshot> {
+  const response = await fetch("/api/operations/snapshot", {
+    credentials: "include",
+    cache: "no-store",
+  });
+  const body = await response
+    .json()
+    .catch(() => ({ error: "vehicle_tracking_unavailable" }));
+  if (!response.ok || !body || !Array.isArray(body.positions)) {
+    throw new Error(body?.error ?? "vehicle_tracking_unavailable");
+  }
+  return body as OperationsTrackingSnapshot;
+}
+
 export default function DriverMobility() {
   const query = trpc.driverMobility.summary.useQuery({ limit: 8 });
-  const logisticsQuery = trpc.localCommerceSuperGateway.logisticsControlTower.useQuery({ city: "Lagos" });
-  const logisticsTower = logisticsQuery.data as LogisticsTowerSummary | undefined;
+  const logisticsQuery =
+    trpc.localCommerceSuperGateway.logisticsControlTower.useQuery({
+      city: "Lagos",
+    });
+  const trackingQuery = useQuery({
+    queryKey: ["operations-snapshot", "vehicle-tracking"],
+    queryFn: fetchDurableVehiclePositions,
+    refetchInterval: 20_000,
+  });
+  const logisticsTower = logisticsQuery.data as
+    | LogisticsTowerSummary
+    | undefined;
   const data = query.data;
 
   return (
@@ -25,11 +60,55 @@ export default function DriverMobility() {
       icon={CarFront}
       loading={query.isLoading}
       error={query.error?.message}
+      monitoringPanel={
+        <Suspense
+          fallback={
+            <div className="rounded-xl border border-slate-800 bg-slate-950/60 px-4 py-6 text-sm text-slate-300">
+              Loading the durable vehicle map…
+            </div>
+          }
+        >
+          <VehicleTrackingMap
+            positions={trackingQuery.data?.positions ?? []}
+            isLoading={trackingQuery.isLoading}
+            error={
+              trackingQuery.isError
+                ? trackingQuery.error instanceof Error
+                  ? trackingQuery.error.message
+                  : "vehicle_tracking_unavailable"
+                : null
+            }
+            refreshedAt={
+              trackingQuery.dataUpdatedAt
+                ? new Date(trackingQuery.dataUpdatedAt).toISOString()
+                : null
+            }
+          />
+        </Suspense>
+      }
       metrics={[
-        { label: "Online Drivers", value: data?.summary?.online_drivers ?? 0, supporting: "Drivers currently available for multimodal assignments." },
-        { label: "Busy Drivers", value: data?.summary?.busy_drivers ?? 0, supporting: "Drivers with active assignments in the verified database state." },
-        { label: "Pending Orders", value: data?.summary?.pending_orders ?? 0, supporting: "Orders still awaiting the next verified operational step." },
-        { label: "Avg Queue Minutes", value: data?.summary?.avg_queue_minutes ?? 0, supporting: data?.summary?.recommended_action },
+        {
+          label: "Online Drivers",
+          value: data?.summary?.online_drivers ?? 0,
+          supporting: "Drivers currently available for multimodal assignments.",
+        },
+        {
+          label: "Busy Drivers",
+          value: data?.summary?.busy_drivers ?? 0,
+          supporting:
+            "Drivers with active assignments in the verified database state.",
+        },
+        {
+          label: "Pending Orders",
+          value: data?.summary?.pending_orders ?? 0,
+          supporting:
+            "Orders still awaiting the next verified operational step.",
+        },
+        {
+          label: "Avg Queue Minutes",
+          value: data?.summary?.avg_queue_minutes ?? 0,
+          supporting: data?.summary?.recommended_action,
+        },
       ]}
       highlights={[
         ...(data?.telemetry?.signals ?? []),
@@ -39,12 +118,14 @@ export default function DriverMobility() {
       sections={[
         {
           title: "Supply Queue",
-          description: "Live driver roster with mode, reliability, and earnings context.",
+          description:
+            "Live driver roster with mode, reliability, and earnings context.",
           items: data?.supply_queue ?? [],
         },
         {
           title: "LongCat Dispatch Brief",
-          description: "Local AI guidance for real-time balancing, batching, and dispatch explainability.",
+          description:
+            "Local AI guidance for real-time balancing, batching, and dispatch explainability.",
           items: [
             data?.longcat?.dispatch_brief ?? "Loading dispatch brief…",
             data?.longcat?.batching_strategy ?? "Loading batching strategy…",
@@ -52,20 +133,24 @@ export default function DriverMobility() {
         },
         {
           title: "Dispatch Risk Flags",
-          description: "Operational risks and guardrails synthesized by the LongCat dispatch layer.",
+          description:
+            "Operational risks and guardrails synthesized by the LongCat dispatch layer.",
           items: data?.longcat?.risk_flags ?? [],
         },
         {
           title: "Ranked Candidates",
-          description: "Driver ranking summary derived from the embedded dispatch optimizer.",
+          description:
+            "Driver ranking summary derived from the embedded dispatch optimizer.",
           items: data?.longcat?.ranked_candidates ?? [],
         },
         {
           title: "Logistics Control Tower",
-          description: "Supply-chain and warehouse resilience context that can change dispatch routing and ETA honesty.",
+          description:
+            "Supply-chain and warehouse resilience context that can change dispatch routing and ETA honesty.",
           items: logisticsTower
             ? [
-                logisticsTower.summary ?? "Loading logistics control-tower summary…",
+                logisticsTower.summary ??
+                  "Loading logistics control-tower summary…",
                 `Route: /logistics-control-tower · risk band ${logisticsTower.network?.resilience_band ?? "unknown"} · critical nodes ${logisticsTower.network?.critical_nodes ?? 0}`,
               ]
             : [],

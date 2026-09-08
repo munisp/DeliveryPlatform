@@ -1,6 +1,4 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
 
 :root {
   color-scheme: dark;
@@ -16,7 +14,14 @@ body,
 body {
   background: #020617;
   color: #e2e8f0;
-  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family:
+    Inter,
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
 }
 
 * {
@@ -26,4 +31,79 @@ body {
 a {
   color: inherit;
   text-decoration: none;
+}
+
+.vehicle-map-marker {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border: 2px solid #e2e8f0;
+  border-radius: 9999px;
+  color: #020617;
+  box-shadow: 0 4px 18px rgb(2 6 23 / 55%);
+  cursor: pointer;
+}
+
+.vehicle-map-marker--verified {
+  background: #5eead4;
+}
+
+.vehicle-map-marker--caution {
+  background: #fcd34d;
+}
+
+.vehicle-map-marker--low-integrity {
+  background: #fb7185;
+}
+
+.vehicle-map-popup {
+  display: grid;
+  min-width: 180px;
+  gap: 4px;
+  color: #e2e8f0;
+  font-family:
+    Inter,
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.vehicle-map-popup strong {
+  color: #ffffff;
+  font-size: 13px;
+}
+
+.maplibregl-popup-content {
+  padding: 12px;
+  border: 1px solid #334155;
+  border-radius: 10px;
+  background: #0f172a;
+  box-shadow: 0 12px 32px rgb(2 6 23 / 55%);
+}
+
+.maplibregl-popup-tip {
+  border-top-color: #0f172a;
+  border-bottom-color: #0f172a;
+}
+
+.maplibregl-ctrl-group {
+  overflow: hidden;
+  border: 1px solid #334155;
+  border-radius: 8px;
+  background: #0f172a;
+  box-shadow: none;
+}
+
+.maplibregl-ctrl-group button {
+  background-color: #0f172a;
+}
+
+.maplibregl-ctrl-group button + button {
+  border-top-color: #334155;
 }

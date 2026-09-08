@@ -281,12 +281,16 @@ func (s *MojaloopService) persistFundsWorkflowEvent(tx *sql.Tx, event FundsWorkf
 	}
 	eventID := eventIDFor(event)
 	for _, destination := range destinations {
+		ledgerDebit, ledgerErr := ledgerDebitFSP(event, destination)
+		if ledgerErr != nil {
+			return ledgerErr
+		}
 		if _, err = tx.Exec(
 			`INSERT INTO mojaloop_funds_outbox (
-				event_id, destination, idempotency_key, workflow_id, workflow_type, resource_id, step, workflow_status, payload, dispatch_order, status, next_attempt_at, created_at, updated_at
-			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, 'pending', NOW(), NOW(), NOW())
+				event_id, destination, idempotency_key, workflow_id, workflow_type, resource_id, step, workflow_status, payload, ledger_debit_fsp, dispatch_order, status, next_attempt_at, created_at, updated_at
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, 'pending', NOW(), NOW(), NOW())
 			ON CONFLICT (destination, idempotency_key) DO NOTHING`,
-			eventID, destination, eventID, event.WorkflowID, event.WorkflowType, event.ResourceID, event.Step, event.Status, string(payloadBytes), dispatchOrder(destination),
+			eventID, destination, eventID, event.WorkflowID, event.WorkflowType, event.ResourceID, event.Step, event.Status, string(payloadBytes), ledgerDebit, dispatchOrder(destination),
 		); err != nil {
 			return fmt.Errorf("insert %s funds outbox intent: %w", destination, err)
 		}
@@ -340,6 +344,7 @@ func (s *MojaloopService) claimFundsOutboxRecord(workerID string) (fundsOutboxRe
 		`WITH candidate AS (
 			SELECT candidate.id FROM mojaloop_funds_outbox AS candidate
 			WHERE candidate.status = 'pending' AND candidate.next_attempt_at <= NOW()
+			AND NOT (candidate.destination = 'tigerbeetle' AND candidate.workflow_type = 'transfer')
 			AND NOT EXISTS (
 				SELECT 1 FROM mojaloop_funds_outbox AS predecessor
 				WHERE predecessor.workflow_id = candidate.workflow_id
@@ -513,6 +518,9 @@ func (s *MojaloopService) RunFundsOutboxDispatcher(ctx context.Context, workerID
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	for {
+		if _, err := s.DispatchTigerBeetleTransferBatch(workerID, defaultTigerBeetleDispatchBatch); err != nil {
+			return err
+		}
 		if _, err := s.DispatchFundsOutbox(ctx, workerID, defaultOutboxBatchSize); err != nil {
 			return err
 		}

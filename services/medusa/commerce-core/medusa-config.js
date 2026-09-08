@@ -19,8 +19,18 @@ module.exports = defineConfig({
     },
   },
   modules: [
-    { resolve: "@medusajs/medusa/cache-redis", options: { redisUrl: required("MEDUSA_REDIS_URL") } },
-    { resolve: "@medusajs/medusa/event-bus-redis", options: { redisUrl: required("MEDUSA_REDIS_URL") } },
-    { resolve: "@medusajs/medusa/workflow-engine-redis", options: { redisUrl: required("MEDUSA_REDIS_URL") } },
+    { resolve: "./src/modules/deliveryplatform-inventory-outbox" },
+    {
+      resolve: "@medusajs/medusa/cache-redis",
+      options: { redisUrl: required("MEDUSA_REDIS_URL") },
+    },
+    {
+      resolve: "@medusajs/medusa/event-bus-redis",
+      options: { redisUrl: required("MEDUSA_REDIS_URL") },
+    },
+    {
+      resolve: "@medusajs/medusa/workflow-engine-redis",
+      options: { redisUrl: required("MEDUSA_REDIS_URL") },
+    },
   ],
 });

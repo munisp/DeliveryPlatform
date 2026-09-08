@@ -11,9 +11,10 @@ import (
 )
 
 const (
-	defaultTigerBeetleAccountCode  uint16 = 1
-	defaultTigerBeetleTransferCode uint16 = 1
-	defaultTigerBeetleRefundCode   uint16 = 2
+	defaultTigerBeetleAccountCode   uint16 = 1
+	defaultTigerBeetleTransferCode  uint16 = 1
+	defaultTigerBeetleRefundCode    uint16 = 2
+	maximumTigerBeetleTransferBatch        = 8190
 )
 
 type TigerBeetleClient struct {
@@ -36,6 +37,20 @@ type TransferReconciliation struct {
 	LedgerConsistent bool   `json:"ledgerConsistent"`
 	OriginalPayerID  string `json:"originalPayerId,omitempty"`
 	OriginalPayeeID  string `json:"originalPayeeId,omitempty"`
+}
+
+type TigerBeetleTransferRequest struct {
+	TransferID    string
+	DebitAlias    string
+	CreditAlias   string
+	Amount        uint64
+	CorrelationID string
+	Code          uint16
+}
+
+type TigerBeetleTransferOutcome struct {
+	TransferID string
+	Err        error
 }
 
 func NewTigerBeetleClient() (*TigerBeetleClient, error) {
@@ -155,6 +170,70 @@ func (tbc *TigerBeetleClient) VerifyBalance(accountAlias string, requiredAmount 
 
 func (tbc *TigerBeetleClient) ProcessMojaloopTransfer(transferID string, payerID string, payeeID string, amount uint64) error {
 	return tbc.processLedgerMovement(transferID, payerID, payeeID, amount, transferID, tbc.transferCode)
+}
+
+// ProcessMojaloopTransferBatch submits multiple independent deterministic
+// transfers in one TigerBeetle request. Each outcome maps to the input at the
+// same index. TransferExists is an idempotent successful replay.
+func (tbc *TigerBeetleClient) ProcessMojaloopTransferBatch(requests []TigerBeetleTransferRequest) ([]TigerBeetleTransferOutcome, error) {
+	if len(requests) == 0 {
+		return nil, nil
+	}
+	if len(requests) > maximumTigerBeetleTransferBatch {
+		return nil, fmt.Errorf("TigerBeetle batch has %d transfers; maximum is %d", len(requests), maximumTigerBeetleTransferBatch)
+	}
+
+	transfers := make([]tb.Transfer, len(requests))
+	for index, request := range requests {
+		if request.Amount == 0 {
+			return nil, fmt.Errorf("batch transfer %q amount must be greater than zero", request.TransferID)
+		}
+		transferID, err := parseTigerBeetleID(request.TransferID)
+		if err != nil {
+			return nil, fmt.Errorf("parse batch TigerBeetle transfer id %q: %w", request.TransferID, err)
+		}
+		debitAccountID, err := tbc.accountID(request.DebitAlias)
+		if err != nil {
+			return nil, err
+		}
+		creditAccountID, err := tbc.accountID(request.CreditAlias)
+		if err != nil {
+			return nil, err
+		}
+		correlationID, err := parseTigerBeetleID(request.CorrelationID)
+		if err != nil {
+			return nil, fmt.Errorf("parse batch TigerBeetle correlation id %q: %w", request.CorrelationID, err)
+		}
+		transfers[index] = tb.Transfer{
+			ID:              transferID,
+			DebitAccountID:  debitAccountID,
+			CreditAccountID: creditAccountID,
+			Amount:          tb.ToUint128(request.Amount),
+			UserData128:     correlationID,
+			Ledger:          tbc.ledger,
+			Code:            request.Code,
+		}
+	}
+
+	results, err := tbc.client.CreateTransfers(transfers)
+	if err != nil {
+		return nil, fmt.Errorf("submit TigerBeetle transfer batch: %w", err)
+	}
+	if len(results) != len(transfers) {
+		return nil, fmt.Errorf("TigerBeetle returned %d results for %d submitted transfers", len(results), len(transfers))
+	}
+
+	outcomes := make([]TigerBeetleTransferOutcome, len(requests))
+	for index, result := range results {
+		outcomes[index].TransferID = requests[index].TransferID
+		switch result.Status {
+		case tb.TransferCreated, tb.TransferExists:
+			// Stable transfer IDs make an ambiguous transport replay safe.
+		default:
+			outcomes[index].Err = fmt.Errorf("TigerBeetle transfer %q: %s", requests[index].TransferID, result.Status)
+		}
+	}
+	return outcomes, nil
 }
 
 func (tbc *TigerBeetleClient) ReverseMojaloopTransfer(refundID string, originalTransferID string, payerID string, payeeID string, amount uint64) error {

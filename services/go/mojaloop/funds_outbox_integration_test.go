@@ -36,6 +36,8 @@ func TestFundsOutboxAtomicPersistenceAndRecovery(t *testing.T) {
 		Payload: map[string]any{
 			"amountMinor": uint64(1250),
 			"currency":    "EUR",
+			"payerFsp":    "payer-outbox-test",
+			"payeeFsp":    "payee-outbox-test",
 		},
 	}
 
@@ -68,38 +70,35 @@ func TestFundsOutboxAtomicPersistenceAndRecovery(t *testing.T) {
 	}
 
 	record, found, err := service.claimFundsOutboxRecord("outbox-test-worker")
-	if err != nil || !found {
-		t.Fatalf("claim pending outbox record: found=%v err=%v", found, err)
+	if err != nil || found {
+		t.Fatalf("TigerBeetle transfer must be reserved for batch dispatcher: record=%+v found=%v err=%v", record, found, err)
 	}
-	if record.Destination != "tigerbeetle" {
-		t.Fatalf("expected TigerBeetle predecessor to claim first, got %q", record.Destination)
+	var tigerBeetleID int64
+	if err := db.QueryRow(`SELECT id FROM mojaloop_funds_outbox WHERE workflow_id = $1 AND destination = 'tigerbeetle'`, event.WorkflowID).Scan(&tigerBeetleID); err != nil {
+		t.Fatalf("read batch-reserved TigerBeetle record: %v", err)
 	}
-	if err := service.retryFundsOutboxRecord(record.ID, assertableOutboxError{}); err != nil {
-		t.Fatalf("record durable retry state: %v", err)
-	}
-	if _, err := db.Exec(`UPDATE mojaloop_funds_outbox SET next_attempt_at = NOW() WHERE id = $1`, record.ID); err != nil {
-		t.Fatalf("make retried record claimable: %v", err)
-	}
-	retryRecord, found, err := service.claimFundsOutboxRecord("outbox-test-worker")
-	if err != nil || !found || retryRecord.ID != record.ID {
-		t.Fatalf("reclaim retry record: record=%+v found=%v err=%v", retryRecord, found, err)
-	}
-	if err := service.markFundsOutboxDelivered(retryRecord.ID); err != nil {
-		t.Fatalf("record delivered state: %v", err)
-	}
-	var status string
-	if err := db.QueryRow(`SELECT status FROM mojaloop_funds_outbox WHERE id = $1`, retryRecord.ID).Scan(&status); err != nil {
-		t.Fatalf("read delivered status: %v", err)
-	}
-	if status != "delivered" {
-		t.Fatalf("expected delivered outbox status, got %q", status)
+	if err := service.markFundsOutboxDelivered(tigerBeetleID); err != nil {
+		t.Fatalf("simulate completed ledger batch before downstream delivery: %v", err)
 	}
 	nextRecord, found, err := service.claimFundsOutboxRecord("outbox-test-worker")
 	if err != nil || !found {
-		t.Fatalf("claim downstream record after ledger delivery: found=%v err=%v", found, err)
+		t.Fatalf("claim downstream record after batch ledger delivery: found=%v err=%v", found, err)
 	}
 	if nextRecord.Destination != "kafka" && nextRecord.Destination != "temporal" {
 		t.Fatalf("expected a downstream broker intent after ledger delivery, got %q", nextRecord.Destination)
+	}
+	if err := service.retryFundsOutboxRecord(nextRecord.ID, assertableOutboxError{}); err != nil {
+		t.Fatalf("record downstream durable retry state: %v", err)
+	}
+	if _, err := db.Exec(`UPDATE mojaloop_funds_outbox SET next_attempt_at = NOW() WHERE id = $1`, nextRecord.ID); err != nil {
+		t.Fatalf("make retried downstream record claimable: %v", err)
+	}
+	retryRecord, found, err := service.claimFundsOutboxRecord("outbox-test-worker")
+	if err != nil || !found || retryRecord.ID != nextRecord.ID {
+		t.Fatalf("reclaim downstream retry record: record=%+v found=%v err=%v", retryRecord, found, err)
+	}
+	if err := service.markFundsOutboxDelivered(retryRecord.ID); err != nil {
+		t.Fatalf("record downstream delivered state: %v", err)
 	}
 }
 

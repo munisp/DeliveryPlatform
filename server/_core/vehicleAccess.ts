@@ -330,3 +330,882 @@ export async function listVehicleAccessContracts(input: {
     }),
   );
 }
+
+export type RentalAddOn = {
+  id: string;
+  addOnCode: string;
+  displayName: string;
+  category: string;
+  chargeUnit: "flat" | "per_day" | "per_week";
+  unitPriceMinor: number;
+  maxQuantity: number;
+  currency: string;
+};
+
+export type RentalOperationsSnapshot = {
+  assetStateCounts: Record<string, number>;
+  activeAvailabilityBlocks: number;
+  activeAvailabilityBlockItems: Array<{
+    id: string;
+    assetId: string;
+    reason: string;
+    note: string;
+    startsAt: string;
+    endsAt: string;
+  }>;
+  requestedExtensions: number;
+  requestedExtensionItems: Array<{
+    id: string;
+    contractId: string;
+    reference: string;
+    workerUserId: number;
+    requestedEndsAt: string;
+    createdAt: string;
+  }>;
+  providerLocations: Array<{
+    id: string;
+    providerId: string;
+    locationCode: string;
+    displayName: string;
+    addressSummary: string;
+    timezoneName: string;
+  }>;
+  currentAssetLocations: Array<{
+    assetId: string;
+    registrationNumber: string;
+    make: string;
+    model: string;
+    providerId: string;
+    locationId: string | null;
+    locationName: string | null;
+    locationCode: string | null;
+    assignedAt: string | null;
+  }>;
+  upcomingPickups: Array<{
+    contractId: string;
+    reference: string;
+    assetId: string;
+    startsAt: string;
+    location: string | null;
+  }>;
+  upcomingReturns: Array<{
+    contractId: string;
+    reference: string;
+    assetId: string;
+    endsAt: string;
+    state: ContractState;
+  }>;
+};
+
+type RentalOperationsSnapshotWire = {
+  asset_state_counts: Record<string, number>;
+  active_availability_blocks: number;
+  active_availability_block_items: Array<{
+    id: string;
+    asset_id: string;
+    reason: string;
+    note: string;
+    starts_at: string;
+    ends_at: string;
+  }>;
+  requested_extensions: number;
+  requested_extension_items: Array<{
+    id: string;
+    contract_id: string;
+    reference: string;
+    worker_user_id: number;
+    requested_ends_at: string;
+    created_at: string;
+  }>;
+  provider_locations: Array<{
+    id: string;
+    provider_id: string;
+    location_code: string;
+    display_name: string;
+    address_summary: string;
+    timezone_name: string;
+  }>;
+  current_asset_locations: Array<{
+    asset_id: string;
+    registration_number: string;
+    make: string;
+    model: string;
+    provider_id: string;
+    location_id: string | null;
+    location_name: string | null;
+    location_code: string | null;
+    assigned_at: string | null;
+  }>;
+  upcoming_pickups: Array<{
+    contract_id: string;
+    reference: string;
+    asset_id: string;
+    starts_at: string;
+    location: string | null;
+  }>;
+  upcoming_returns: Array<{
+    contract_id: string;
+    reference: string;
+    asset_id: string;
+    ends_at: string;
+    state: ContractState;
+  }>;
+};
+
+export async function createVehicleProviderLocation(input: {
+  actorUserId: number;
+  providerId: string;
+  locationCode: string;
+  displayName: string;
+  addressSummary: string;
+  timezoneName: string;
+  idempotencyKey: string;
+}) {
+  const result = await database().query<{ id: string }>(
+    `SELECT vehicle_access.create_provider_location($1,$2::uuid,$3,$4,$5,$6,$7) AS id`,
+    [
+      input.actorUserId,
+      input.providerId,
+      input.locationCode,
+      input.displayName,
+      input.addressSummary,
+      input.timezoneName,
+      input.idempotencyKey,
+    ],
+  );
+  return one(result.rows, "vehicle_provider_location").id;
+}
+
+export async function assignVehicleAssetLocation(input: {
+  actorUserId: number;
+  assetId: string;
+  locationId: string;
+  idempotencyKey: string;
+}) {
+  const result = await database().query<{ id: string }>(
+    `SELECT vehicle_access.assign_asset_location($1,$2::uuid,$3::uuid,$4) AS id`,
+    [input.actorUserId, input.assetId, input.locationId, input.idempotencyKey],
+  );
+  return one(result.rows, "vehicle_asset_location_assignment").id;
+}
+
+export async function createVehicleAvailabilityBlock(input: {
+  actorUserId: number;
+  assetId: string;
+  reason:
+    | "maintenance"
+    | "inspection"
+    | "operator_hold"
+    | "seasonal_unavailable"
+    | "repair";
+  note: string;
+  startsAt: string;
+  endsAt: string;
+  idempotencyKey: string;
+}) {
+  const result = await database().query<{ id: string }>(
+    `SELECT vehicle_access.create_availability_block($1,$2::uuid,$3,$4,$5::timestamptz,$6::timestamptz,$7) AS id`,
+    [
+      input.actorUserId,
+      input.assetId,
+      input.reason,
+      input.note,
+      input.startsAt,
+      input.endsAt,
+      input.idempotencyKey,
+    ],
+  );
+  return one(result.rows, "vehicle_availability_block").id;
+}
+
+export async function cancelVehicleAvailabilityBlock(input: {
+  actorUserId: number;
+  availabilityBlockId: string;
+  reason: string;
+  idempotencyKey: string;
+}) {
+  const result = await database().query<{ state: "cancelled" }>(
+    `SELECT vehicle_access.cancel_availability_block($1,$2::uuid,$3,$4) AS state`,
+    [
+      input.actorUserId,
+      input.availabilityBlockId,
+      input.reason,
+      input.idempotencyKey,
+    ],
+  );
+  return one(result.rows, "vehicle_availability_block_state").state;
+}
+
+export async function createVehicleRentalAddOn(input: {
+  actorUserId: number;
+  providerId: string;
+  addOnCode: string;
+  displayName: string;
+  category:
+    | "protection"
+    | "equipment"
+    | "fuel_plan"
+    | "additional_driver"
+    | "assistance"
+    | "other";
+  currency: string;
+  chargeUnit: "flat" | "per_day" | "per_week";
+  unitPriceMinor: number;
+  maxQuantity: number;
+  idempotencyKey: string;
+}) {
+  const result = await database().query<{ id: string }>(
+    `SELECT vehicle_access.create_rental_add_on($1,$2::uuid,$3,$4,$5,$6::char(3),$7::vehicle_access.rental_add_on_charge_unit,$8::bigint,$9::smallint,$10) AS id`,
+    [
+      input.actorUserId,
+      input.providerId,
+      input.addOnCode,
+      input.displayName,
+      input.category,
+      input.currency,
+      input.chargeUnit,
+      input.unitPriceMinor,
+      input.maxQuantity,
+      input.idempotencyKey,
+    ],
+  );
+  return one(result.rows, "vehicle_rental_add_on").id;
+}
+
+export async function listVehicleRentalAddOns(input: {
+  offerId: string;
+  limit: number;
+}) {
+  const result = await database().query<{
+    id: string;
+    add_on_code: string;
+    display_name: string;
+    category: string;
+    charge_unit: RentalAddOn["chargeUnit"];
+    unit_price_minor: string | number;
+    max_quantity: number;
+    currency: string;
+  }>(
+    `SELECT * FROM vehicle_access.list_rental_add_ons_for_offer($1::uuid,$2)`,
+    [input.offerId, input.limit],
+  );
+  return result.rows.map(
+    (row): RentalAddOn => ({
+      id: row.id,
+      addOnCode: row.add_on_code,
+      displayName: row.display_name,
+      category: row.category,
+      chargeUnit: row.charge_unit,
+      unitPriceMinor: Number(row.unit_price_minor),
+      maxQuantity: Number(row.max_quantity),
+      currency: row.currency,
+    }),
+  );
+}
+
+export async function requestVehicleAccessWithAddOns(input: {
+  workerUserId: number;
+  offerId: string;
+  startsAt: string;
+  endsAt: string;
+  addOns: Array<{ addOnVersionId: string; quantity: number }>;
+  idempotencyKey: string;
+}) {
+  const result = await database().query<{ id: string }>(
+    `SELECT vehicle_access.request_contract_with_add_ons($1,$2::uuid,$3::timestamptz,$4::timestamptz,$5::jsonb,$6) AS id`,
+    [
+      input.workerUserId,
+      input.offerId,
+      input.startsAt,
+      input.endsAt,
+      JSON.stringify(
+        input.addOns.map((entry) => ({
+          add_on_version_id: entry.addOnVersionId,
+          quantity: entry.quantity,
+        })),
+      ),
+      input.idempotencyKey,
+    ],
+  );
+  return one(result.rows, "vehicle_access_contract").id;
+}
+
+export async function recordVehicleAgreementAcceptance(input: {
+  workerUserId: number;
+  contractId: string;
+  agreementVersion: string;
+  agreementSha256Hex: string;
+  acceptanceSha256Hex: string;
+  idempotencyKey: string;
+}) {
+  const result = await database().query<{ id: string }>(
+    `SELECT vehicle_access.record_agreement_acceptance($1,$2::uuid,$3,$4,$5,$6) AS id`,
+    [
+      input.workerUserId,
+      input.contractId,
+      input.agreementVersion,
+      input.agreementSha256Hex,
+      input.acceptanceSha256Hex,
+      input.idempotencyKey,
+    ],
+  );
+  return one(result.rows, "vehicle_contract_agreement").id;
+}
+
+export async function requestVehicleContractExtension(input: {
+  workerUserId: number;
+  contractId: string;
+  requestedEndsAt: string;
+  idempotencyKey: string;
+}) {
+  const result = await database().query<{ id: string }>(
+    `SELECT vehicle_access.request_contract_extension($1,$2::uuid,$3::timestamptz,$4) AS id`,
+    [
+      input.workerUserId,
+      input.contractId,
+      input.requestedEndsAt,
+      input.idempotencyKey,
+    ],
+  );
+  return one(result.rows, "vehicle_contract_extension").id;
+}
+
+export async function decideVehicleContractExtension(input: {
+  actorUserId: number;
+  extensionRequestId: string;
+  action: "approve" | "reject";
+  reason?: string | null;
+  idempotencyKey: string;
+}) {
+  const result = await database().query<{
+    state: "approved" | "rejected";
+  }>(
+    `SELECT vehicle_access.decide_contract_extension($1,$2::uuid,$3,$4,$5) AS state`,
+    [
+      input.actorUserId,
+      input.extensionRequestId,
+      input.action,
+      input.reason ?? null,
+      input.idempotencyKey,
+    ],
+  );
+  return one(result.rows, "vehicle_contract_extension_state").state;
+}
+
+export async function getVehicleRentalOperationsSnapshot(actorUserId: number) {
+  const result = await database().query<{
+    snapshot: RentalOperationsSnapshotWire;
+  }>(`SELECT vehicle_access.rental_operations_snapshot($1) AS snapshot`, [
+    actorUserId,
+  ]);
+  const snapshot = one(
+    result.rows,
+    "vehicle_rental_operations_snapshot",
+  ).snapshot;
+  return {
+    assetStateCounts: snapshot.asset_state_counts ?? {},
+    activeAvailabilityBlocks: Number(snapshot.active_availability_blocks ?? 0),
+    activeAvailabilityBlockItems: (
+      snapshot.active_availability_block_items ?? []
+    ).map((item) => ({
+      id: item.id,
+      assetId: item.asset_id,
+      reason: item.reason,
+      note: item.note,
+      startsAt: item.starts_at,
+      endsAt: item.ends_at,
+    })),
+    requestedExtensions: Number(snapshot.requested_extensions ?? 0),
+    requestedExtensionItems: (snapshot.requested_extension_items ?? []).map(
+      (item) => ({
+        id: item.id,
+        contractId: item.contract_id,
+        reference: item.reference,
+        workerUserId: Number(item.worker_user_id),
+        requestedEndsAt: item.requested_ends_at,
+        createdAt: item.created_at,
+      }),
+    ),
+    providerLocations: (snapshot.provider_locations ?? []).map((item) => ({
+      id: item.id,
+      providerId: item.provider_id,
+      locationCode: item.location_code,
+      displayName: item.display_name,
+      addressSummary: item.address_summary,
+      timezoneName: item.timezone_name,
+    })),
+    currentAssetLocations: (snapshot.current_asset_locations ?? []).map(
+      (item) => ({
+        assetId: item.asset_id,
+        registrationNumber: item.registration_number,
+        make: item.make,
+        model: item.model,
+        providerId: item.provider_id,
+        locationId: item.location_id,
+        locationName: item.location_name,
+        locationCode: item.location_code,
+        assignedAt: item.assigned_at,
+      }),
+    ),
+    upcomingPickups: (snapshot.upcoming_pickups ?? []).map((item) => ({
+      contractId: item.contract_id,
+      reference: item.reference,
+      assetId: item.asset_id,
+      startsAt: item.starts_at,
+      location: item.location,
+    })),
+    upcomingReturns: (snapshot.upcoming_returns ?? []).map((item) => ({
+      contractId: item.contract_id,
+      reference: item.reference,
+      assetId: item.asset_id,
+      endsAt: item.ends_at,
+      state: item.state,
+    })),
+  } satisfies RentalOperationsSnapshot;
+}
+
+type TrackerOperationsSnapshotWire = {
+  active_trackers?: number;
+  open_flags?: number;
+  recent_positions?: Array<{
+    tracker_id: string;
+    asset_id: string;
+    contract_id: string | null;
+    observed_at: string;
+    latitude: number;
+    longitude: number;
+    speed_kph: number | null;
+    ignition_on: boolean | null;
+    integrity_score: number;
+  }>;
+  recent_flags?: Array<{
+    id: string;
+    asset_id: string;
+    contract_id: string | null;
+    flag_code: string;
+    severity: "info" | "warning" | "critical";
+    detected_at: string;
+    detail: Record<string, unknown>;
+  }>;
+  control_cases?: Array<{
+    id: string;
+    contract_id: string;
+    asset_id: string;
+    state: string;
+    reason_code: string;
+    requested_by_user_id: number | null;
+    authorized_by_user_id: number | null;
+    expires_at: string;
+    created_at: string;
+  }>;
+};
+
+export type VehicleTrackerOperationsSnapshot = {
+  activeTrackers: number;
+  openFlags: number;
+  recentPositions: Array<{
+    trackerId: string;
+    assetId: string;
+    contractId: string | null;
+    observedAt: string;
+    latitude: number;
+    longitude: number;
+    speedKph: number | null;
+    ignitionOn: boolean | null;
+    integrityScore: number;
+  }>;
+  recentFlags: Array<{
+    id: string;
+    assetId: string;
+    contractId: string | null;
+    flagCode: string;
+    severity: "info" | "warning" | "critical";
+    detectedAt: string;
+    detail: Record<string, unknown>;
+  }>;
+  controlCases: Array<{
+    id: string;
+    contractId: string;
+    assetId: string;
+    state: string;
+    reasonCode: string;
+    requestedByUserId: number | null;
+    authorizedByUserId: number | null;
+    expiresAt: string;
+    createdAt: string;
+  }>;
+};
+
+export type VehicleTrackerProviderKind =
+  | "generic_webhook"
+  | "samsara_webhook"
+  | "geotab_feed"
+  | "traccar_rest"
+  | "oem_gateway"
+  | "aftermarket_gateway";
+
+export type VehicleTrackerSignalKind =
+  | "position"
+  | "engine"
+  | "tamper"
+  | "emergency"
+  | "provider_geofence"
+  | "command_ack";
+
+export async function createVehicleTrackerProvider(input: {
+  actorUserId: number;
+  fleetProviderId: string;
+  providerKind: VehicleTrackerProviderKind;
+  integrationKey: string;
+  displayName: string;
+  credentialRef: string;
+  idempotencyKey: string;
+}) {
+  const result = await database().query<{ id: string }>(
+    `SELECT vehicle_access.create_tracker_provider($1,$2::uuid,$3::vehicle_access.tracker_provider_kind,$4,$5,$6,$7) AS id`,
+    [
+      input.actorUserId,
+      input.fleetProviderId,
+      input.providerKind,
+      input.integrationKey,
+      input.displayName,
+      input.credentialRef,
+      input.idempotencyKey,
+    ],
+  );
+  return one(result.rows, "vehicle_tracker_provider").id;
+}
+
+export async function registerVehicleAssetTracker(input: {
+  actorUserId: number;
+  assetId: string;
+  trackerProviderId: string;
+  externalDeviceId: string;
+  deviceIdentifierSha256: string;
+  supportsPreventNextStart: boolean;
+  idempotencyKey: string;
+}) {
+  const result = await database().query<{ id: string }>(
+    `SELECT vehicle_access.register_asset_tracker($1,$2::uuid,$3::uuid,$4,$5,$6,$7) AS id`,
+    [
+      input.actorUserId,
+      input.assetId,
+      input.trackerProviderId,
+      input.externalDeviceId,
+      input.deviceIdentifierSha256,
+      input.supportsPreventNextStart,
+      input.idempotencyKey,
+    ],
+  );
+  return one(result.rows, "vehicle_asset_tracker").id;
+}
+
+export async function createVehicleRentalGeofence(input: {
+  actorUserId: number;
+  assetId: string;
+  geofenceKind: "restricted" | "return_zone" | "service_zone";
+  code: string;
+  displayName: string;
+  geojson: Record<string, unknown>;
+  idempotencyKey: string;
+}) {
+  const result = await database().query<{ id: string }>(
+    `SELECT vehicle_access.create_rental_asset_geofence($1,$2::uuid,$3::vehicle_access.rental_geofence_kind,$4,$5,$6::jsonb,$7) AS id`,
+    [
+      input.actorUserId,
+      input.assetId,
+      input.geofenceKind,
+      input.code,
+      input.displayName,
+      JSON.stringify(input.geojson),
+      input.idempotencyKey,
+    ],
+  );
+  return one(result.rows, "vehicle_rental_geofence").id;
+}
+
+export async function recordVehicleTrackerControlConsent(input: {
+  workerUserId: number;
+  contractId: string;
+  consentVersion: string;
+  consentSha256Hex: string;
+  idempotencyKey: string;
+}) {
+  const result = await database().query<{ id: string }>(
+    `SELECT vehicle_access.record_tracker_control_consent($1,$2::uuid,$3,$4,$5) AS id`,
+    [
+      input.workerUserId,
+      input.contractId,
+      input.consentVersion,
+      input.consentSha256Hex,
+      input.idempotencyKey,
+    ],
+  );
+  return one(result.rows, "vehicle_tracker_control_consent").id;
+}
+
+export async function ingestVehicleTrackerSignal(input: {
+  trackerId: string;
+  externalEventId: string;
+  signalKind: VehicleTrackerSignalKind;
+  observedAt: string;
+  latitude?: number | null;
+  longitude?: number | null;
+  speedKph?: number | null;
+  headingDegrees?: number | null;
+  accuracyM?: number | null;
+  odometerKm?: number | null;
+  ignitionOn?: boolean | null;
+  integrityScore: number;
+  payloadSha256Hex: string;
+  normalizedPayload: Record<string, unknown>;
+}) {
+  const result = await database().query<{ id: string }>(
+    `SELECT vehicle_access.record_vehicle_tracker_signal(
+      $1::uuid,$2,$3::vehicle_access.tracker_signal_kind,$4::timestamptz,
+      $5::numeric,$6::numeric,$7::numeric,$8::numeric,$9::numeric,$10::numeric,
+      $11::boolean,$12::smallint,$13,$14::jsonb
+    ) AS id`,
+    [
+      input.trackerId,
+      input.externalEventId,
+      input.signalKind,
+      input.observedAt,
+      input.latitude ?? null,
+      input.longitude ?? null,
+      input.speedKph ?? null,
+      input.headingDegrees ?? null,
+      input.accuracyM ?? null,
+      input.odometerKm ?? null,
+      input.ignitionOn ?? null,
+      input.integrityScore,
+      input.payloadSha256Hex,
+      JSON.stringify(input.normalizedPayload),
+    ],
+  );
+  return one(result.rows, "vehicle_tracker_signal").id;
+}
+
+export async function recordVehicleRentalPaymentTrackingSignal(input: {
+  actorUserId: number;
+  contractId: string;
+  paymentReferenceSha256Hex: string;
+  state: "past_due" | "cured" | "disputed" | "unknown";
+  effectiveAt: string;
+  graceEndsAt?: string | null;
+  evidenceSha256Hex: string;
+  source: string;
+  idempotencyKey: string;
+}) {
+  const result = await database().query<{ id: string }>(
+    `SELECT vehicle_access.record_rental_payment_tracking_signal($1,$2::uuid,$3,$4::vehicle_access.rental_payment_tracking_state,$5::timestamptz,$6::timestamptz,$7,$8,$9) AS id`,
+    [
+      input.actorUserId,
+      input.contractId,
+      input.paymentReferenceSha256Hex,
+      input.state,
+      input.effectiveAt,
+      input.graceEndsAt ?? null,
+      input.evidenceSha256Hex,
+      input.source,
+      input.idempotencyKey,
+    ],
+  );
+  return one(result.rows, "vehicle_rental_payment_tracking_signal").id;
+}
+
+export async function requestVehiclePreventNextStart(input: {
+  actorUserId: number;
+  contractId: string;
+  paymentTrackingSignalId: string;
+  reasonCode: string;
+  idempotencyKey: string;
+}) {
+  const result = await database().query<{ id: string }>(
+    `SELECT vehicle_access.request_prevent_next_start($1,$2::uuid,$3::uuid,$4,$5) AS id`,
+    [
+      input.actorUserId,
+      input.contractId,
+      input.paymentTrackingSignalId,
+      input.reasonCode,
+      input.idempotencyKey,
+    ],
+  );
+  return one(result.rows, "vehicle_prevent_next_start_case").id;
+}
+
+export async function authorizeVehiclePreventNextStart(input: {
+  actorUserId: number;
+  controlCaseId: string;
+  idempotencyKey: string;
+}) {
+  const result = await database().query<{ state: "authorized" }>(
+    `SELECT vehicle_access.authorize_prevent_next_start($1,$2::uuid,$3) AS state`,
+    [input.actorUserId, input.controlCaseId, input.idempotencyKey],
+  );
+  return one(result.rows, "vehicle_prevent_next_start_state").state;
+}
+
+export async function cancelVehiclePreventNextStart(input: {
+  actorUserId: number;
+  controlCaseId: string;
+  reason: string;
+  idempotencyKey: string;
+}) {
+  const result = await database().query<{ state: "cancelled" }>(
+    `SELECT vehicle_access.cancel_prevent_next_start($1,$2::uuid,$3,$4) AS state`,
+    [
+      input.actorUserId,
+      input.controlCaseId,
+      input.reason,
+      input.idempotencyKey,
+    ],
+  );
+  return one(result.rows, "vehicle_prevent_next_start_state").state;
+}
+
+export async function getVehicleTrackerOperationsSnapshot(actorUserId: number) {
+  const result = await database().query<{
+    snapshot: TrackerOperationsSnapshotWire;
+  }>(`SELECT vehicle_access.tracker_operations_snapshot($1) AS snapshot`, [
+    actorUserId,
+  ]);
+  const snapshot = one(
+    result.rows,
+    "vehicle_tracker_operations_snapshot",
+  ).snapshot;
+  return {
+    activeTrackers: Number(snapshot.active_trackers ?? 0),
+    openFlags: Number(snapshot.open_flags ?? 0),
+    recentPositions: (snapshot.recent_positions ?? []).map((item) => ({
+      trackerId: item.tracker_id,
+      assetId: item.asset_id,
+      contractId: item.contract_id,
+      observedAt: item.observed_at,
+      latitude: Number(item.latitude),
+      longitude: Number(item.longitude),
+      speedKph: item.speed_kph === null ? null : Number(item.speed_kph),
+      ignitionOn: item.ignition_on,
+      integrityScore: Number(item.integrity_score),
+    })),
+    recentFlags: (snapshot.recent_flags ?? []).map((item) => ({
+      id: item.id,
+      assetId: item.asset_id,
+      contractId: item.contract_id,
+      flagCode: item.flag_code,
+      severity: item.severity,
+      detectedAt: item.detected_at,
+      detail: item.detail,
+    })),
+    controlCases: (snapshot.control_cases ?? []).map((item) => ({
+      id: item.id,
+      contractId: item.contract_id,
+      assetId: item.asset_id,
+      state: item.state,
+      reasonCode: item.reason_code,
+      requestedByUserId: item.requested_by_user_id,
+      authorizedByUserId: item.authorized_by_user_id,
+      expiresAt: item.expires_at,
+      createdAt: item.created_at,
+    })),
+  } satisfies VehicleTrackerOperationsSnapshot;
+}
+
+export type ClaimedVehiclePreventNextStartCommand = {
+  commandId: string;
+  controlCaseId: string;
+  claimToken: string;
+  trackerId: string;
+  providerKind: VehicleTrackerProviderKind;
+  externalDeviceId: string;
+};
+
+export async function resolveActiveVehicleTrackerForIngress(input: {
+  integrationKey: string;
+  externalDeviceId: string;
+}) {
+  const result = await database().query<{
+    tracker_id: string;
+    provider_kind: VehicleTrackerProviderKind;
+  }>(`SELECT * FROM vehicle_access.resolve_active_tracker_for_ingress($1,$2)`, [
+    input.integrationKey,
+    input.externalDeviceId,
+  ]);
+  return result.rows[0]
+    ? {
+        trackerId: result.rows[0].tracker_id,
+        providerKind: result.rows[0].provider_kind,
+      }
+    : null;
+}
+
+export async function claimVehiclePreventNextStartCommand(input: {
+  workerId: string;
+}) {
+  const result = await database().query<{
+    command_id: string;
+    case_id: string;
+    claim_token: string;
+    tracker_id: string;
+    provider_kind: VehicleTrackerProviderKind;
+    external_device_id: string;
+  }>(`SELECT * FROM vehicle_access.claim_prevent_next_start_command($1)`, [
+    input.workerId,
+  ]);
+  const row = result.rows[0];
+  if (!row) return null;
+  return {
+    commandId: row.command_id,
+    controlCaseId: row.case_id,
+    claimToken: row.claim_token,
+    trackerId: row.tracker_id,
+    providerKind: row.provider_kind,
+    externalDeviceId: row.external_device_id,
+  } satisfies ClaimedVehiclePreventNextStartCommand;
+}
+
+export async function markVehiclePreventNextStartDispatched(input: {
+  commandId: string;
+  claimToken: string;
+  providerCommandId: string;
+}) {
+  const result = await database().query<{ state: "dispatched" }>(
+    `SELECT vehicle_access.mark_prevent_next_start_dispatched($1::uuid,$2::uuid,$3) AS state`,
+    [input.commandId, input.claimToken, input.providerCommandId],
+  );
+  return one(result.rows, "vehicle_prevent_next_start_dispatch").state;
+}
+
+export async function completeVehiclePreventNextStartCommand(input: {
+  commandId: string;
+  claimToken: string;
+  success: boolean;
+  acknowledgementSha256Hex: string;
+  reason: string;
+}) {
+  const result = await database().query<{
+    state: "acknowledged" | "failed";
+  }>(
+    `SELECT vehicle_access.complete_prevent_next_start_command($1::uuid,$2::uuid,$3,$4,$5) AS state`,
+    [
+      input.commandId,
+      input.claimToken,
+      input.success,
+      input.acknowledgementSha256Hex,
+      input.reason,
+    ],
+  );
+  return one(result.rows, "vehicle_prevent_next_start_completion").state;
+}
+
+export async function failClaimedVehiclePreventNextStartCommand(input: {
+  commandId: string;
+  claimToken: string;
+  reason: string;
+}) {
+  const result = await database().query<{ state: "failed" }>(
+    `SELECT vehicle_access.fail_claimed_prevent_next_start_command($1::uuid,$2::uuid,$3) AS state`,
+    [input.commandId, input.claimToken, input.reason],
+  );
+  return one(result.rows, "vehicle_prevent_next_start_failure").state;
+}

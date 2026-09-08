@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/subtle"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -61,6 +62,7 @@ type replenishmentSku struct {
 }
 
 type replenishmentRequest struct {
+	WorkflowID           string             `json:"workflow_id,omitempty"`
 	City                 string             `json:"city"`
 	PlanningHorizonHours int                `json:"planning_horizon_hours"`
 	Trigger              string             `json:"trigger"`
@@ -118,6 +120,23 @@ type replenishmentResponse struct {
 	Metrics    map[string]any `json:"metrics"`
 }
 
+type replenishmentCancelRequest struct {
+	WorkflowID      string `json:"workflow_id"`
+	CompensationID  string `json:"compensation_id"`
+	Reason          string `json:"reason"`
+	OriginalFailure string `json:"original_failure"`
+}
+
+type replenishmentCancelResponse struct {
+	Service        string         `json:"service"`
+	WorkflowID     string         `json:"workflow_id"`
+	CompensationID string         `json:"compensation_id"`
+	Status         string         `json:"status"`
+	Idempotent     bool           `json:"idempotent"`
+	Middleware     map[string]any `json:"middleware"`
+	Metrics        map[string]any `json:"metrics"`
+}
+
 func main() {
 	databaseURL := strings.TrimSpace(os.Getenv("DATABASE_URL"))
 	if databaseURL == "" {
@@ -145,6 +164,7 @@ func main() {
 	mux.HandleFunc("/middleware-status", service.middlewareStatusHandler)
 	mux.HandleFunc("/inventory/adjustment", service.adjustmentHandler)
 	mux.HandleFunc("/inventory/replenishment-request", service.replenishmentHandler)
+	mux.HandleFunc("/inventory/replenishment-cancel", service.replenishmentCancelHandler)
 	mux.HandleFunc("/inventory/position", service.positionHandler)
 
 	addr := fmt.Sprintf("%s:%s", getenv("BIND_HOST", "127.0.0.1"), getenv("PORT", "8117"))
@@ -323,7 +343,22 @@ func (s *inventoryService) replenishmentHandler(w http.ResponseWriter, r *http.R
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "city and at least one sku are required", "trace_id": traceID})
 		return
 	}
-	workflowID := fmt.Sprintf("repl-%d", time.Now().UnixNano())
+	workflowID := strings.TrimSpace(request.WorkflowID)
+	journeyWorkflowID := strings.TrimSpace(r.Header.Get("X-Journey-Workflow-Id"))
+	if journeyWorkflowID != "" && workflowID != "" && workflowID != journeyWorkflowID {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "workflow_id must match the journey workflow identity", "trace_id": traceID})
+		return
+	}
+	if journeyWorkflowID != "" {
+		workflowID = journeyWorkflowID
+	}
+	if workflowID == "" {
+		workflowID = fmt.Sprintf("repl-%d", time.Now().UnixNano())
+	}
+	if len(workflowID) > 160 {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "workflow_id is too long", "trace_id": traceID})
+		return
+	}
 	resourceID := fmt.Sprintf("city:%s:replenishment", strings.ToLower(strings.ReplaceAll(strings.TrimSpace(request.City), " ", "-")))
 	approvals := make([]string, 0, len(request.Skus))
 	criticalCount := 0
@@ -381,6 +416,120 @@ func (s *inventoryService) replenishmentHandler(w http.ResponseWriter, r *http.R
 		Middleware: s.middlewareStatus(),
 		Metrics:    responseMetrics,
 	})
+}
+
+func (s *inventoryService) replenishmentCancelHandler(w http.ResponseWriter, r *http.Request) {
+	startedAt := time.Now()
+	traceID := requestTraceID(r)
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed", "trace_id": traceID})
+		return
+	}
+	if err := s.requireInternalAccess(r); err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": err.Error(), "trace_id": traceID})
+		return
+	}
+	var request replenishmentCancelRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16*1024)).Decode(&request); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid cancellation payload", "trace_id": traceID})
+		return
+	}
+	request.WorkflowID = strings.TrimSpace(request.WorkflowID)
+	request.CompensationID = strings.TrimSpace(request.CompensationID)
+	request.Reason = strings.TrimSpace(request.Reason)
+	request.OriginalFailure = strings.TrimSpace(request.OriginalFailure)
+	if len(request.WorkflowID) < 3 || len(request.WorkflowID) > 160 || len(request.CompensationID) < 3 || len(request.CompensationID) > 160 || len(request.Reason) < 3 || len(request.Reason) > 256 || len(request.OriginalFailure) > 1024 {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid bounded cancellation fields", "trace_id": traceID})
+		return
+	}
+	if headerWorkflowID := strings.TrimSpace(r.Header.Get("X-Journey-Workflow-Id")); headerWorkflowID == "" || headerWorkflowID != request.WorkflowID {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "journey workflow identity is required and must match the cancellation payload", "trace_id": traceID})
+		return
+	}
+	status, idempotent, err := s.cancelReplenishment(request, traceID)
+	if err != nil {
+		writeJSON(w, http.StatusConflict, map[string]any{"error": err.Error(), "trace_id": traceID})
+		return
+	}
+	writeJSON(w, http.StatusOK, replenishmentCancelResponse{
+		Service:        s.serviceName,
+		WorkflowID:     request.WorkflowID,
+		CompensationID: request.CompensationID,
+		Status:         status,
+		Idempotent:     idempotent,
+		Middleware:     s.middlewareStatus(),
+		Metrics:        map[string]any{"trace_id": traceID, "timings_ms": map[string]any{"total": roundDurationMs(time.Since(startedAt))}},
+	})
+}
+
+func (s *inventoryService) cancelReplenishment(request replenishmentCancelRequest, traceID string) (string, bool, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return "", false, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	var workflowType, status, resourceID string
+	if err := tx.QueryRow(`
+		SELECT workflow_type, status, resource_id
+		FROM inventory_workflows
+		WHERE workflow_id = $1
+		FOR UPDATE
+	`, request.WorkflowID).Scan(&workflowType, &status, &resourceID); err != nil {
+		if err == sql.ErrNoRows {
+			return "", false, fmt.Errorf("replenishment workflow was not found")
+		}
+		return "", false, err
+	}
+	if workflowType != "replenishment_request" {
+		return "", false, fmt.Errorf("workflow is not a replenishment request")
+	}
+	if status == "cancelled" {
+		var existingCompensationID string
+		err := tx.QueryRow(`
+			SELECT payload->>'compensation_id'
+			FROM inventory_workflow_events
+			WHERE workflow_id = $1 AND step = 'replenishment_cancelled'
+			ORDER BY id DESC
+			LIMIT 1
+		`, request.WorkflowID).Scan(&existingCompensationID)
+		if err != nil {
+			return "", false, fmt.Errorf("cancelled replenishment lacks immutable compensation evidence: %w", err)
+		}
+		if existingCompensationID != request.CompensationID {
+			return "", false, fmt.Errorf("replenishment workflow was already cancelled by a different compensation")
+		}
+		return status, true, nil
+	}
+	if status != "queued" && status != "urgent" {
+		return "", false, fmt.Errorf("replenishment workflow cannot be cancelled from %s", status)
+	}
+	if _, err := tx.Exec(`
+		UPDATE inventory_workflows
+		SET current_step = 'replenishment_cancelled', status = 'cancelled', last_error = $2, updated_at = NOW()
+		WHERE workflow_id = $1
+	`, request.WorkflowID, request.Reason); err != nil {
+		return "", false, err
+	}
+	payload, err := json.Marshal(map[string]any{
+		"compensation_id":  request.CompensationID,
+		"reason":           request.Reason,
+		"original_failure": request.OriginalFailure,
+		"trace_id":         traceID,
+		"stock_mutated":    false,
+	})
+	if err != nil {
+		return "", false, err
+	}
+	if _, err := tx.Exec(`
+		INSERT INTO inventory_workflow_events (workflow_id, workflow_type, resource_id, step, status, payload, created_at)
+		VALUES ($1, 'replenishment_request', $2, 'replenishment_cancelled', 'cancelled', $3::jsonb, NOW())
+	`, request.WorkflowID, resourceID, string(payload)); err != nil {
+		return "", false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return "", false, err
+	}
+	return "cancelled", false, nil
 }
 
 func (s *inventoryService) positionHandler(w http.ResponseWriter, r *http.Request) {
@@ -714,10 +863,10 @@ func (s *inventoryService) middlewareStatus() map[string]any {
 
 func (s *inventoryService) requireInternalAccess(r *http.Request) error {
 	provided := strings.TrimSpace(r.Header.Get("x-internal-service-token"))
-	if s.internalServiceToken == "" || provided == s.internalServiceToken {
-		return nil
+	if len(s.internalServiceToken) < 32 || len(provided) != len(s.internalServiceToken) || subtle.ConstantTimeCompare([]byte(provided), []byte(s.internalServiceToken)) != 1 {
+		return fmt.Errorf("unauthorized internal access")
 	}
-	return fmt.Errorf("unauthorized internal access")
+	return nil
 }
 
 func writeJSON(w http.ResponseWriter, statusCode int, payload any) {

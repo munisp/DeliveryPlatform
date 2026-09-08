@@ -1,5 +1,13 @@
 import { useMemo, useState } from "react";
-import { FlatList, Pressable, RefreshControl, ScrollView, Text, TextInput, View } from "react-native";
+import {
+  FlatList,
+  Pressable,
+  RefreshControl,
+  ScrollView,
+  Text,
+  TextInput,
+  View,
+} from "react-native";
 
 import {
   ConfirmationModal,
@@ -15,9 +23,14 @@ import { PhotoAnnotationSheet } from "@/components/mobile/photo-annotation-sheet
 import { SmartSearchPanel } from "@/components/mobile/smart-search-panel";
 import { ScreenContainer } from "@/components/screen-container";
 import { pickPhotoAttachment } from "@/lib/mobile/attachments";
-import { useColors } from "@/hooks/use-colors";
 import { useMobileApp } from "@/lib/mobile/provider";
-import type { AttachmentDraft, InventoryNode, ProcurementProposal, RiskLevel, SmartSearchResult, WorkflowActionType } from "@/lib/mobile/types";
+import type {
+  AttachmentDraft,
+  InventoryNode,
+  ProcurementProposal,
+  RiskLevel,
+  SmartSearchResult,
+} from "@/lib/mobile/types";
 import {
   applyInventoryFilters,
   applyProcurementFilters,
@@ -29,9 +42,18 @@ import {
 
 type LogisticsActionTarget =
   | { type: "inventory_audit"; node: InventoryNode }
-  | { type: "replenishment"; proposal?: ProcurementProposal; node?: InventoryNode };
+  | {
+      type: "replenishment";
+      proposal?: ProcurementProposal;
+      node?: InventoryNode;
+    };
 
-const riskOptions: Array<RiskLevel | "all"> = ["all", "critical", "watch", "stable"];
+const riskOptions: (RiskLevel | "all")[] = [
+  "all",
+  "critical",
+  "watch",
+  "stable",
+];
 const sortOptions = [
   { value: "risk_desc", label: "Risk" },
   { value: "freshness_desc", label: "Freshness" },
@@ -40,7 +62,6 @@ const sortOptions = [
 ] as const;
 
 export default function LogisticsScreen() {
-  const colors = useColors();
   const {
     snapshot,
     syncing,
@@ -56,27 +77,55 @@ export default function LogisticsScreen() {
   } = useMobileApp();
 
   const [selectedNode, setSelectedNode] = useState<InventoryNode | null>(null);
-  const [selectedProposal, setSelectedProposal] = useState<ProcurementProposal | null>(null);
-  const [pendingAction, setPendingAction] = useState<LogisticsActionTarget | null>(null);
+  const [selectedProposal, setSelectedProposal] =
+    useState<ProcurementProposal | null>(null);
+  const [pendingAction, setPendingAction] =
+    useState<LogisticsActionTarget | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [noteText, setNoteText] = useState("");
   const [attachments, setAttachments] = useState<AttachmentDraft[]>([]);
-  const [annotationAttachment, setAnnotationAttachment] = useState<AttachmentDraft | null>(null);
+  const [annotationAttachment, setAnnotationAttachment] =
+    useState<AttachmentDraft | null>(null);
 
   const inventoryFilters = activeFilters.inventory;
   const procurementFilters = activeFilters.procurement;
-  const inventoryRegions = useMemo(() => availableRegionsForDomain("inventory", snapshot.inventory), [snapshot.inventory]);
-  const filteredInventory = useMemo(() => applyInventoryFilters(snapshot.inventory, inventoryFilters), [snapshot.inventory, inventoryFilters]);
-  const filteredProcurement = useMemo(() => applyProcurementFilters(snapshot.procurement, procurementFilters), [snapshot.procurement, procurementFilters]);
-  const criticalNodes = useMemo(() => snapshot.inventory.filter((item) => item.risk === "critical").length, [snapshot.inventory]);
-  const pinnedNodes = useMemo(() => snapshot.inventory.filter((item) => item.pinned).length, [snapshot.inventory]);
+  const inventoryRegions = useMemo(
+    () => availableRegionsForDomain("inventory", snapshot.inventory),
+    [snapshot.inventory],
+  );
+  const filteredInventory = useMemo(
+    () => applyInventoryFilters(snapshot.inventory, inventoryFilters),
+    [snapshot.inventory, inventoryFilters],
+  );
+  const filteredProcurement = useMemo(
+    () => applyProcurementFilters(snapshot.procurement, procurementFilters),
+    [snapshot.procurement, procurementFilters],
+  );
+  const criticalNodes = useMemo(
+    () => snapshot.inventory.filter((item) => item.risk === "critical").length,
+    [snapshot.inventory],
+  );
+  const pinnedNodes = useMemo(
+    () => snapshot.inventory.filter((item) => item.pinned).length,
+    [snapshot.inventory],
+  );
   const selectedProposalForNode = useMemo(
-    () => snapshot.procurement.find((proposal) => proposal.nodeName === selectedNode?.name) ?? null,
+    () =>
+      snapshot.procurement.find(
+        (proposal) => proposal.nodeName === selectedNode?.name,
+      ) ?? null,
     [selectedNode, snapshot.procurement],
   );
-  const latestDraft = useMemo(() => noteDrafts.find((draft) => draft.domain === "inventory") ?? null, [noteDrafts]);
-  const inventoryAuditPreset = quickActionPresets.find((preset) => preset.id === "inventory-audit");
-  const replenishmentPreset = quickActionPresets.find((preset) => preset.id === "replenishment");
+  const latestDraft = useMemo(
+    () => noteDrafts.find((draft) => draft.domain === "inventory") ?? null,
+    [noteDrafts],
+  );
+  const inventoryAuditPreset = quickActionPresets.find(
+    (preset) => preset.id === "inventory-audit",
+  );
+  const replenishmentPreset = quickActionPresets.find(
+    (preset) => preset.id === "replenishment",
+  );
 
   const queueConfirmedAction = async () => {
     if (!pendingAction) {
@@ -87,7 +136,9 @@ export default function LogisticsScreen() {
       await queueAction("inventory_audit", {
         title: `Inventory audit for ${pendingAction.node.name}`,
         targetId: pendingAction.node.id,
-        note: noteText || `Coverage ${pendingAction.node.stockCoverageHours ?? "unknown"}h. Confidence ${pendingAction.node.confidence}.`,
+        note:
+          noteText ||
+          `Coverage ${pendingAction.node.stockCoverageHours ?? "unknown"}h. Confidence ${pendingAction.node.confidence}.`,
         metadata: {
           region: pendingAction.node.region,
           risk: pendingAction.node.risk,
@@ -99,16 +150,23 @@ export default function LogisticsScreen() {
       const proposal = pendingAction.proposal;
       const node = pendingAction.node;
       await queueAction("replenishment", {
-        title: proposal ? `Replenishment for ${proposal.sku}` : `Replenishment for ${node?.name ?? "selected node"}`,
+        title: proposal
+          ? `Replenishment for ${proposal.sku}`
+          : `Replenishment for ${node?.name ?? "selected node"}`,
         targetId: proposal?.id ?? node?.id,
-        note: noteText || (proposal
-          ? `${proposal.action} ${proposal.recommendedUnits ?? 0} units via ${proposal.supplier ?? "assigned supplier"}.`
-          : `Queue replenishment for ${node?.name ?? "selected node"} from logistics control.`),
+        note:
+          noteText ||
+          (proposal
+            ? `${proposal.action} ${proposal.recommendedUnits ?? 0} units via ${proposal.supplier ?? "assigned supplier"}.`
+            : `Queue replenishment for ${node?.name ?? "selected node"} from logistics control.`),
         metadata: {
           urgency: proposal?.urgency ?? node?.risk ?? "watch",
           nodeName: proposal?.nodeName ?? node?.name ?? "unknown",
         },
-        priority: proposal?.urgency === "critical" || node?.risk === "critical" ? "urgent" : "high",
+        priority:
+          proposal?.urgency === "critical" || node?.risk === "critical"
+            ? "urgent"
+            : "high",
         attachments,
       });
     }
@@ -121,7 +179,9 @@ export default function LogisticsScreen() {
   };
 
   const queueBulkAudit = async () => {
-    const targets = filteredInventory.filter((item) => selectedIds.includes(item.id));
+    const targets = filteredInventory.filter((item) =>
+      selectedIds.includes(item.id),
+    );
     for (const node of targets) {
       await queueAction("inventory_audit", {
         title: `Inventory audit for ${node.name}`,
@@ -140,7 +200,11 @@ export default function LogisticsScreen() {
   const persistDraft = async () => {
     await saveNoteDraft({
       id: selectedNode?.id ?? selectedProposal?.id ?? "inventory-general-draft",
-      title: selectedNode ? `Draft for ${selectedNode.name}` : selectedProposal ? `Draft for ${selectedProposal.sku}` : "Inventory draft",
+      title: selectedNode
+        ? `Draft for ${selectedNode.name}`
+        : selectedProposal
+          ? `Draft for ${selectedProposal.sku}`
+          : "Inventory draft",
       body: noteText,
       targetId: selectedNode?.id ?? selectedProposal?.id,
       domain: selectedProposal ? "procurement" : "inventory",
@@ -150,16 +214,26 @@ export default function LogisticsScreen() {
   };
 
   const toggleBulkSelection = (recordId: string) => {
-    setSelectedIds((current) => current.includes(recordId) ? current.filter((id) => id !== recordId) : [...current, recordId]);
+    setSelectedIds((current) =>
+      current.includes(recordId)
+        ? current.filter((id) => id !== recordId)
+        : [...current, recordId],
+    );
   };
 
   const selectedRecordCount = selectedIds.length;
 
   const handleSmartSearchSelection = (result: SmartSearchResult) => {
-    const matchedNode = snapshot.inventory.find((item) => item.id === result.recordId);
+    const matchedNode = snapshot.inventory.find(
+      (item) => item.id === result.recordId,
+    );
     if (matchedNode) {
       setSelectedNode(matchedNode);
-      setSelectedProposal(snapshot.procurement.find((proposal) => proposal.nodeName === matchedNode.name) ?? null);
+      setSelectedProposal(
+        snapshot.procurement.find(
+          (proposal) => proposal.nodeName === matchedNode.name,
+        ) ?? null,
+      );
     }
   };
 
@@ -168,14 +242,23 @@ export default function LogisticsScreen() {
       <FlatList
         data={filteredInventory}
         keyExtractor={(item) => item.id}
-        refreshControl={<RefreshControl refreshing={syncing} onRefresh={() => void refreshSnapshot()} />}
+        refreshControl={
+          <RefreshControl
+            refreshing={syncing}
+            onRefresh={() => void refreshSnapshot()}
+          />
+        }
         contentContainerStyle={{ gap: 16, paddingTop: 20, paddingBottom: 24 }}
         ListHeaderComponent={
           <View className="gap-4">
             <View>
-              <Text className="text-3xl font-bold text-foreground">Logistics Control</Text>
+              <Text className="text-3xl font-bold text-foreground">
+                Logistics Control
+              </Text>
               <Text className="mt-2 text-sm leading-6 text-muted">
-                Search, pin, filter, and queue logistics work faster while keeping procurement and inventory actions safe under unstable connectivity.
+                Search, pin, filter, and queue logistics work faster while
+                keeping procurement and inventory actions safe under unstable
+                connectivity.
               </Text>
             </View>
 
@@ -189,7 +272,11 @@ export default function LogisticsScreen() {
                 <MetricPill label="Selected" value={selectedRecordCount} />
               </View>
               {snapshot.services.length > 0 ? (
-                snapshot.services.slice(0, 2).map((service) => <ServiceHealthCard key={service.key} service={service} />)
+                snapshot.services
+                  .slice(0, 2)
+                  .map((service) => (
+                    <ServiceHealthCard key={service.key} service={service} />
+                  ))
               ) : (
                 <EmptyState
                   title="No warehouse telemetry loaded"
@@ -204,55 +291,127 @@ export default function LogisticsScreen() {
             >
               <TextInput
                 value={inventoryFilters.query}
-                onChangeText={(value) => void updateFilter("inventory", { query: value })}
+                onChangeText={(value) =>
+                  void updateFilter("inventory", { query: value })
+                }
                 placeholder="Search warehouse, note, or urgency"
                 placeholderTextColor="#6B7F97"
                 className="rounded-[20px] border border-border bg-background px-4 py-3 text-sm text-foreground"
               />
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={{ gap: 8 }}
+              >
                 {inventoryRegions.map((region) => (
                   <Pressable
                     key={region}
                     onPress={() => void updateFilter("inventory", { region })}
-                    className={inventoryFilters.region === region ? "rounded-full bg-primary px-4 py-2" : "rounded-full bg-background px-4 py-2"}
+                    className={
+                      inventoryFilters.region === region
+                        ? "rounded-full bg-primary px-4 py-2"
+                        : "rounded-full bg-background px-4 py-2"
+                    }
                   >
-                    <Text className={inventoryFilters.region === region ? "text-xs font-semibold text-white" : "text-xs font-semibold text-foreground"}>{region === "all" ? "All regions" : region}</Text>
+                    <Text
+                      className={
+                        inventoryFilters.region === region
+                          ? "text-xs font-semibold text-white"
+                          : "text-xs font-semibold text-foreground"
+                      }
+                    >
+                      {region === "all" ? "All regions" : region}
+                    </Text>
                   </Pressable>
                 ))}
               </ScrollView>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={{ gap: 8 }}
+              >
                 {riskOptions.map((risk) => (
                   <Pressable
                     key={risk}
                     onPress={() => void updateFilter("inventory", { risk })}
-                    className={inventoryFilters.risk === risk ? "rounded-full bg-accent2 px-4 py-2" : "rounded-full bg-background px-4 py-2"}
+                    className={
+                      inventoryFilters.risk === risk
+                        ? "rounded-full bg-accent2 px-4 py-2"
+                        : "rounded-full bg-background px-4 py-2"
+                    }
                   >
-                    <Text className={inventoryFilters.risk === risk ? "text-xs font-semibold text-white" : "text-xs font-semibold text-foreground"}>{risk}</Text>
+                    <Text
+                      className={
+                        inventoryFilters.risk === risk
+                          ? "text-xs font-semibold text-white"
+                          : "text-xs font-semibold text-foreground"
+                      }
+                    >
+                      {risk}
+                    </Text>
                   </Pressable>
                 ))}
               </ScrollView>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={{ gap: 8 }}
+              >
                 {sortOptions.map((option) => (
                   <Pressable
                     key={option.value}
-                    onPress={() => void updateFilter("inventory", { sortBy: option.value })}
-                    className={inventoryFilters.sortBy === option.value ? "rounded-full bg-primary px-4 py-2" : "rounded-full bg-background px-4 py-2"}
+                    onPress={() =>
+                      void updateFilter("inventory", { sortBy: option.value })
+                    }
+                    className={
+                      inventoryFilters.sortBy === option.value
+                        ? "rounded-full bg-primary px-4 py-2"
+                        : "rounded-full bg-background px-4 py-2"
+                    }
                   >
-                    <Text className={inventoryFilters.sortBy === option.value ? "text-xs font-semibold text-white" : "text-xs font-semibold text-foreground"}>{option.label}</Text>
+                    <Text
+                      className={
+                        inventoryFilters.sortBy === option.value
+                          ? "text-xs font-semibold text-white"
+                          : "text-xs font-semibold text-foreground"
+                      }
+                    >
+                      {option.label}
+                    </Text>
                   </Pressable>
                 ))}
                 <Pressable
-                  onPress={() => void updateFilter("inventory", { pinnedOnly: !inventoryFilters.pinnedOnly })}
-                  className={inventoryFilters.pinnedOnly ? "rounded-full bg-warning px-4 py-2" : "rounded-full bg-background px-4 py-2"}
+                  onPress={() =>
+                    void updateFilter("inventory", {
+                      pinnedOnly: !inventoryFilters.pinnedOnly,
+                    })
+                  }
+                  className={
+                    inventoryFilters.pinnedOnly
+                      ? "rounded-full bg-warning px-4 py-2"
+                      : "rounded-full bg-background px-4 py-2"
+                  }
                 >
-                  <Text className={inventoryFilters.pinnedOnly ? "text-xs font-semibold text-white" : "text-xs font-semibold text-foreground"}>Pinned only</Text>
+                  <Text
+                    className={
+                      inventoryFilters.pinnedOnly
+                        ? "text-xs font-semibold text-white"
+                        : "text-xs font-semibold text-foreground"
+                    }
+                  >
+                    Pinned only
+                  </Text>
                 </Pressable>
               </ScrollView>
             </SectionCard>
 
             <SmartSearchPanel
               domain="inventory"
-              region={inventoryFilters.region === "all" ? undefined : inventoryFilters.region}
+              region={
+                inventoryFilters.region === "all"
+                  ? undefined
+                  : inventoryFilters.region
+              }
               onSelectResult={handleSmartSearchSelection}
             />
 
@@ -262,9 +421,15 @@ export default function LogisticsScreen() {
             >
               {latestDraft ? (
                 <View className="rounded-[20px] border border-border bg-background/70 px-4 py-3">
-                  <Text className="text-xs uppercase tracking-[1px] text-muted">Latest saved draft</Text>
-                  <Text className="mt-2 text-sm font-semibold text-foreground">{latestDraft.title}</Text>
-                  <Text className="mt-1 text-sm leading-6 text-muted">{latestDraft.body || "Draft is empty."}</Text>
+                  <Text className="text-xs uppercase tracking-[1px] text-muted">
+                    Latest saved draft
+                  </Text>
+                  <Text className="mt-2 text-sm font-semibold text-foreground">
+                    {latestDraft.title}
+                  </Text>
+                  <Text className="mt-1 text-sm leading-6 text-muted">
+                    {latestDraft.body || "Draft is empty."}
+                  </Text>
                 </View>
               ) : null}
               <TextInput
@@ -278,30 +443,50 @@ export default function LogisticsScreen() {
               <View className="flex-row flex-wrap gap-3">
                 <Pressable
                   onPress={() => {
-                    const fallbackNode = filteredInventory[0] ?? snapshot.inventory[0];
+                    const fallbackNode =
+                      filteredInventory[0] ?? snapshot.inventory[0];
                     if (fallbackNode && inventoryAuditPreset) {
-                      const rendered = renderQuickActionText(inventoryAuditPreset, fallbackNode.name);
+                      const rendered = renderQuickActionText(
+                        inventoryAuditPreset,
+                        fallbackNode.name,
+                      );
                       setNoteText((current) => current || rendered.note);
-                      setPendingAction({ type: "inventory_audit", node: fallbackNode });
+                      setPendingAction({
+                        type: "inventory_audit",
+                        node: fallbackNode,
+                      });
                     }
                   }}
                   className="rounded-full bg-primary px-4 py-3"
                 >
-                  <Text className="text-xs font-semibold text-white">Quick audit</Text>
+                  <Text className="text-xs font-semibold text-white">
+                    Quick audit
+                  </Text>
                 </Pressable>
                 <Pressable
                   onPress={() => {
-                    const proposal = filteredProcurement[0] ?? snapshot.procurement[0];
-                    const fallbackNode = filteredInventory[0] ?? snapshot.inventory[0];
+                    const proposal =
+                      filteredProcurement[0] ?? snapshot.procurement[0];
+                    const fallbackNode =
+                      filteredInventory[0] ?? snapshot.inventory[0];
                     if ((proposal || fallbackNode) && replenishmentPreset) {
-                      const rendered = renderQuickActionText(replenishmentPreset, proposal?.sku ?? fallbackNode?.name ?? "record");
+                      const rendered = renderQuickActionText(
+                        replenishmentPreset,
+                        proposal?.sku ?? fallbackNode?.name ?? "record",
+                      );
                       setNoteText((current) => current || rendered.note);
-                      setPendingAction({ type: "replenishment", proposal, node: fallbackNode });
+                      setPendingAction({
+                        type: "replenishment",
+                        proposal,
+                        node: fallbackNode,
+                      });
                     }
                   }}
                   className="rounded-full bg-accent2 px-4 py-3"
                 >
-                  <Text className="text-xs font-semibold text-white">Quick replenishment</Text>
+                  <Text className="text-xs font-semibold text-white">
+                    Quick replenishment
+                  </Text>
                 </Pressable>
                 <Pressable
                   onPress={() => {
@@ -315,22 +500,40 @@ export default function LogisticsScreen() {
                   }}
                   className="rounded-full bg-surface px-4 py-3"
                 >
-                  <Text className="text-xs font-semibold text-foreground">Attach photo</Text>
+                  <Text className="text-xs font-semibold text-foreground">
+                    Attach photo
+                  </Text>
                 </Pressable>
-                <Pressable onPress={() => void persistDraft()} className="rounded-full bg-background px-4 py-3">
-                  <Text className="text-xs font-semibold text-foreground">Save draft</Text>
+                <Pressable
+                  onPress={() => void persistDraft()}
+                  className="rounded-full bg-background px-4 py-3"
+                >
+                  <Text className="text-xs font-semibold text-foreground">
+                    Save draft
+                  </Text>
                 </Pressable>
               </View>
               {attachments.length > 0 ? (
                 <View className="rounded-[20px] border border-border bg-background/70 px-4 py-3">
-                  <Text className="text-xs uppercase tracking-[1px] text-muted">Attached photos</Text>
-                                      {attachments.map((attachment) => (
-                      <Pressable key={attachment.id} onPress={() => setAnnotationAttachment(attachment)} className="mt-2 rounded-[16px] bg-surface px-3 py-2">
-                        <Text className="text-sm font-semibold text-foreground">{attachment.name}</Text>
-                        <Text className="mt-1 text-xs text-muted">{attachment.annotations?.annotatedAt ? "Annotated evidence saved" : "Tap to add drawing or text notes"}</Text>
-                      </Pressable>
-                    ))}
-
+                  <Text className="text-xs uppercase tracking-[1px] text-muted">
+                    Attached photos
+                  </Text>
+                  {attachments.map((attachment) => (
+                    <Pressable
+                      key={attachment.id}
+                      onPress={() => setAnnotationAttachment(attachment)}
+                      className="mt-2 rounded-[16px] bg-surface px-3 py-2"
+                    >
+                      <Text className="text-sm font-semibold text-foreground">
+                        {attachment.name}
+                      </Text>
+                      <Text className="mt-1 text-xs text-muted">
+                        {attachment.annotations?.annotatedAt
+                          ? "Annotated evidence saved"
+                          : "Tap to add drawing or text notes"}
+                      </Text>
+                    </Pressable>
+                  ))}
                 </View>
               ) : null}
             </SectionCard>
@@ -340,13 +543,26 @@ export default function LogisticsScreen() {
                 title="Bulk audit actions"
                 subtitle="Apply the same audit intent to multiple selected inventory nodes in one pass."
               >
-                <Text className="text-sm leading-6 text-muted">{selectedRecordCount} inventory records selected for bulk action.</Text>
+                <Text className="text-sm leading-6 text-muted">
+                  {selectedRecordCount} inventory records selected for bulk
+                  action.
+                </Text>
                 <View className="flex-row flex-wrap gap-3">
-                  <Pressable onPress={() => void queueBulkAudit()} className="rounded-full bg-primary px-4 py-3">
-                    <Text className="text-xs font-semibold text-white">Queue bulk audit</Text>
+                  <Pressable
+                    onPress={() => void queueBulkAudit()}
+                    className="rounded-full bg-primary px-4 py-3"
+                  >
+                    <Text className="text-xs font-semibold text-white">
+                      Queue bulk audit
+                    </Text>
                   </Pressable>
-                  <Pressable onPress={() => setSelectedIds([])} className="rounded-full bg-background px-4 py-3">
-                    <Text className="text-xs font-semibold text-foreground">Clear selection</Text>
+                  <Pressable
+                    onPress={() => setSelectedIds([])}
+                    className="rounded-full bg-background px-4 py-3"
+                  >
+                    <Text className="text-xs font-semibold text-foreground">
+                      Clear selection
+                    </Text>
                   </Pressable>
                 </View>
               </SectionCard>
@@ -356,34 +572,97 @@ export default function LogisticsScreen() {
         renderItem={({ item }) => (
           <View className="rounded-[28px] border border-border bg-surface px-4 py-4">
             <View className="flex-row items-start justify-between gap-3">
-              <Pressable onPress={() => setSelectedNode(item)} className="flex-1">
-                <Text className="text-[11px] font-semibold uppercase tracking-[1.2px] text-accent2">{item.region}</Text>
-                <Text className="mt-2 text-lg font-semibold leading-6 text-foreground">{item.name}</Text>
-                <Text className="mt-2 text-sm leading-6 text-muted">{item.note || "Awaiting a live inventory snapshot from the configured backend environment."}</Text>
+              <Pressable
+                onPress={() => setSelectedNode(item)}
+                className="flex-1"
+              >
+                <Text className="text-[11px] font-semibold uppercase tracking-[1.2px] text-accent2">
+                  {item.region}
+                </Text>
+                <Text className="mt-2 text-lg font-semibold leading-6 text-foreground">
+                  {item.name}
+                </Text>
+                <Text className="mt-2 text-sm leading-6 text-muted">
+                  {item.note ||
+                    "Awaiting a live inventory snapshot from the configured backend environment."}
+                </Text>
               </Pressable>
               <View className="items-end gap-2">
                 <RiskBadge level={item.risk} />
-                <Pressable onPress={() => void togglePinnedRecord("inventory", item.id)} className={item.pinned ? "rounded-full bg-warning px-3 py-1.5" : "rounded-full bg-background px-3 py-1.5"}>
-                  <Text className={item.pinned ? "text-[11px] font-semibold text-white" : "text-[11px] font-semibold text-foreground"}>{item.pinned ? "Pinned" : "Pin"}</Text>
+                <Pressable
+                  onPress={() => void togglePinnedRecord("inventory", item.id)}
+                  className={
+                    item.pinned
+                      ? "rounded-full bg-warning px-3 py-1.5"
+                      : "rounded-full bg-background px-3 py-1.5"
+                  }
+                >
+                  <Text
+                    className={
+                      item.pinned
+                        ? "text-[11px] font-semibold text-white"
+                        : "text-[11px] font-semibold text-foreground"
+                    }
+                  >
+                    {item.pinned ? "Pinned" : "Pin"}
+                  </Text>
                 </Pressable>
-                <Pressable onPress={() => toggleBulkSelection(item.id)} className={selectedIds.includes(item.id) ? "rounded-full bg-primary px-3 py-1.5" : "rounded-full bg-background px-3 py-1.5"}>
-                  <Text className={selectedIds.includes(item.id) ? "text-[11px] font-semibold text-white" : "text-[11px] font-semibold text-foreground"}>{selectedIds.includes(item.id) ? "Selected" : "Select"}</Text>
+                <Pressable
+                  onPress={() => toggleBulkSelection(item.id)}
+                  className={
+                    selectedIds.includes(item.id)
+                      ? "rounded-full bg-primary px-3 py-1.5"
+                      : "rounded-full bg-background px-3 py-1.5"
+                  }
+                >
+                  <Text
+                    className={
+                      selectedIds.includes(item.id)
+                        ? "text-[11px] font-semibold text-white"
+                        : "text-[11px] font-semibold text-foreground"
+                    }
+                  >
+                    {selectedIds.includes(item.id) ? "Selected" : "Select"}
+                  </Text>
                 </Pressable>
               </View>
             </View>
             <View className="mt-4 flex-row flex-wrap gap-3">
-              <MetricPill label="Coverage" value={item.stockCoverageHours ? `${item.stockCoverageHours}h` : "Unknown"} />
+              <MetricPill
+                label="Coverage"
+                value={
+                  item.stockCoverageHours
+                    ? `${item.stockCoverageHours}h`
+                    : "Unknown"
+                }
+              />
               <MetricPill label="Confidence" value={item.confidence} />
             </View>
-            <View className={isFreshnessStale(item.freshnessMinutes) ? "mt-4 rounded-[18px] border border-warning/40 bg-warning/10 px-4 py-3" : "mt-4 rounded-[18px] border border-border bg-background/60 px-4 py-3"}>
-              <Text className="text-xs font-semibold uppercase tracking-[1px] text-muted">Freshness</Text>
-              <Text className="mt-1 text-sm font-semibold text-foreground">{formatFreshness(item.freshnessMinutes)}</Text>
-              <Text className="mt-1 text-xs text-muted">{item.recordUpdatedAt ? `Updated ${new Date(item.recordUpdatedAt).toLocaleString()}` : "No record update time available."}</Text>
+            <View
+              className={
+                isFreshnessStale(item.freshnessMinutes)
+                  ? "mt-4 rounded-[18px] border border-warning/40 bg-warning/10 px-4 py-3"
+                  : "mt-4 rounded-[18px] border border-border bg-background/60 px-4 py-3"
+              }
+            >
+              <Text className="text-xs font-semibold uppercase tracking-[1px] text-muted">
+                Freshness
+              </Text>
+              <Text className="mt-1 text-sm font-semibold text-foreground">
+                {formatFreshness(item.freshnessMinutes)}
+              </Text>
+              <Text className="mt-1 text-xs text-muted">
+                {item.recordUpdatedAt
+                  ? `Updated ${new Date(item.recordUpdatedAt).toLocaleString()}`
+                  : "No record update time available."}
+              </Text>
             </View>
           </View>
         )}
         ListEmptyComponent={
-          syncing && !snapshot.inventory.length && !snapshot.procurement.length ? (
+          syncing &&
+          !snapshot.inventory.length &&
+          !snapshot.procurement.length ? (
             <LoadingSkeleton rows={6} />
           ) : (
             <EmptyState
@@ -395,24 +674,56 @@ export default function LogisticsScreen() {
         ListFooterComponent={
           filteredProcurement.length > 0 ? (
             <View className="mt-4 gap-3">
-              <Text className="text-lg font-semibold text-foreground">Procurement proposals</Text>
+              <Text className="text-lg font-semibold text-foreground">
+                Procurement proposals
+              </Text>
               {filteredProcurement.map((proposal) => (
-                <Pressable key={proposal.id} onPress={() => setSelectedProposal(proposal)} className="rounded-[24px] border border-border bg-surface px-4 py-4">
+                <Pressable
+                  key={proposal.id}
+                  onPress={() => setSelectedProposal(proposal)}
+                  className="rounded-[24px] border border-border bg-surface px-4 py-4"
+                >
                   <View className="flex-row items-start justify-between gap-3">
                     <View className="flex-1">
-                      <Text className="text-sm font-semibold text-foreground">{proposal.sku}</Text>
-                      <Text className="mt-1 text-xs leading-5 text-muted">{proposal.nodeName}</Text>
+                      <Text className="text-sm font-semibold text-foreground">
+                        {proposal.sku}
+                      </Text>
+                      <Text className="mt-1 text-xs leading-5 text-muted">
+                        {proposal.nodeName}
+                      </Text>
                     </View>
                     <View className="items-end gap-2">
                       <RiskBadge level={proposal.urgency} />
-                      <Pressable onPress={() => void togglePinnedRecord("procurement", proposal.id)} className={proposal.pinned ? "rounded-full bg-warning px-3 py-1.5" : "rounded-full bg-background px-3 py-1.5"}>
-                        <Text className={proposal.pinned ? "text-[11px] font-semibold text-white" : "text-[11px] font-semibold text-foreground"}>{proposal.pinned ? "Pinned" : "Pin"}</Text>
+                      <Pressable
+                        onPress={() =>
+                          void togglePinnedRecord("procurement", proposal.id)
+                        }
+                        className={
+                          proposal.pinned
+                            ? "rounded-full bg-warning px-3 py-1.5"
+                            : "rounded-full bg-background px-3 py-1.5"
+                        }
+                      >
+                        <Text
+                          className={
+                            proposal.pinned
+                              ? "text-[11px] font-semibold text-white"
+                              : "text-[11px] font-semibold text-foreground"
+                          }
+                        >
+                          {proposal.pinned ? "Pinned" : "Pin"}
+                        </Text>
                       </Pressable>
                     </View>
                   </View>
-                  <Text className="mt-3 text-sm leading-6 text-muted">{proposal.note || proposal.action}</Text>
+                  <Text className="mt-3 text-sm leading-6 text-muted">
+                    {proposal.note || proposal.action}
+                  </Text>
                   <View className="mt-4 flex-row flex-wrap gap-3">
-                    <MetricPill label="Units" value={proposal.recommendedUnits ?? "Pending"} />
+                    <MetricPill
+                      label="Units"
+                      value={proposal.recommendedUnits ?? "Pending"}
+                    />
                     <MetricPill label="Mode" value={proposal.action} />
                   </View>
                 </Pressable>
@@ -427,26 +738,72 @@ export default function LogisticsScreen() {
         title={selectedNode?.name ?? "Inventory node"}
         subtitle={selectedNode?.region}
         risk={selectedNode?.risk ?? "watch"}
-        stateLabel={connectivityMode === "online" ? "Live or ready to sync" : "Action queued locally if needed"}
-        summary={selectedNode?.note || "Review stock cover, freshness, and recommended next action before deciding whether to audit or replenish."}
+        stateLabel={
+          connectivityMode === "online"
+            ? "Live or ready to sync"
+            : "Action queued locally if needed"
+        }
+        summary={
+          selectedNode?.note ||
+          "Review stock cover, freshness, and recommended next action before deciding whether to audit or replenish."
+        }
         metrics={[
-          { label: "Coverage", value: selectedNode?.stockCoverageHours ? `${selectedNode.stockCoverageHours} hours` : "Unknown", tone: selectedNode?.risk === "critical" ? "error" : "default" },
-          { label: "Confidence", value: selectedNode?.confidence ?? "Unknown", tone: selectedNode?.confidence === "high" ? "success" : selectedNode?.confidence === "low" ? "warning" : "default" },
-          { label: "Urgency", value: selectedNode?.restockUrgency ?? "Awaiting sync", tone: selectedNode?.risk === "critical" ? "error" : selectedNode?.risk === "watch" ? "warning" : "success" },
-          { label: "Freshness", value: formatFreshness(selectedNode?.freshnessMinutes), tone: isFreshnessStale(selectedNode?.freshnessMinutes) ? "warning" : "accent" },
+          {
+            label: "Coverage",
+            value: selectedNode?.stockCoverageHours
+              ? `${selectedNode.stockCoverageHours} hours`
+              : "Unknown",
+            tone: selectedNode?.risk === "critical" ? "error" : "default",
+          },
+          {
+            label: "Confidence",
+            value: selectedNode?.confidence ?? "Unknown",
+            tone:
+              selectedNode?.confidence === "high"
+                ? "success"
+                : selectedNode?.confidence === "low"
+                  ? "warning"
+                  : "default",
+          },
+          {
+            label: "Urgency",
+            value: selectedNode?.restockUrgency ?? "Awaiting sync",
+            tone:
+              selectedNode?.risk === "critical"
+                ? "error"
+                : selectedNode?.risk === "watch"
+                  ? "warning"
+                  : "success",
+          },
+          {
+            label: "Freshness",
+            value: formatFreshness(selectedNode?.freshnessMinutes),
+            tone: isFreshnessStale(selectedNode?.freshnessMinutes)
+              ? "warning"
+              : "accent",
+          },
         ]}
-        notes={selectedNode ? [
-          `Region: ${selectedNode.region}`,
-          `Queue posture: ${snapshot.summary.queueCount} local actions pending across the mobile outbox.`,
-          selectedProposalForNode?.supplier ? `Preferred supplier: ${selectedProposalForNode.supplier}.` : "No supplier recommendation has been cached yet.",
-        ] : []}
+        notes={
+          selectedNode
+            ? [
+                `Region: ${selectedNode.region}`,
+                `Queue posture: ${snapshot.summary.queueCount} local actions pending across the mobile outbox.`,
+                selectedProposalForNode?.supplier
+                  ? `Preferred supplier: ${selectedProposalForNode.supplier}.`
+                  : "No supplier recommendation has been cached yet.",
+              ]
+            : []
+        }
         actions={[
           {
             label: "Queue audit confirmation",
             tone: "secondary",
             onPress: () => {
               if (selectedNode) {
-                setPendingAction({ type: "inventory_audit", node: selectedNode });
+                setPendingAction({
+                  type: "inventory_audit",
+                  node: selectedNode,
+                });
               }
             },
           },
@@ -455,7 +812,11 @@ export default function LogisticsScreen() {
             tone: "primary",
             onPress: () => {
               if (selectedNode) {
-                setPendingAction({ type: "replenishment", proposal: selectedProposalForNode ?? undefined, node: selectedNode });
+                setPendingAction({
+                  type: "replenishment",
+                  proposal: selectedProposalForNode ?? undefined,
+                  node: selectedNode,
+                });
               }
             },
           },
@@ -465,7 +826,10 @@ export default function LogisticsScreen() {
             onPress: () => {
               if (selectedNode) {
                 void togglePinnedRecord("inventory", selectedNode.id);
-                setSelectedNode({ ...selectedNode, pinned: !selectedNode.pinned });
+                setSelectedNode({
+                  ...selectedNode,
+                  pinned: !selectedNode.pinned,
+                });
               }
             },
           },
@@ -478,26 +842,58 @@ export default function LogisticsScreen() {
         title={selectedProposal?.sku ?? "Procurement proposal"}
         subtitle={selectedProposal?.nodeName}
         risk={selectedProposal?.urgency ?? "watch"}
-        stateLabel={connectivityMode === "online" ? "Ready for live procurement sync" : "Proposal can be queued locally"}
-        summary={selectedProposal?.note || "Review units, supplier, and transfer mode before confirming the procurement action."}
+        stateLabel={
+          connectivityMode === "online"
+            ? "Ready for live procurement sync"
+            : "Proposal can be queued locally"
+        }
+        summary={
+          selectedProposal?.note ||
+          "Review units, supplier, and transfer mode before confirming the procurement action."
+        }
         metrics={[
-          { label: "Units", value: selectedProposal?.recommendedUnits ? `${selectedProposal.recommendedUnits}` : "Unknown", tone: "accent" },
-          { label: "Mode", value: selectedProposal?.action ?? "Unknown", tone: "default" },
-          { label: "Supplier", value: selectedProposal?.supplier ?? "Unassigned", tone: "success" },
-          { label: "ETA", value: selectedProposal?.etaWindow ?? "Unknown", tone: "warning" },
+          {
+            label: "Units",
+            value: selectedProposal?.recommendedUnits
+              ? `${selectedProposal.recommendedUnits}`
+              : "Unknown",
+            tone: "accent",
+          },
+          {
+            label: "Mode",
+            value: selectedProposal?.action ?? "Unknown",
+            tone: "default",
+          },
+          {
+            label: "Supplier",
+            value: selectedProposal?.supplier ?? "Unassigned",
+            tone: "success",
+          },
+          {
+            label: "ETA",
+            value: selectedProposal?.etaWindow ?? "Unknown",
+            tone: "warning",
+          },
         ]}
-        notes={selectedProposal ? [
-          `Node: ${selectedProposal.nodeName}`,
-          `Priority posture: ${selectedProposal.urgency}.`,
-          `Freshness: ${formatFreshness(selectedProposal.freshnessMinutes)}.`,
-        ] : []}
+        notes={
+          selectedProposal
+            ? [
+                `Node: ${selectedProposal.nodeName}`,
+                `Priority posture: ${selectedProposal.urgency}.`,
+                `Freshness: ${formatFreshness(selectedProposal.freshnessMinutes)}.`,
+              ]
+            : []
+        }
         actions={[
           {
             label: "Queue procurement confirmation",
             tone: "primary",
             onPress: () => {
               if (selectedProposal) {
-                setPendingAction({ type: "replenishment", proposal: selectedProposal });
+                setPendingAction({
+                  type: "replenishment",
+                  proposal: selectedProposal,
+                });
               }
             },
           },
@@ -507,7 +903,10 @@ export default function LogisticsScreen() {
             onPress: () => {
               if (selectedProposal) {
                 void togglePinnedRecord("procurement", selectedProposal.id);
-                setSelectedProposal({ ...selectedProposal, pinned: !selectedProposal.pinned });
+                setSelectedProposal({
+                  ...selectedProposal,
+                  pinned: !selectedProposal.pinned,
+                });
               }
             },
           },
@@ -525,18 +924,32 @@ export default function LogisticsScreen() {
         attachment={annotationAttachment}
         onClose={() => setAnnotationAttachment(null)}
         onSave={(attachment) => {
-          setAttachments((current) => current.map((item) => (item.id === attachment.id ? attachment : item)));
+          setAttachments((current) =>
+            current.map((item) =>
+              item.id === attachment.id ? attachment : item,
+            ),
+          );
           setAnnotationAttachment(null);
         }}
       />
 
       <ConfirmationModal
         visible={Boolean(pendingAction)}
-        title={pendingAction?.type === "inventory_audit" ? "Confirm inventory audit" : "Confirm replenishment action"}
-        body={pendingAction?.type === "inventory_audit"
-          ? `Create an offline-safe audit task for ${pendingAction.node.name}. It will sync immediately when the network is healthy or remain safely queued on device.`
-          : `Queue a replenishment action for ${pendingAction?.proposal?.sku ?? pendingAction?.node?.name ?? "the selected record"}. This preserves operator intent even under intermittent connectivity.`}
-        confirmLabel={pendingAction?.type === "inventory_audit" ? "Queue audit" : "Queue replenishment"}
+        title={
+          pendingAction?.type === "inventory_audit"
+            ? "Confirm inventory audit"
+            : "Confirm replenishment action"
+        }
+        body={
+          pendingAction?.type === "inventory_audit"
+            ? `Create an offline-safe audit task for ${pendingAction.node.name}. It will sync immediately when the network is healthy or remain safely queued on device.`
+            : `Queue a replenishment action for ${pendingAction?.proposal?.sku ?? pendingAction?.node?.name ?? "the selected record"}. This preserves operator intent even under intermittent connectivity.`
+        }
+        confirmLabel={
+          pendingAction?.type === "inventory_audit"
+            ? "Queue audit"
+            : "Queue replenishment"
+        }
         onConfirm={() => void queueConfirmedAction()}
         onCancel={() => setPendingAction(null)}
       />

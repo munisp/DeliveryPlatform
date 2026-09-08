@@ -13,7 +13,13 @@ import {
 import { useColors } from "@/hooks/use-colors";
 import { mobileHaptics } from "@/lib/mobile/haptics";
 import { cn } from "@/lib/utils";
-import type { MobileAlert, OutboxItem, RiskLevel, ServiceHealth, SyncStatus } from "@/lib/mobile/types";
+import type {
+  MobileAlert,
+  OutboxItem,
+  RiskLevel,
+  ServiceHealth,
+  SyncStatus,
+} from "@/lib/mobile/types";
 
 type DetailMetric = {
   label: string;
@@ -68,11 +74,21 @@ function metricToneClass(tone: DetailMetric["tone"]) {
   }
 }
 
-function actionToneClasses(tone: DetailAction["tone"], colors: ReturnType<typeof useColors>) {
+function actionToneClasses(
+  tone: DetailAction["tone"],
+  colors: ReturnType<typeof useColors>,
+) {
   switch (tone) {
     case "secondary":
       return {
-        container: [styles.actionButtonBase, { backgroundColor: colors.background, borderColor: colors.border, borderWidth: 1 }],
+        container: [
+          styles.actionButtonBase,
+          {
+            backgroundColor: colors.background,
+            borderColor: colors.border,
+            borderWidth: 1,
+          },
+        ],
         label: [styles.actionButtonLabel, { color: colors.foreground }],
       };
     case "danger":
@@ -82,7 +98,10 @@ function actionToneClasses(tone: DetailAction["tone"], colors: ReturnType<typeof
       };
     default:
       return {
-        container: [styles.actionButtonBase, { backgroundColor: colors.primary }],
+        container: [
+          styles.actionButtonBase,
+          { backgroundColor: colors.primary },
+        ],
         label: [styles.actionButtonLabel, { color: "#ffffff" }],
       };
   }
@@ -120,19 +139,37 @@ export function ConnectivityBanner({
   mode: "online" | "limited" | "offline";
   reachable: boolean;
 }) {
-  const tone = mode === "online" ? "success" : mode === "limited" ? "warning" : "error";
-  const label = mode === "online"
-    ? "Connected"
-    : mode === "limited"
-      ? "Intermittent network"
-      : "Offline mode";
+  const tone =
+    mode === "online" ? "success" : mode === "limited" ? "warning" : "error";
+  const label =
+    mode === "online"
+      ? "Connected"
+      : mode === "limited"
+        ? "Intermittent network"
+        : "Offline mode";
   const body = reachable
     ? "Operational actions can sync with remote services."
     : "Actions will be stored locally and retried automatically when the network returns.";
 
   return (
-    <View className={cn("rounded-[24px] border px-4 py-3", tone === "success" && "border-success/30 bg-success/10", tone === "warning" && "border-warning/30 bg-warning/10", tone === "error" && "border-error/30 bg-error/10")}>
-      <Text className={cn("text-sm font-semibold", tone === "success" && "text-success", tone === "warning" && "text-warning", tone === "error" && "text-error")}>{label}</Text>
+    <View
+      className={cn(
+        "rounded-[24px] border px-4 py-3",
+        tone === "success" && "border-success/30 bg-success/10",
+        tone === "warning" && "border-warning/30 bg-warning/10",
+        tone === "error" && "border-error/30 bg-error/10",
+      )}
+    >
+      <Text
+        className={cn(
+          "text-sm font-semibold",
+          tone === "success" && "text-success",
+          tone === "warning" && "text-warning",
+          tone === "error" && "text-error",
+        )}
+      >
+        {label}
+      </Text>
       <Text className="mt-1 text-sm leading-5 text-muted">{body}</Text>
     </View>
   );
@@ -150,11 +187,19 @@ export function SyncStatusBar({
   return (
     <View className="flex-row items-center justify-between rounded-[24px] border border-border bg-surface px-4 py-3">
       <View className="flex-1 pr-3">
-        <Text className="text-sm font-semibold text-foreground">{syncing ? "Sync in progress" : "Sync state stable"}</Text>
-        <Text className="mt-1 text-xs leading-5 text-muted">{lastSyncedAt ? `Last sync ${new Date(lastSyncedAt).toLocaleString()}` : "No successful sync has been recorded yet."}</Text>
+        <Text className="text-sm font-semibold text-foreground">
+          {syncing ? "Sync in progress" : "Sync state stable"}
+        </Text>
+        <Text className="mt-1 text-xs leading-5 text-muted">
+          {lastSyncedAt
+            ? `Last sync ${new Date(lastSyncedAt).toLocaleString()}`
+            : "No successful sync has been recorded yet."}
+        </Text>
       </View>
       <View className="rounded-full bg-primary/10 px-3 py-1.5">
-        <Text className="text-xs font-semibold text-primary">{queueCount} queued</Text>
+        <Text className="text-xs font-semibold text-primary">
+          {queueCount} queued
+        </Text>
       </View>
     </View>
   );
@@ -162,8 +207,17 @@ export function SyncStatusBar({
 
 export function RiskBadge({ level }: { level: RiskLevel }) {
   return (
-    <View className={cn("rounded-full border px-2.5 py-1", severityClasses(level))}>
-      <Text className={cn("text-[11px] font-semibold uppercase tracking-[1px]", severityClasses(level).split(" ").pop())}>{level}</Text>
+    <View
+      className={cn("rounded-full border px-2.5 py-1", severityClasses(level))}
+    >
+      <Text
+        className={cn(
+          "text-[11px] font-semibold uppercase tracking-[1px]",
+          severityClasses(level).split(" ").pop(),
+        )}
+      >
+        {level}
+      </Text>
     </View>
   );
 }
@@ -177,8 +231,12 @@ export function MetricPill({
 }) {
   return (
     <View className="min-w-[112px] flex-1 rounded-[20px] border border-border bg-background/70 px-4 py-3">
-      <Text className="text-[11px] uppercase tracking-[1px] text-muted">{label}</Text>
-      <Text className="mt-2 text-xl font-semibold text-foreground">{value}</Text>
+      <Text className="text-[11px] uppercase tracking-[1px] text-muted">
+        {label}
+      </Text>
+      <Text className="mt-2 text-xl font-semibold text-foreground">
+        {value}
+      </Text>
     </View>
   );
 }
@@ -195,25 +253,38 @@ export function SectionCard({
   return (
     <View className="rounded-[28px] border border-border bg-surface px-4 py-4 shadow-sm">
       <Text className="text-lg font-semibold text-foreground">{title}</Text>
-      {subtitle ? <Text className="mt-1 text-sm leading-5 text-muted">{subtitle}</Text> : null}
+      {subtitle ? (
+        <Text className="mt-1 text-sm leading-5 text-muted">{subtitle}</Text>
+      ) : null}
       <View className="mt-4 gap-3">{children}</View>
     </View>
   );
 }
 
 export function ServiceHealthCard({ service }: { service: ServiceHealth }) {
-  const level: RiskLevel = service.status === "healthy" ? "stable" : service.status === "degraded" ? "watch" : "critical";
+  const level: RiskLevel =
+    service.status === "healthy"
+      ? "stable"
+      : service.status === "degraded"
+        ? "watch"
+        : "critical";
 
   return (
     <View className="rounded-[22px] border border-border bg-background/70 px-4 py-3">
       <View className="flex-row items-start justify-between gap-3">
         <View className="flex-1">
-          <Text className="text-sm font-semibold text-foreground">{service.label}</Text>
-          <Text className="mt-1 text-xs leading-5 text-muted">{service.detail || "Awaiting service telemetry."}</Text>
+          <Text className="text-sm font-semibold text-foreground">
+            {service.label}
+          </Text>
+          <Text className="mt-1 text-xs leading-5 text-muted">
+            {service.detail || "Awaiting service telemetry."}
+          </Text>
         </View>
         <RiskBadge level={level} />
       </View>
-      <Text className="mt-3 text-xs text-muted">{service.latencyMs ? `${service.latencyMs} ms` : "Latency unavailable"}</Text>
+      <Text className="mt-3 text-xs text-muted">
+        {service.latencyMs ? `${service.latencyMs} ms` : "Latency unavailable"}
+      </Text>
     </View>
   );
 }
@@ -247,15 +318,23 @@ export function SnapshotCard({
     <View className="rounded-[28px] border border-border bg-surface px-4 py-4 shadow-sm">
       <View className="flex-row items-start justify-between gap-3">
         <View className="flex-1">
-          <Text className="text-[11px] font-semibold uppercase tracking-[1.2px] text-accent2">{eyebrow}</Text>
-          <Text className="mt-2 text-lg font-semibold leading-6 text-foreground">{title}</Text>
+          <Text className="text-[11px] font-semibold uppercase tracking-[1.2px] text-accent2">
+            {eyebrow}
+          </Text>
+          <Text className="mt-2 text-lg font-semibold leading-6 text-foreground">
+            {title}
+          </Text>
           <Text className="mt-2 text-sm leading-6 text-muted">{body}</Text>
         </View>
         {risk ? <RiskBadge level={risk} /> : null}
       </View>
       <View className="mt-4 rounded-[20px] border border-border bg-background/70 px-4 py-3">
-        <Text className="text-[11px] uppercase tracking-[1px] text-muted">{accentLabel}</Text>
-        <Text className="mt-2 text-2xl font-semibold text-foreground">{accentValue}</Text>
+        <Text className="text-[11px] uppercase tracking-[1px] text-muted">
+          {accentLabel}
+        </Text>
+        <Text className="mt-2 text-2xl font-semibold text-foreground">
+          {accentValue}
+        </Text>
       </View>
     </View>
   );
@@ -272,7 +351,10 @@ export function SnapshotCard({
         mobileHaptics.selection();
         onPress();
       }}
-      style={({ pressed }) => [interactiveStyle, pressed ? styles.pressedCard : null]}
+      style={({ pressed }) => [
+        interactiveStyle,
+        pressed ? styles.pressedCard : null,
+      ]}
     >
       {content}
     </Pressable>
@@ -302,13 +384,22 @@ export function ActionCard({
         mobileHaptics.tap();
         onPress();
       }}
-      style={({ pressed }) => [styles.pressableCard, pressed ? styles.pressedCard : null]}
+      style={({ pressed }) => [
+        styles.pressableCard,
+        pressed ? styles.pressedCard : null,
+      ]}
     >
       <View className="rounded-[28px] border border-border bg-surface px-4 py-4 shadow-sm">
-        <Text className="text-[11px] font-semibold uppercase tracking-[1.2px] text-accent2">{eyebrow}</Text>
-        <Text className="mt-2 text-lg font-semibold leading-6 text-foreground">{title}</Text>
+        <Text className="text-[11px] font-semibold uppercase tracking-[1.2px] text-accent2">
+          {eyebrow}
+        </Text>
+        <Text className="mt-2 text-lg font-semibold leading-6 text-foreground">
+          {title}
+        </Text>
         <Text className="mt-2 text-sm leading-6 text-muted">{body}</Text>
-        <View style={[styles.inlineButton, { backgroundColor: colors.primary }]}> 
+        <View
+          style={[styles.inlineButton, { backgroundColor: colors.primary }]}
+        >
           <Text style={styles.inlineButtonLabel}>{cta}</Text>
         </View>
       </View>
@@ -343,7 +434,12 @@ export function DetailSheet({
   const { opacity, translateY } = useModalAnimation(visible);
 
   return (
-    <Modal transparent visible={visible} animationType="none" onRequestClose={onClose}>
+    <Modal
+      transparent
+      visible={visible}
+      animationType="none"
+      onRequestClose={onClose}
+    >
       <View style={styles.modalRoot}>
         <Animated.View style={[styles.backdrop, { opacity }]}>
           <Pressable onPress={onClose} style={StyleSheet.absoluteFillObject} />
@@ -357,33 +453,68 @@ export function DetailSheet({
             },
           ]}
         >
-          <View style={[styles.sheetContainer, { backgroundColor: colors.surface, borderColor: colors.border }]}> 
+          <View
+            style={[
+              styles.sheetContainer,
+              { backgroundColor: colors.surface, borderColor: colors.border },
+            ]}
+          >
             <View style={styles.sheetHandle} />
             <View className="flex-row items-start justify-between gap-3">
               <View className="flex-1">
-                <Text className="text-2xl font-semibold text-foreground">{title}</Text>
-                {subtitle ? <Text className="mt-1 text-sm leading-5 text-muted">{subtitle}</Text> : null}
+                <Text className="text-2xl font-semibold text-foreground">
+                  {title}
+                </Text>
+                {subtitle ? (
+                  <Text className="mt-1 text-sm leading-5 text-muted">
+                    {subtitle}
+                  </Text>
+                ) : null}
               </View>
               <RiskBadge level={risk} />
             </View>
             <View className="mt-4 self-start rounded-full bg-primary/10 px-3 py-1.5">
-              <Text className="text-xs font-semibold text-primary">{stateLabel}</Text>
+              <Text className="text-xs font-semibold text-primary">
+                {stateLabel}
+              </Text>
             </View>
-            <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.sheetScrollContent}>
+            <ScrollView
+              showsVerticalScrollIndicator={false}
+              contentContainerStyle={styles.sheetScrollContent}
+            >
               <Text className="text-sm leading-6 text-muted">{summary}</Text>
               <View className="mt-5 flex-row flex-wrap gap-3">
                 {metrics.map((metric) => (
-                  <View key={metric.label} className="min-w-[140px] flex-1 rounded-[20px] border border-border bg-background/70 px-4 py-3">
-                    <Text className="text-[11px] uppercase tracking-[1px] text-muted">{metric.label}</Text>
-                    <Text className={cn("mt-2 text-base font-semibold", metricToneClass(metric.tone))}>{metric.value}</Text>
+                  <View
+                    key={metric.label}
+                    className="min-w-[140px] flex-1 rounded-[20px] border border-border bg-background/70 px-4 py-3"
+                  >
+                    <Text className="text-[11px] uppercase tracking-[1px] text-muted">
+                      {metric.label}
+                    </Text>
+                    <Text
+                      className={cn(
+                        "mt-2 text-base font-semibold",
+                        metricToneClass(metric.tone),
+                      )}
+                    >
+                      {metric.value}
+                    </Text>
                   </View>
                 ))}
               </View>
               {notes?.length ? (
                 <View className="mt-5 gap-3 rounded-[20px] border border-border bg-background/50 px-4 py-4">
-                  <Text className="text-sm font-semibold text-foreground">Operator notes</Text>
+                  <Text className="text-sm font-semibold text-foreground">
+                    Operator notes
+                  </Text>
                   {notes.map((note, index) => (
-                    <Text key={`${note}-${index}`} className="text-sm leading-6 text-muted">{note}</Text>
+                    <Text
+                      key={`${note}-${index}`}
+                      className="text-sm leading-6 text-muted"
+                    >
+                      {note}
+                    </Text>
                   ))}
                 </View>
               ) : null}
@@ -404,7 +535,10 @@ export function DetailSheet({
                       }
                       action.onPress();
                     }}
-                    style={({ pressed }) => [toneClasses.container, pressed ? styles.pressedButton : null]}
+                    style={({ pressed }) => [
+                      toneClasses.container,
+                      pressed ? styles.pressedButton : null,
+                    ]}
                   >
                     <Text style={toneClasses.label}>{action.label}</Text>
                   </Pressable>
@@ -441,7 +575,12 @@ export function ConfirmationModal({
   const { opacity, translateY } = useModalAnimation(visible);
 
   return (
-    <Modal transparent visible={visible} animationType="none" onRequestClose={onCancel}>
+    <Modal
+      transparent
+      visible={visible}
+      animationType="none"
+      onRequestClose={onCancel}
+    >
       <View style={styles.modalRoot}>
         <Animated.View style={[styles.backdrop, { opacity }]}>
           <Pressable onPress={onCancel} style={StyleSheet.absoluteFillObject} />
@@ -455,18 +594,37 @@ export function ConfirmationModal({
             },
           ]}
         >
-          <View style={[styles.confirmationCard, { backgroundColor: colors.surface, borderColor: colors.border }]}> 
-            <Text className="text-xl font-semibold text-foreground">{title}</Text>
+          <View
+            style={[
+              styles.confirmationCard,
+              { backgroundColor: colors.surface, borderColor: colors.border },
+            ]}
+          >
+            <Text className="text-xl font-semibold text-foreground">
+              {title}
+            </Text>
             <Text className="mt-3 text-sm leading-6 text-muted">{body}</Text>
             <View className="mt-6 gap-3">
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel={confirmLabel}
                 onPress={() => {
-                  destructive ? mobileHaptics.warning() : mobileHaptics.success();
+                  if (destructive) {
+                    mobileHaptics.warning();
+                  } else {
+                    mobileHaptics.success();
+                  }
                   onConfirm();
                 }}
-                style={({ pressed }) => [styles.actionButtonBase, { backgroundColor: destructive ? colors.error : colors.primary }, pressed ? styles.pressedButton : null]}
+                style={({ pressed }) => [
+                  styles.actionButtonBase,
+                  {
+                    backgroundColor: destructive
+                      ? colors.error
+                      : colors.primary,
+                  },
+                  pressed ? styles.pressedButton : null,
+                ]}
               >
                 <Text style={styles.actionButtonLabel}>{confirmLabel}</Text>
               </Pressable>
@@ -477,9 +635,24 @@ export function ConfirmationModal({
                   mobileHaptics.selection();
                   onCancel();
                 }}
-                style={({ pressed }) => [styles.actionButtonBase, styles.secondaryButton, { backgroundColor: colors.background, borderColor: colors.border }, pressed ? styles.pressedButton : null]}
+                style={({ pressed }) => [
+                  styles.actionButtonBase,
+                  styles.secondaryButton,
+                  {
+                    backgroundColor: colors.background,
+                    borderColor: colors.border,
+                  },
+                  pressed ? styles.pressedButton : null,
+                ]}
               >
-                <Text style={[styles.actionButtonLabel, { color: colors.foreground }]}>{cancelLabel ?? "Cancel"}</Text>
+                <Text
+                  style={[
+                    styles.actionButtonLabel,
+                    { color: colors.foreground },
+                  ]}
+                >
+                  {cancelLabel ?? "Cancel"}
+                </Text>
               </Pressable>
             </View>
           </View>
@@ -494,16 +667,32 @@ export function OutboxItemRow({ item }: { item: OutboxItem }) {
     <View className="rounded-[22px] border border-border bg-background/70 px-4 py-3">
       <View className="flex-row items-start justify-between gap-3">
         <View className="flex-1">
-          <Text className="text-sm font-semibold text-foreground">{item.payload.title}</Text>
-          <Text className="mt-1 text-xs leading-5 text-muted">{item.payload.note || "No operator note attached."}</Text>
+          <Text className="text-sm font-semibold text-foreground">
+            {item.payload.title}
+          </Text>
+          <Text className="mt-1 text-xs leading-5 text-muted">
+            {item.payload.note || "No operator note attached."}
+          </Text>
         </View>
-        <View className={cn("rounded-full px-2.5 py-1", syncClasses(item.status))}>
-          <Text className="text-xs font-semibold capitalize">{item.status}</Text>
+        <View
+          className={cn("rounded-full px-2.5 py-1", syncClasses(item.status))}
+        >
+          <Text className="text-xs font-semibold capitalize">
+            {item.status}
+          </Text>
         </View>
       </View>
-      <Text className="mt-3 text-xs text-muted">Queued {new Date(item.createdAt).toLocaleString()}</Text>
-      {item.lastAttemptAt ? <Text className="mt-1 text-xs text-muted">Last attempt {new Date(item.lastAttemptAt).toLocaleString()}</Text> : null}
-      {item.errorMessage ? <Text className="mt-2 text-xs text-error">{item.errorMessage}</Text> : null}
+      <Text className="mt-3 text-xs text-muted">
+        Queued {new Date(item.createdAt).toLocaleString()}
+      </Text>
+      {item.lastAttemptAt ? (
+        <Text className="mt-1 text-xs text-muted">
+          Last attempt {new Date(item.lastAttemptAt).toLocaleString()}
+        </Text>
+      ) : null}
+      {item.errorMessage ? (
+        <Text className="mt-2 text-xs text-error">{item.errorMessage}</Text>
+      ) : null}
     </View>
   );
 }
@@ -513,12 +702,18 @@ export function AlertRow({ alert }: { alert: MobileAlert }) {
     <View className="rounded-[22px] border border-border bg-background/70 px-4 py-3">
       <View className="flex-row items-start justify-between gap-3">
         <View className="flex-1">
-          <Text className="text-sm font-semibold text-foreground">{alert.title}</Text>
-          <Text className="mt-1 text-xs leading-5 text-muted">{alert.body}</Text>
+          <Text className="text-sm font-semibold text-foreground">
+            {alert.title}
+          </Text>
+          <Text className="mt-1 text-xs leading-5 text-muted">
+            {alert.body}
+          </Text>
         </View>
         <RiskBadge level={alert.severity} />
       </View>
-      <Text className="mt-3 text-xs text-muted">{alert.source} • {new Date(alert.createdAt).toLocaleString()}</Text>
+      <Text className="mt-3 text-xs text-muted">
+        {alert.source} • {new Date(alert.createdAt).toLocaleString()}
+      </Text>
     </View>
   );
 }

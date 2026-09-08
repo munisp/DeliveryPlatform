@@ -200,16 +200,24 @@ func RunTemporalWorker(ctx context.Context, service *MojaloopService) error {
 	}
 	defer client.Close()
 
-	workerInstance := worker.New(client, effectiveTemporalTaskQueue(), worker.Options{})
-	activities := &TemporalFundsWorkflowActivities{Service: service}
-	workerInstance.RegisterWorkflowWithOptions(FundsWorkflowOrchestration, workflow.RegisterOptions{Name: "FundsWorkflowOrchestration"})
-	workerInstance.RegisterActivityWithOptions(activities.PersistOrchestrationStatus, activity.RegisterOptions{Name: "PersistOrchestrationStatus"})
-	workerInstance.RegisterActivityWithOptions(activities.PersistWorkflowHistory, activity.RegisterOptions{Name: "PersistWorkflowHistory"})
-
-	if err := workerInstance.Start(); err != nil {
-		return fmt.Errorf("start temporal worker: %w", err)
+	fundsWorker := worker.New(client, effectiveTemporalTaskQueue(), worker.Options{})
+	fundsActivities := &TemporalFundsWorkflowActivities{Service: service}
+	fundsWorker.RegisterWorkflowWithOptions(FundsWorkflowOrchestration, workflow.RegisterOptions{Name: "FundsWorkflowOrchestration"})
+	fundsWorker.RegisterActivityWithOptions(fundsActivities.PersistOrchestrationStatus, activity.RegisterOptions{Name: "PersistOrchestrationStatus"})
+	fundsWorker.RegisterActivityWithOptions(fundsActivities.PersistWorkflowHistory, activity.RegisterOptions{Name: "PersistWorkflowHistory"})
+	if err := fundsWorker.Start(); err != nil {
+		return fmt.Errorf("start funds temporal worker: %w", err)
 	}
-	defer workerInstance.Stop()
+	defer fundsWorker.Stop()
+
+	journeyWorker := worker.New(client, effectiveJourneyTaskQueue(), worker.Options{})
+	journeyActivities := &JourneyActivities{}
+	journeyWorker.RegisterWorkflowWithOptions(JourneyOrchestration, workflow.RegisterOptions{Name: "JourneyOrchestration"})
+	journeyWorker.RegisterActivityWithOptions(journeyActivities.ExecuteJourneyAction, activity.RegisterOptions{Name: "ExecuteJourneyAction"})
+	if err := journeyWorker.Start(); err != nil {
+		return fmt.Errorf("start journey temporal worker: %w", err)
+	}
+	defer journeyWorker.Stop()
 
 	<-ctx.Done()
 	return nil

@@ -1,6 +1,8 @@
 import { FormEvent, useMemo, useState } from "react";
 import { CarFront, ClipboardCheck, Loader2, ShieldCheck } from "lucide-react";
 import DashboardLayout from "@/components/DashboardLayout";
+import { VehicleRentalOperationsPanel } from "@/components/VehicleRentalOperationsPanel";
+import { VehicleTrackerSafetyPanel } from "@/components/VehicleTrackerSafetyPanel";
 import {
   Card,
   CardContent,
@@ -23,11 +25,6 @@ function iso(value: string) {
 
 export default function VehicleAccessOperations() {
   const [notice, setNotice] = useState<string | null>(null);
-  const [request, setRequest] = useState({
-    offerId: "",
-    startsAt: "",
-    endsAt: "",
-  });
   const [inspection, setInspection] = useState({
     contractId: "",
     kind: "handover" as "handover" | "return",
@@ -99,11 +96,6 @@ export default function VehicleAccessOperations() {
     setNotice(message);
   };
 
-  const requestMutation = trpc.vehicleAccess.requestContract.useMutation({
-    onSuccess: (contractId) =>
-      refresh(`Vehicle-access request recorded: ${contractId}`),
-    onError: (error) => setNotice(error.message),
-  });
   const inspectionMutation = trpc.vehicleAccess.recordInspection.useMutation({
     onSuccess: () => refresh("Immutable inspection evidence recorded."),
     onError: (error) => setNotice(error.message),
@@ -156,24 +148,6 @@ export default function VehicleAccessOperations() {
         .length,
     };
   }, [contracts.data]);
-
-  const submitRequest = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    try {
-      requestMutation.mutate({
-        offerId: request.offerId,
-        startsAt: iso(request.startsAt),
-        endsAt: iso(request.endsAt),
-        idempotencyKey: idempotency("vehicle-request"),
-      });
-    } catch (error) {
-      setNotice(
-        error instanceof Error
-          ? error.message
-          : "Unable to request vehicle access.",
-      );
-    }
-  };
 
   const submitInspection = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -316,6 +290,9 @@ export default function VehicleAccessOperations() {
           ))}
         </section>
 
+        <VehicleRentalOperationsPanel onNotice={setNotice} />
+        <VehicleTrackerSafetyPanel onNotice={setNotice} />
+
         <section className="grid gap-5 xl:grid-cols-[1.6fr_1fr]">
           <Card>
             <CardHeader>
@@ -376,62 +353,6 @@ export default function VehicleAccessOperations() {
           </Card>
 
           <div className="space-y-5">
-            <Card>
-              <CardHeader>
-                <CardTitle>Request access</CardTitle>
-                <CardDescription>
-                  Requests are worker-owned and idempotent. Operator approval
-                  and evidence-verified handover are required before activation.
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                <form onSubmit={submitRequest} className="space-y-3">
-                  <input
-                    className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100"
-                    placeholder="Offer UUID"
-                    value={request.offerId}
-                    onChange={(event) =>
-                      setRequest({ ...request, offerId: event.target.value })
-                    }
-                    required
-                  />
-                  <label className="block text-sm text-slate-300">
-                    Start
-                    <input
-                      className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100"
-                      type="datetime-local"
-                      value={request.startsAt}
-                      onChange={(event) =>
-                        setRequest({ ...request, startsAt: event.target.value })
-                      }
-                      required
-                    />
-                  </label>
-                  <label className="block text-sm text-slate-300">
-                    End
-                    <input
-                      className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100"
-                      type="datetime-local"
-                      value={request.endsAt}
-                      onChange={(event) =>
-                        setRequest({ ...request, endsAt: event.target.value })
-                      }
-                      required
-                    />
-                  </label>
-                  <button
-                    className="rounded-md bg-cyan-500 px-4 py-2 text-sm font-medium text-slate-950 disabled:opacity-60"
-                    type="submit"
-                    disabled={requestMutation.isPending}
-                  >
-                    {requestMutation.isPending
-                      ? "Requesting…"
-                      : "Request vehicle access"}
-                  </button>
-                </form>
-              </CardContent>
-            </Card>
-
             <Card>
               <CardHeader>
                 <CardTitle>Inspection evidence</CardTitle>

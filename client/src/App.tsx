@@ -127,22 +127,26 @@ const quickLinks = [
   {
     title: "Logistics Operations",
     href: "/logistics-operations",
-    description: "Tenant-scoped jobs, service zones, state-controlled work execution, tracking evidence, and signed partner events.",
+    description:
+      "Tenant-scoped jobs, service zones, state-controlled work execution, tracking evidence, and signed partner events.",
   },
   {
     title: "Compliance Review",
     href: "/compliance-review",
-    description: "Auditable driver and vehicle evidence verification, mandatory reviewer decisions, expiry reconciliation, and dispatch eligibility.",
+    description:
+      "Auditable driver and vehicle evidence verification, mandatory reviewer decisions, expiry reconciliation, and dispatch eligibility.",
   },
   {
     title: "Partner Integrations",
     href: "/partner-integrations",
-    description: "Tenant-scoped API credentials, explicit scopes, HMAC-signed inbound events, replay protection, and revocation controls.",
+    description:
+      "Tenant-scoped API credentials, explicit scopes, HMAC-signed inbound events, replay protection, and revocation controls.",
   },
   {
     title: "Financial Operations",
     href: "/financial-operations",
-    description: "Invoice issuance, payment-dispute lifecycle, audit evidence, and durable governed reporting.",
+    description:
+      "Invoice issuance, payment-dispute lifecycle, audit evidence, and durable governed reporting.",
   },
 ];
 
@@ -262,33 +266,6 @@ function PortalPage() {
           typeof payload?.error === "string"
             ? payload.error
             : "Unable to establish operator session.";
-        throw new Error(errorMessage);
-      }
-
-      return payload as { redirect?: string };
-    },
-    onSuccess(payload) {
-      window.location.href = payload.redirect || "/dashboard";
-    },
-  });
-
-  const devSessionMutation = useMutation({
-    mutationFn: async () => {
-      const response = await fetch("/api/auth/dev-session", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        credentials: "include",
-        body: JSON.stringify({ role: "admin" }),
-      });
-
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        const errorMessage =
-          typeof payload?.error === "string"
-            ? payload.error
-            : "Unable to establish development operator session.";
         throw new Error(errorMessage);
       }
 
@@ -456,34 +433,6 @@ function PortalPage() {
           </Card>
         ) : null}
 
-        {!externalEnabled && fallbackLoginEnabled ? (
-          <Card>
-            <CardHeader>
-              <CardTitle>Non-production fallback</CardTitle>
-              <CardDescription>
-                This fallback remains available only for local validation. It
-                should stay disabled whenever production OIDC is active.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <button
-                type="button"
-                onClick={() => devSessionMutation.mutate()}
-                disabled={devSessionMutation.isPending}
-                className="inline-flex rounded-full border border-cyan-400/30 bg-cyan-500/10 px-5 py-3 text-sm font-medium text-cyan-100 transition hover:bg-cyan-500/20 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {devSessionMutation.isPending
-                  ? "Creating fallback session..."
-                  : "Use local validation session"}
-              </button>
-              {devSessionMutation.isError ? (
-                <p className="text-sm text-rose-300">
-                  {devSessionMutation.error.message}
-                </p>
-              ) : null}
-            </CardContent>
-          </Card>
-        ) : null}
         {authConfig?.selfServiceSignupEnabled ? (
           <p className="text-center text-sm text-slate-400">
             New to SwitchOS?{" "}

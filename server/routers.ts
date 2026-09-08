@@ -67,15 +67,35 @@ import {
 } from "./_core/driverDispatchFairness";
 import {
   activateVehicleAsset,
+  assignVehicleAssetLocation,
+  cancelVehicleAvailabilityBlock,
   createFleetProvider,
+  createVehicleAvailabilityBlock,
+  createVehicleProviderLocation,
+  createVehicleRentalAddOn,
   createVehicleOffer,
+  createVehicleRentalGeofence,
+  createVehicleTrackerProvider,
+  decideVehicleContractExtension,
+  getVehicleRentalOperationsSnapshot,
+  getVehicleTrackerOperationsSnapshot,
   listVehicleAccessContracts,
   listVehicleAccessOffers,
+  listVehicleRentalAddOns,
   recordAssetEvidence,
+  recordVehicleAgreementAcceptance,
   recordVehicleInspection,
+  recordVehicleRentalPaymentTrackingSignal,
+  recordVehicleTrackerControlConsent,
   registerVehicleAsset,
   requestVehicleAccess,
+  requestVehiclePreventNextStart,
+  requestVehicleAccessWithAddOns,
+  requestVehicleContractExtension,
   transitionVehicleAccessContract,
+  authorizeVehiclePreventNextStart,
+  cancelVehiclePreventNextStart,
+  registerVehicleAssetTracker,
   upsertWorkerVehicleEligibility,
 } from "./_core/vehicleAccess";
 import {
@@ -869,6 +889,87 @@ export const appRouter = router({
       .mutation(({ ctx, input }) =>
         requestVehicleAccess({ workerUserId: ctx.user!.id, ...input }),
       ),
+    listRentalAddOns: authenticatedProcedure
+      .input(
+        z.object({
+          offerId: z.string().uuid(),
+          limit: z.number().int().min(1).max(24).optional(),
+        }),
+      )
+      .query(({ input }) =>
+        listVehicleRentalAddOns({
+          offerId: input.offerId,
+          limit: input.limit ?? 24,
+        }),
+      ),
+    rentalOperationsSnapshot: authenticatedProcedure.query(({ ctx }) =>
+      getVehicleRentalOperationsSnapshot(ctx.user!.id),
+    ),
+    requestContractWithAddOns: authenticatedProcedure
+      .input(
+        z.object({
+          offerId: z.string().uuid(),
+          startsAt: z.string().datetime(),
+          endsAt: z.string().datetime(),
+          addOns: z
+            .array(
+              z.object({
+                addOnVersionId: z.string().uuid(),
+                quantity: z.number().int().min(1).max(8),
+              }),
+            )
+            .max(8),
+          idempotencyKey: z
+            .string()
+            .trim()
+            .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
+        }),
+      )
+      .mutation(({ ctx, input }) =>
+        requestVehicleAccessWithAddOns({
+          workerUserId: ctx.user!.id,
+          ...input,
+        }),
+      ),
+    acceptAgreement: authenticatedProcedure
+      .input(
+        z.object({
+          contractId: z.string().uuid(),
+          agreementVersion: z
+            .string()
+            .trim()
+            .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{1,127}$/),
+          agreementSha256Hex: z.string().regex(/^[a-f0-9]{64}$/),
+          acceptanceSha256Hex: z.string().regex(/^[a-f0-9]{64}$/),
+          idempotencyKey: z
+            .string()
+            .trim()
+            .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
+        }),
+      )
+      .mutation(({ ctx, input }) =>
+        recordVehicleAgreementAcceptance({
+          workerUserId: ctx.user!.id,
+          ...input,
+        }),
+      ),
+    requestExtension: authenticatedProcedure
+      .input(
+        z.object({
+          contractId: z.string().uuid(),
+          requestedEndsAt: z.string().datetime(),
+          idempotencyKey: z
+            .string()
+            .trim()
+            .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
+        }),
+      )
+      .mutation(({ ctx, input }) =>
+        requestVehicleContractExtension({
+          workerUserId: ctx.user!.id,
+          ...input,
+        }),
+      ),
     recordInspection: authenticatedProcedure
       .input(
         z.object({
@@ -1009,6 +1110,314 @@ export const appRouter = router({
       )
       .mutation(({ ctx, input }) =>
         createVehicleOffer({ actorUserId: ctx.user!.id, ...input }),
+      ),
+    createProviderLocation: protectedProcedure
+      .input(
+        z.object({
+          providerId: z.string().uuid(),
+          locationCode: z
+            .string()
+            .trim()
+            .regex(/^[A-Z0-9][A-Z0-9_-]{1,31}$/),
+          displayName: z.string().trim().min(2).max(160),
+          addressSummary: z.string().trim().min(3).max(400),
+          timezoneName: z
+            .string()
+            .trim()
+            .regex(/^[A-Za-z_]+\/[A-Za-z_]+$/),
+          idempotencyKey: z
+            .string()
+            .trim()
+            .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
+        }),
+      )
+      .mutation(({ ctx, input }) =>
+        createVehicleProviderLocation({ actorUserId: ctx.user!.id, ...input }),
+      ),
+    assignAssetLocation: protectedProcedure
+      .input(
+        z.object({
+          assetId: z.string().uuid(),
+          locationId: z.string().uuid(),
+          idempotencyKey: z
+            .string()
+            .trim()
+            .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
+        }),
+      )
+      .mutation(({ ctx, input }) =>
+        assignVehicleAssetLocation({ actorUserId: ctx.user!.id, ...input }),
+      ),
+    createAvailabilityBlock: protectedProcedure
+      .input(
+        z.object({
+          assetId: z.string().uuid(),
+          reason: z.enum([
+            "maintenance",
+            "inspection",
+            "operator_hold",
+            "seasonal_unavailable",
+            "repair",
+          ]),
+          note: z.string().trim().min(3).max(1000),
+          startsAt: z.string().datetime(),
+          endsAt: z.string().datetime(),
+          idempotencyKey: z
+            .string()
+            .trim()
+            .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
+        }),
+      )
+      .mutation(({ ctx, input }) =>
+        createVehicleAvailabilityBlock({ actorUserId: ctx.user!.id, ...input }),
+      ),
+    cancelAvailabilityBlock: protectedProcedure
+      .input(
+        z.object({
+          availabilityBlockId: z.string().uuid(),
+          reason: z.string().trim().min(3).max(1000),
+          idempotencyKey: z
+            .string()
+            .trim()
+            .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
+        }),
+      )
+      .mutation(({ ctx, input }) =>
+        cancelVehicleAvailabilityBlock({ actorUserId: ctx.user!.id, ...input }),
+      ),
+    createRentalAddOn: protectedProcedure
+      .input(
+        z.object({
+          providerId: z.string().uuid(),
+          addOnCode: z
+            .string()
+            .trim()
+            .regex(/^[a-z][a-z0-9_-]{1,62}$/),
+          displayName: z.string().trim().min(2).max(120),
+          category: z.enum([
+            "protection",
+            "equipment",
+            "fuel_plan",
+            "additional_driver",
+            "assistance",
+            "other",
+          ]),
+          currency: z.string().regex(/^[A-Z]{3}$/),
+          chargeUnit: z.enum(["flat", "per_day", "per_week"]),
+          unitPriceMinor: z.number().int().min(0).max(1000000000),
+          maxQuantity: z.number().int().min(1).max(8),
+          idempotencyKey: z
+            .string()
+            .trim()
+            .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
+        }),
+      )
+      .mutation(({ ctx, input }) =>
+        createVehicleRentalAddOn({ actorUserId: ctx.user!.id, ...input }),
+      ),
+    decideExtension: protectedProcedure
+      .input(
+        z.object({
+          extensionRequestId: z.string().uuid(),
+          action: z.enum(["approve", "reject"]),
+          reason: z.string().trim().min(3).max(1000).nullable(),
+          idempotencyKey: z
+            .string()
+            .trim()
+            .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
+        }),
+      )
+      .mutation(({ ctx, input }) =>
+        decideVehicleContractExtension({ actorUserId: ctx.user!.id, ...input }),
+      ),
+    trackerOperationsSnapshot: authenticatedProcedure.query(({ ctx }) =>
+      getVehicleTrackerOperationsSnapshot(ctx.user!.id),
+    ),
+    recordTrackerControlConsent: authenticatedProcedure
+      .input(
+        z.object({
+          contractId: z.string().uuid(),
+          consentVersion: z
+            .string()
+            .trim()
+            .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/),
+          consentSha256Hex: z.string().regex(/^[a-f0-9]{64}$/),
+          idempotencyKey: z
+            .string()
+            .trim()
+            .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
+        }),
+      )
+      .mutation(({ ctx, input }) =>
+        recordVehicleTrackerControlConsent({
+          workerUserId: ctx.user!.id,
+          ...input,
+        }),
+      ),
+    createTrackerProvider: protectedProcedure
+      .input(
+        z.object({
+          fleetProviderId: z.string().uuid(),
+          providerKind: z.enum([
+            "generic_webhook",
+            "samsara_webhook",
+            "geotab_feed",
+            "traccar_rest",
+            "oem_gateway",
+            "aftermarket_gateway",
+          ]),
+          integrationKey: z
+            .string()
+            .trim()
+            .regex(/^[a-z][a-z0-9_.-]{2,80}$/),
+          displayName: z.string().trim().min(2).max(160),
+          credentialRef: z.string().trim().min(8).max(160),
+          idempotencyKey: z
+            .string()
+            .trim()
+            .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
+        }),
+      )
+      .mutation(({ ctx, input }) =>
+        createVehicleTrackerProvider({ actorUserId: ctx.user!.id, ...input }),
+      ),
+    registerAssetTracker: protectedProcedure
+      .input(
+        z.object({
+          assetId: z.string().uuid(),
+          trackerProviderId: z.string().uuid(),
+          externalDeviceId: z.string().trim().min(3).max(160),
+          deviceIdentifierSha256: z.string().regex(/^[a-f0-9]{64}$/),
+          supportsPreventNextStart: z.boolean(),
+          idempotencyKey: z
+            .string()
+            .trim()
+            .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
+        }),
+      )
+      .mutation(({ ctx, input }) =>
+        registerVehicleAssetTracker({ actorUserId: ctx.user!.id, ...input }),
+      ),
+    createRentalAssetGeofence: protectedProcedure
+      .input(
+        z.object({
+          assetId: z.string().uuid(),
+          geofenceKind: z.enum(["restricted", "return_zone", "service_zone"]),
+          code: z
+            .string()
+            .trim()
+            .regex(/^[A-Z0-9][A-Z0-9_-]{1,62}$/),
+          displayName: z.string().trim().min(2).max(160),
+          geojson: z.object({
+            type: z.literal("MultiPolygon"),
+            coordinates: z
+              .array(
+                z
+                  .array(
+                    z
+                      .array(
+                        z
+                          .array(z.number())
+                          .length(2)
+                          .refine(
+                            ([longitude, latitude]) =>
+                              longitude >= -180 &&
+                              longitude <= 180 &&
+                              latitude >= -90 &&
+                              latitude <= 90,
+                            "invalid longitude or latitude",
+                          ),
+                      )
+                      .min(4)
+                      .max(200),
+                  )
+                  .min(1)
+                  .max(32),
+              )
+              .min(1)
+              .max(16),
+          }),
+          idempotencyKey: z
+            .string()
+            .trim()
+            .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
+        }),
+      )
+      .mutation(({ ctx, input }) =>
+        createVehicleRentalGeofence({ actorUserId: ctx.user!.id, ...input }),
+      ),
+    recordRentalPaymentTrackingSignal: protectedProcedure
+      .input(
+        z.object({
+          contractId: z.string().uuid(),
+          paymentReferenceSha256Hex: z.string().regex(/^[a-f0-9]{64}$/),
+          state: z.enum(["past_due", "cured", "disputed", "unknown"]),
+          effectiveAt: z.string().datetime(),
+          graceEndsAt: z.string().datetime().nullable(),
+          evidenceSha256Hex: z.string().regex(/^[a-f0-9]{64}$/),
+          source: z
+            .string()
+            .trim()
+            .regex(/^[a-z][a-z0-9_.-]{2,80}$/),
+          idempotencyKey: z
+            .string()
+            .trim()
+            .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
+        }),
+      )
+      .mutation(({ ctx, input }) =>
+        recordVehicleRentalPaymentTrackingSignal({
+          actorUserId: ctx.user!.id,
+          ...input,
+        }),
+      ),
+    requestPreventNextStart: protectedProcedure
+      .input(
+        z.object({
+          contractId: z.string().uuid(),
+          paymentTrackingSignalId: z.string().uuid(),
+          reasonCode: z
+            .string()
+            .trim()
+            .regex(/^[a-z][a-z0-9_.-]{2,95}$/),
+          idempotencyKey: z
+            .string()
+            .trim()
+            .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
+        }),
+      )
+      .mutation(({ ctx, input }) =>
+        requestVehiclePreventNextStart({ actorUserId: ctx.user!.id, ...input }),
+      ),
+    authorizePreventNextStart: protectedProcedure
+      .input(
+        z.object({
+          controlCaseId: z.string().uuid(),
+          idempotencyKey: z
+            .string()
+            .trim()
+            .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
+        }),
+      )
+      .mutation(({ ctx, input }) =>
+        authorizeVehiclePreventNextStart({
+          actorUserId: ctx.user!.id,
+          ...input,
+        }),
+      ),
+    cancelPreventNextStart: protectedProcedure
+      .input(
+        z.object({
+          controlCaseId: z.string().uuid(),
+          reason: z.string().trim().min(3).max(1000),
+          idempotencyKey: z
+            .string()
+            .trim()
+            .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
+        }),
+      )
+      .mutation(({ ctx, input }) =>
+        cancelVehiclePreventNextStart({ actorUserId: ctx.user!.id, ...input }),
       ),
     operateTransition: protectedProcedure
       .input(

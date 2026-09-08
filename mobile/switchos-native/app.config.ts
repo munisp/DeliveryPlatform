@@ -32,7 +32,8 @@ const env = {
   appSlug: "switchos_mobile_native",
   // S3 URL of the app logo - set this to the URL returned by generate_image when creating custom logo
   // Leave empty to use the default icon from assets/images/icon.png
-  logoUrl: "https://d2xsxph8kpxj0f.cloudfront.net/310519663412555753/YL5QcYWqear2wiRnRYcVKq/switchos-native-icon-c4b22ghKDUTNJDuk7SdBFP.png",
+  logoUrl:
+    "https://d2xsxph8kpxj0f.cloudfront.net/310519663412555753/YL5QcYWqear2wiRnRYcVKq/switchos-native-icon-c4b22ghKDUTNJDuk7SdBFP.png",
   scheme: schemeFromBundleId,
   iosBundleId: bundleId,
   androidPackage: bundleId,
@@ -50,9 +51,9 @@ const config: ExpoConfig = {
   ios: {
     supportsTablet: true,
     bundleIdentifier: env.iosBundleId,
-    "infoPlist": {
-        "ITSAppUsesNonExemptEncryption": false
-      }
+    infoPlist: {
+      ITSAppUsesNonExemptEncryption: false,
+    },
   },
   android: {
     adaptiveIcon: {
@@ -81,15 +82,17 @@ const config: ExpoConfig = {
   },
   web: {
     bundler: "metro",
-    output: "static",
+    output: "single",
     favicon: "./assets/images/favicon.png",
   },
   plugins: [
     "expo-router",
+    "@maplibre/maplibre-react-native",
     [
       "expo-audio",
       {
-        microphonePermission: "Allow $(PRODUCT_NAME) to access your microphone.",
+        microphonePermission:
+          "Allow $(PRODUCT_NAME) to access your microphone.",
       },
     ],
     [
