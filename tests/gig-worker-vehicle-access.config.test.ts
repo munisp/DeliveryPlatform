@@ -16,6 +16,10 @@ const page = readFileSync(
   resolve(root, "client/src/pages/VehicleAccessOperations.tsx"),
   "utf8",
 );
+const rentalPanel = readFileSync(
+  resolve(root, "client/src/components/VehicleRentalOperationsPanel.tsx"),
+  "utf8",
+);
 const app = readFileSync(resolve(root, "client/src/App.tsx"), "utf8");
 
 describe("gig-worker vehicle-access implementation", () => {
@@ -63,7 +67,9 @@ describe("gig-worker vehicle-access implementation", () => {
 
   it("makes the worker and operator workspace reachable in the client", () => {
     expect(page).toContain("trpc.vehicleAccess.listOffers.useQuery");
-    expect(page).toContain("trpc.vehicleAccess.requestContract.useMutation");
+    expect(rentalPanel).toContain(
+      "trpc.vehicleAccess.requestContractWithAddOns.useMutation",
+    );
     expect(page).toContain("trpc.vehicleAccess.recordInspection.useMutation");
     expect(page).toContain("trpc.vehicleAccess.operateTransition.useMutation");
     expect(app).toContain('href: "/vehicle-access"');

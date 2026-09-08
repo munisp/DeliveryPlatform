@@ -27,26 +27,46 @@ async function findAvailablePort(startPort: number = 3000): Promise<number> {
   throw new Error(`No available port found starting from ${startPort}`);
 }
 
+function configuredCorsOrigins() {
+  const origins = [
+    process.env.EXPO_WEB_PREVIEW_URL,
+    process.env.EXPO_PACKAGER_PROXY_URL,
+  ].filter((value): value is string => Boolean(value));
+
+  if (process.env.NODE_ENV !== "production") {
+    origins.push("http://localhost:8081", "http://127.0.0.1:8081");
+  }
+
+  return new Set(origins);
+}
+
 async function startServer() {
   const app = express();
+  const allowedCorsOrigins = configuredCorsOrigins();
   const server = createServer(app);
 
-  // Enable CORS for all routes - reflect the request origin to support credentials
   app.use((req, res, next) => {
     const origin = req.headers.origin;
     if (origin) {
+      if (!allowedCorsOrigins.has(origin)) {
+        res.status(403).json({ error: "cors_origin_denied" });
+        return;
+      }
       res.header("Access-Control-Allow-Origin", origin);
+      res.header("Vary", "Origin");
+      res.header("Access-Control-Allow-Credentials", "true");
+      res.header(
+        "Access-Control-Allow-Headers",
+        "Origin, X-Requested-With, Content-Type, Accept, Authorization",
+      );
+      res.header(
+        "Access-Control-Allow-Methods",
+        "GET, POST, PUT, DELETE, OPTIONS",
+      );
     }
-    res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
-    res.header(
-      "Access-Control-Allow-Headers",
-      "Origin, X-Requested-With, Content-Type, Accept, Authorization",
-    );
-    res.header("Access-Control-Allow-Credentials", "true");
 
-    // Handle preflight requests
     if (req.method === "OPTIONS") {
-      res.sendStatus(200);
+      res.sendStatus(204);
       return;
     }
     next();

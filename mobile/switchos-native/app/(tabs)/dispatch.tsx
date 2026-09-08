@@ -1,5 +1,13 @@
-import { useMemo, useState } from "react";
-import { FlatList, Pressable, RefreshControl, ScrollView, Text, TextInput, View } from "react-native";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  FlatList,
+  Pressable,
+  RefreshControl,
+  ScrollView,
+  Text,
+  TextInput,
+  View,
+} from "react-native";
 
 import {
   ConfirmationModal,
@@ -11,14 +19,34 @@ import {
   SectionCard,
 } from "@/components/mobile/operations-ui";
 import { PhotoAnnotationSheet } from "@/components/mobile/photo-annotation-sheet";
+import NativeVehicleTrackingMap from "@/components/mobile/vehicle-tracking-map";
 import { SmartSearchPanel } from "@/components/mobile/smart-search-panel";
 import { ScreenContainer } from "@/components/screen-container";
 import { pickPhotoAttachment } from "@/lib/mobile/attachments";
 import { useMobileApp } from "@/lib/mobile/provider";
-import type { AttachmentDraft, DispatchZone, RiskLevel, SmartSearchResult } from "@/lib/mobile/types";
-import { applyDispatchFilters, formatFreshness, isFreshnessStale, renderQuickActionText } from "@/lib/mobile/workspace";
+import {
+  loadDurableVehiclePositions,
+  type DurableVehiclePosition,
+} from "@/lib/mobile/vehicle-tracking";
+import type {
+  AttachmentDraft,
+  DispatchZone,
+  RiskLevel,
+  SmartSearchResult,
+} from "@/lib/mobile/types";
+import {
+  applyDispatchFilters,
+  formatFreshness,
+  isFreshnessStale,
+  renderQuickActionText,
+} from "@/lib/mobile/workspace";
 
-const riskOptions: Array<RiskLevel | "all"> = ["all", "critical", "watch", "stable"];
+const riskOptions: (RiskLevel | "all")[] = [
+  "all",
+  "critical",
+  "watch",
+  "stable",
+];
 const sortOptions = [
   { value: "risk_desc", label: "Pressure" },
   { value: "freshness_desc", label: "Freshness" },
@@ -38,19 +66,69 @@ export default function DispatchScreen() {
     saveNoteDraft,
     noteDrafts,
     quickActionPresets,
+    settings,
   } = useMobileApp();
   const [selectedZone, setSelectedZone] = useState<DispatchZone | null>(null);
+  const [vehiclePositions, setVehiclePositions] = useState<
+    DurableVehiclePosition[]
+  >([]);
+  const [trackingError, setTrackingError] = useState<string | null>(null);
+  const [trackingLoading, setTrackingLoading] = useState(false);
+  const [trackingRefreshedAt, setTrackingRefreshedAt] = useState<string | null>(
+    null,
+  );
   const [confirmVisible, setConfirmVisible] = useState(false);
   const [noteText, setNoteText] = useState("");
   const [attachments, setAttachments] = useState<AttachmentDraft[]>([]);
-  const [annotationAttachment, setAnnotationAttachment] = useState<AttachmentDraft | null>(null);
+  const [annotationAttachment, setAnnotationAttachment] =
+    useState<AttachmentDraft | null>(null);
 
   const dispatchFilters = activeFilters.dispatch;
-  const filteredZones = useMemo(() => applyDispatchFilters(snapshot.dispatch, dispatchFilters), [snapshot.dispatch, dispatchFilters]);
-  const criticalZones = useMemo(() => snapshot.dispatch.filter((item) => item.pressure === "critical").length, [snapshot.dispatch]);
-  const pinnedZones = useMemo(() => snapshot.dispatch.filter((item) => item.pinned).length, [snapshot.dispatch]);
-  const latestDraft = useMemo(() => noteDrafts.find((draft) => draft.domain === "dispatch") ?? null, [noteDrafts]);
-  const rebalancePreset = quickActionPresets.find((preset) => preset.id === "dispatch-rebalance");
+  const filteredZones = useMemo(
+    () => applyDispatchFilters(snapshot.dispatch, dispatchFilters),
+    [snapshot.dispatch, dispatchFilters],
+  );
+  const criticalZones = useMemo(
+    () =>
+      snapshot.dispatch.filter((item) => item.pressure === "critical").length,
+    [snapshot.dispatch],
+  );
+  const pinnedZones = useMemo(
+    () => snapshot.dispatch.filter((item) => item.pinned).length,
+    [snapshot.dispatch],
+  );
+  const latestDraft = useMemo(
+    () => noteDrafts.find((draft) => draft.domain === "dispatch") ?? null,
+    [noteDrafts],
+  );
+  const rebalancePreset = quickActionPresets.find(
+    (preset) => preset.id === "dispatch-rebalance",
+  );
+  const refreshVehicleTracking = useCallback(async () => {
+    setTrackingLoading(true);
+    setTrackingError(null);
+
+    try {
+      const positions = await loadDurableVehiclePositions(
+        settings.platformBaseUrl,
+      );
+      setVehiclePositions(positions);
+      setTrackingRefreshedAt(new Date().toISOString());
+    } catch (error) {
+      setVehiclePositions([]);
+      setTrackingError(
+        error instanceof Error
+          ? error.message
+          : "Vehicle tracking is unavailable.",
+      );
+    } finally {
+      setTrackingLoading(false);
+    }
+  }, [settings.platformBaseUrl]);
+
+  useEffect(() => {
+    void refreshVehicleTracking();
+  }, [refreshVehicleTracking]);
 
   const confirmDispatchAction = async () => {
     if (!selectedZone) {
@@ -60,7 +138,10 @@ export default function DispatchScreen() {
     await queueAction("dispatch_rebalance", {
       title: `Dispatch rebalance for ${selectedZone.name}`,
       targetId: selectedZone.id,
-      note: noteText || selectedZone.suggestedAction || "Manual rebalance from field operator.",
+      note:
+        noteText ||
+        selectedZone.suggestedAction ||
+        "Manual rebalance from field operator.",
       metadata: {
         pressure: selectedZone.pressure,
         driverBalance: selectedZone.driverBalance ?? "unknown",
@@ -87,7 +168,9 @@ export default function DispatchScreen() {
   };
 
   const handleSmartSearchSelection = (result: SmartSearchResult) => {
-    const matchedZone = snapshot.dispatch.find((item) => item.id === result.recordId);
+    const matchedZone = snapshot.dispatch.find(
+      (item) => item.id === result.recordId,
+    );
     if (matchedZone) {
       setSelectedZone(matchedZone);
     }
@@ -98,16 +181,32 @@ export default function DispatchScreen() {
       <FlatList
         data={filteredZones}
         keyExtractor={(item) => item.id}
-        refreshControl={<RefreshControl refreshing={syncing} onRefresh={() => void refreshSnapshot()} />}
+        refreshControl={
+          <RefreshControl
+            refreshing={syncing}
+            onRefresh={() => void refreshSnapshot()}
+          />
+        }
         contentContainerStyle={{ gap: 16, paddingTop: 20, paddingBottom: 24 }}
         ListHeaderComponent={
           <View className="gap-4">
             <View>
-              <Text className="text-3xl font-bold text-foreground">Dispatch Resilience</Text>
+              <Text className="text-3xl font-bold text-foreground">
+                Dispatch Resilience
+              </Text>
               <Text className="mt-2 text-sm leading-6 text-muted">
-                Review zone pressure, pin critical territories, and queue rebalancing instructions that survive connectivity gaps.
+                Review zone pressure, pin critical territories, and queue
+                rebalancing instructions that survive connectivity gaps.
               </Text>
             </View>
+
+            <NativeVehicleTrackingMap
+              positions={vehiclePositions}
+              isLoading={trackingLoading}
+              error={trackingError}
+              refreshedAt={trackingRefreshedAt}
+              onRefresh={() => void refreshVehicleTracking()}
+            />
 
             <SectionCard
               title="Field posture"
@@ -116,7 +215,10 @@ export default function DispatchScreen() {
               <View className="flex-row flex-wrap gap-3">
                 <MetricPill label="Critical zones" value={criticalZones} />
                 <MetricPill label="Pinned zones" value={pinnedZones} />
-                <MetricPill label="Open alerts" value={snapshot.alerts.length} />
+                <MetricPill
+                  label="Open alerts"
+                  value={snapshot.alerts.length}
+                />
               </View>
             </SectionCard>
 
@@ -126,44 +228,100 @@ export default function DispatchScreen() {
             >
               <TextInput
                 value={dispatchFilters.query}
-                onChangeText={(value) => void updateFilter("dispatch", { query: value })}
+                onChangeText={(value) =>
+                  void updateFilter("dispatch", { query: value })
+                }
                 placeholder="Search zone, note, or suggested action"
                 placeholderTextColor="#6B7F97"
                 className="rounded-[20px] border border-border bg-background px-4 py-3 text-sm text-foreground"
               />
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={{ gap: 8 }}
+              >
                 {riskOptions.map((risk) => (
                   <Pressable
                     key={risk}
                     onPress={() => void updateFilter("dispatch", { risk })}
-                    className={dispatchFilters.risk === risk ? "rounded-full bg-accent2 px-4 py-2" : "rounded-full bg-background px-4 py-2"}
+                    className={
+                      dispatchFilters.risk === risk
+                        ? "rounded-full bg-accent2 px-4 py-2"
+                        : "rounded-full bg-background px-4 py-2"
+                    }
                   >
-                    <Text className={dispatchFilters.risk === risk ? "text-xs font-semibold text-white" : "text-xs font-semibold text-foreground"}>{risk}</Text>
+                    <Text
+                      className={
+                        dispatchFilters.risk === risk
+                          ? "text-xs font-semibold text-white"
+                          : "text-xs font-semibold text-foreground"
+                      }
+                    >
+                      {risk}
+                    </Text>
                   </Pressable>
                 ))}
               </ScrollView>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={{ gap: 8 }}
+              >
                 {sortOptions.map((option) => (
                   <Pressable
                     key={option.value}
-                    onPress={() => void updateFilter("dispatch", { sortBy: option.value })}
-                    className={dispatchFilters.sortBy === option.value ? "rounded-full bg-primary px-4 py-2" : "rounded-full bg-background px-4 py-2"}
+                    onPress={() =>
+                      void updateFilter("dispatch", { sortBy: option.value })
+                    }
+                    className={
+                      dispatchFilters.sortBy === option.value
+                        ? "rounded-full bg-primary px-4 py-2"
+                        : "rounded-full bg-background px-4 py-2"
+                    }
                   >
-                    <Text className={dispatchFilters.sortBy === option.value ? "text-xs font-semibold text-white" : "text-xs font-semibold text-foreground"}>{option.label}</Text>
+                    <Text
+                      className={
+                        dispatchFilters.sortBy === option.value
+                          ? "text-xs font-semibold text-white"
+                          : "text-xs font-semibold text-foreground"
+                      }
+                    >
+                      {option.label}
+                    </Text>
                   </Pressable>
                 ))}
                 <Pressable
-                  onPress={() => void updateFilter("dispatch", { pinnedOnly: !dispatchFilters.pinnedOnly })}
-                  className={dispatchFilters.pinnedOnly ? "rounded-full bg-warning px-4 py-2" : "rounded-full bg-background px-4 py-2"}
+                  onPress={() =>
+                    void updateFilter("dispatch", {
+                      pinnedOnly: !dispatchFilters.pinnedOnly,
+                    })
+                  }
+                  className={
+                    dispatchFilters.pinnedOnly
+                      ? "rounded-full bg-warning px-4 py-2"
+                      : "rounded-full bg-background px-4 py-2"
+                  }
                 >
-                  <Text className={dispatchFilters.pinnedOnly ? "text-xs font-semibold text-white" : "text-xs font-semibold text-foreground"}>Pinned only</Text>
+                  <Text
+                    className={
+                      dispatchFilters.pinnedOnly
+                        ? "text-xs font-semibold text-white"
+                        : "text-xs font-semibold text-foreground"
+                    }
+                  >
+                    Pinned only
+                  </Text>
                 </Pressable>
               </ScrollView>
             </SectionCard>
 
             <SmartSearchPanel
               domain="dispatch"
-              region={dispatchFilters.region === "all" ? undefined : dispatchFilters.region}
+              region={
+                dispatchFilters.region === "all"
+                  ? undefined
+                  : dispatchFilters.region
+              }
               onSelectResult={handleSmartSearchSelection}
             />
 
@@ -173,9 +331,15 @@ export default function DispatchScreen() {
             >
               {latestDraft ? (
                 <View className="rounded-[20px] border border-border bg-background/70 px-4 py-3">
-                  <Text className="text-xs uppercase tracking-[1px] text-muted">Latest saved draft</Text>
-                  <Text className="mt-2 text-sm font-semibold text-foreground">{latestDraft.title}</Text>
-                  <Text className="mt-1 text-sm leading-6 text-muted">{latestDraft.body || "Draft is empty."}</Text>
+                  <Text className="text-xs uppercase tracking-[1px] text-muted">
+                    Latest saved draft
+                  </Text>
+                  <Text className="mt-2 text-sm font-semibold text-foreground">
+                    {latestDraft.title}
+                  </Text>
+                  <Text className="mt-1 text-sm leading-6 text-muted">
+                    {latestDraft.body || "Draft is empty."}
+                  </Text>
                 </View>
               ) : null}
               <TextInput
@@ -189,9 +353,13 @@ export default function DispatchScreen() {
               <View className="flex-row flex-wrap gap-3">
                 <Pressable
                   onPress={() => {
-                    const fallbackZone = filteredZones[0] ?? snapshot.dispatch[0];
+                    const fallbackZone =
+                      filteredZones[0] ?? snapshot.dispatch[0];
                     if (fallbackZone && rebalancePreset) {
-                      const rendered = renderQuickActionText(rebalancePreset, fallbackZone.name);
+                      const rendered = renderQuickActionText(
+                        rebalancePreset,
+                        fallbackZone.name,
+                      );
                       setNoteText((current) => current || rendered.note);
                       setSelectedZone(fallbackZone);
                       setConfirmVisible(true);
@@ -199,11 +367,14 @@ export default function DispatchScreen() {
                   }}
                   className="rounded-full bg-primary px-4 py-3"
                 >
-                  <Text className="text-xs font-semibold text-white">Quick rebalance</Text>
+                  <Text className="text-xs font-semibold text-white">
+                    Quick rebalance
+                  </Text>
                 </Pressable>
                 <Pressable
                   onPress={() => {
-                    const fallbackZone = filteredZones[0] ?? snapshot.dispatch[0];
+                    const fallbackZone =
+                      filteredZones[0] ?? snapshot.dispatch[0];
                     if (fallbackZone) {
                       setSelectedZone({
                         ...fallbackZone,
@@ -214,7 +385,9 @@ export default function DispatchScreen() {
                   }}
                   className="rounded-full bg-accent2 px-4 py-3"
                 >
-                  <Text className="text-xs font-semibold text-white">Quick escalation</Text>
+                  <Text className="text-xs font-semibold text-white">
+                    Quick escalation
+                  </Text>
                 </Pressable>
                 <Pressable
                   onPress={() => {
@@ -228,19 +401,38 @@ export default function DispatchScreen() {
                   }}
                   className="rounded-full bg-surface px-4 py-3"
                 >
-                  <Text className="text-xs font-semibold text-foreground">Attach photo</Text>
+                  <Text className="text-xs font-semibold text-foreground">
+                    Attach photo
+                  </Text>
                 </Pressable>
-                <Pressable onPress={() => void saveDraft()} className="rounded-full bg-background px-4 py-3">
-                  <Text className="text-xs font-semibold text-foreground">Save draft</Text>
+                <Pressable
+                  onPress={() => void saveDraft()}
+                  className="rounded-full bg-background px-4 py-3"
+                >
+                  <Text className="text-xs font-semibold text-foreground">
+                    Save draft
+                  </Text>
                 </Pressable>
               </View>
               {attachments.length > 0 ? (
                 <View className="rounded-[20px] border border-border bg-background/70 px-4 py-3">
-                  <Text className="text-xs uppercase tracking-[1px] text-muted">Attached photos</Text>
+                  <Text className="text-xs uppercase tracking-[1px] text-muted">
+                    Attached photos
+                  </Text>
                   {attachments.map((attachment) => (
-                    <Pressable key={attachment.id} onPress={() => setAnnotationAttachment(attachment)} className="mt-2 rounded-[16px] bg-surface px-3 py-2">
-                      <Text className="text-sm font-semibold text-foreground">{attachment.name}</Text>
-                      <Text className="mt-1 text-xs text-muted">{attachment.annotations?.annotatedAt ? "Annotated evidence saved" : "Tap to add drawing or text notes"}</Text>
+                    <Pressable
+                      key={attachment.id}
+                      onPress={() => setAnnotationAttachment(attachment)}
+                      className="mt-2 rounded-[16px] bg-surface px-3 py-2"
+                    >
+                      <Text className="text-sm font-semibold text-foreground">
+                        {attachment.name}
+                      </Text>
+                      <Text className="mt-1 text-xs text-muted">
+                        {attachment.annotations?.annotatedAt
+                          ? "Annotated evidence saved"
+                          : "Tap to add drawing or text notes"}
+                      </Text>
                     </Pressable>
                   ))}
                 </View>
@@ -251,25 +443,63 @@ export default function DispatchScreen() {
         renderItem={({ item }) => (
           <View className="rounded-[28px] border border-border bg-surface px-4 py-4">
             <View className="flex-row items-start justify-between gap-3">
-              <Pressable onPress={() => setSelectedZone(item)} className="flex-1">
-                <Text className="text-[11px] font-semibold uppercase tracking-[1.2px] text-accent2">Dispatch zone</Text>
-                <Text className="mt-2 text-lg font-semibold leading-6 text-foreground">{item.name}</Text>
-                <Text className="mt-2 text-sm leading-6 text-muted">{item.note || "Awaiting live zone telemetry from the dispatch optimizer."}</Text>
+              <Pressable
+                onPress={() => setSelectedZone(item)}
+                className="flex-1"
+              >
+                <Text className="text-[11px] font-semibold uppercase tracking-[1.2px] text-accent2">
+                  Dispatch zone
+                </Text>
+                <Text className="mt-2 text-lg font-semibold leading-6 text-foreground">
+                  {item.name}
+                </Text>
+                <Text className="mt-2 text-sm leading-6 text-muted">
+                  {item.note ||
+                    "Awaiting live zone telemetry from the dispatch optimizer."}
+                </Text>
               </Pressable>
               <View className="items-end gap-2">
                 <RiskBadge level={item.pressure} />
-                <Pressable onPress={() => void togglePinnedRecord("dispatch", item.id)} className={item.pinned ? "rounded-full bg-warning px-3 py-1.5" : "rounded-full bg-background px-3 py-1.5"}>
-                  <Text className={item.pinned ? "text-[11px] font-semibold text-white" : "text-[11px] font-semibold text-foreground"}>{item.pinned ? "Pinned" : "Pin"}</Text>
+                <Pressable
+                  onPress={() => void togglePinnedRecord("dispatch", item.id)}
+                  className={
+                    item.pinned
+                      ? "rounded-full bg-warning px-3 py-1.5"
+                      : "rounded-full bg-background px-3 py-1.5"
+                  }
+                >
+                  <Text
+                    className={
+                      item.pinned
+                        ? "text-[11px] font-semibold text-white"
+                        : "text-[11px] font-semibold text-foreground"
+                    }
+                  >
+                    {item.pinned ? "Pinned" : "Pin"}
+                  </Text>
                 </Pressable>
               </View>
             </View>
             <View className="mt-4 flex-row flex-wrap gap-3">
-              <MetricPill label="Driver balance" value={item.driverBalance || "Unknown"} />
+              <MetricPill
+                label="Driver balance"
+                value={item.driverBalance || "Unknown"}
+              />
               <MetricPill label="Pressure" value={item.pressure} />
             </View>
-            <View className={isFreshnessStale(item.freshnessMinutes) ? "mt-4 rounded-[18px] border border-warning/40 bg-warning/10 px-4 py-3" : "mt-4 rounded-[18px] border border-border bg-background/60 px-4 py-3"}>
-              <Text className="text-xs uppercase tracking-[1px] text-muted">Freshness</Text>
-              <Text className="mt-2 text-sm font-semibold text-foreground">{formatFreshness(item.freshnessMinutes)}</Text>
+            <View
+              className={
+                isFreshnessStale(item.freshnessMinutes)
+                  ? "mt-4 rounded-[18px] border border-warning/40 bg-warning/10 px-4 py-3"
+                  : "mt-4 rounded-[18px] border border-border bg-background/60 px-4 py-3"
+              }
+            >
+              <Text className="text-xs uppercase tracking-[1px] text-muted">
+                Freshness
+              </Text>
+              <Text className="mt-2 text-sm font-semibold text-foreground">
+                {formatFreshness(item.freshnessMinutes)}
+              </Text>
             </View>
             <View className="mt-4 flex-row flex-wrap gap-2">
               <Pressable
@@ -279,7 +509,9 @@ export default function DispatchScreen() {
                 }}
                 className="rounded-full bg-primary px-3 py-2"
               >
-                <Text className="text-[11px] font-semibold text-white">Queue</Text>
+                <Text className="text-[11px] font-semibold text-white">
+                  Queue
+                </Text>
               </Pressable>
               <Pressable
                 onPress={() => {
@@ -291,13 +523,17 @@ export default function DispatchScreen() {
                 }}
                 className="rounded-full bg-accent2 px-3 py-2"
               >
-                <Text className="text-[11px] font-semibold text-white">Escalate</Text>
+                <Text className="text-[11px] font-semibold text-white">
+                  Escalate
+                </Text>
               </Pressable>
               <Pressable
                 onPress={() => void togglePinnedRecord("dispatch", item.id)}
                 className="rounded-full bg-background px-3 py-2"
               >
-                <Text className="text-[11px] font-semibold text-foreground">{item.pinned ? "Unpin" : "Pin"}</Text>
+                <Text className="text-[11px] font-semibold text-foreground">
+                  {item.pinned ? "Unpin" : "Pin"}
+                </Text>
               </Pressable>
             </View>
           </View>
@@ -319,18 +555,53 @@ export default function DispatchScreen() {
         title={selectedZone?.name ?? "Dispatch zone"}
         subtitle="Zone detail"
         risk={selectedZone?.pressure ?? "watch"}
-        stateLabel={connectivityMode === "online" ? "Ready for live dispatch sync" : "Rebalance can be queued locally"}
-        summary={selectedZone?.note || "Review the pressure profile, freshness, and suggested action before confirming a rebalance instruction."}
+        stateLabel={
+          connectivityMode === "online"
+            ? "Ready for live dispatch sync"
+            : "Rebalance can be queued locally"
+        }
+        summary={
+          selectedZone?.note ||
+          "Review the pressure profile, freshness, and suggested action before confirming a rebalance instruction."
+        }
         metrics={[
-          { label: "Pressure", value: selectedZone?.pressure ?? "Unknown", tone: selectedZone?.pressure === "critical" ? "error" : selectedZone?.pressure === "watch" ? "warning" : "success" },
-          { label: "Driver balance", value: selectedZone?.driverBalance ?? "Unknown", tone: "accent" },
-          { label: "Freshness", value: formatFreshness(selectedZone?.freshnessMinutes), tone: isFreshnessStale(selectedZone?.freshnessMinutes) ? "warning" : "accent" },
-          { label: "Queue state", value: `${snapshot.summary.queueCount} pending`, tone: snapshot.summary.queueCount > 0 ? "warning" : "success" },
+          {
+            label: "Pressure",
+            value: selectedZone?.pressure ?? "Unknown",
+            tone:
+              selectedZone?.pressure === "critical"
+                ? "error"
+                : selectedZone?.pressure === "watch"
+                  ? "warning"
+                  : "success",
+          },
+          {
+            label: "Driver balance",
+            value: selectedZone?.driverBalance ?? "Unknown",
+            tone: "accent",
+          },
+          {
+            label: "Freshness",
+            value: formatFreshness(selectedZone?.freshnessMinutes),
+            tone: isFreshnessStale(selectedZone?.freshnessMinutes)
+              ? "warning"
+              : "accent",
+          },
+          {
+            label: "Queue state",
+            value: `${snapshot.summary.queueCount} pending`,
+            tone: snapshot.summary.queueCount > 0 ? "warning" : "success",
+          },
         ]}
-        notes={selectedZone ? [
-          selectedZone.suggestedAction || "No recommendation has been synced yet.",
-          `Offline behavior: ${connectivityMode === "online" ? "send immediately when confirmed" : "store locally until the network is healthy"}.`,
-        ] : []}
+        notes={
+          selectedZone
+            ? [
+                selectedZone.suggestedAction ||
+                  "No recommendation has been synced yet.",
+                `Offline behavior: ${connectivityMode === "online" ? "send immediately when confirmed" : "store locally until the network is healthy"}.`,
+              ]
+            : []
+        }
         actions={[
           {
             label: "Confirm zone rebalance",
@@ -343,7 +614,10 @@ export default function DispatchScreen() {
             onPress: () => {
               if (selectedZone) {
                 void togglePinnedRecord("dispatch", selectedZone.id);
-                setSelectedZone({ ...selectedZone, pinned: !selectedZone.pinned });
+                setSelectedZone({
+                  ...selectedZone,
+                  pinned: !selectedZone.pinned,
+                });
               }
             },
           },
@@ -361,7 +635,11 @@ export default function DispatchScreen() {
         attachment={annotationAttachment}
         onClose={() => setAnnotationAttachment(null)}
         onSave={(attachment) => {
-          setAttachments((current) => current.map((item) => (item.id === attachment.id ? attachment : item)));
+          setAttachments((current) =>
+            current.map((item) =>
+              item.id === attachment.id ? attachment : item,
+            ),
+          );
           setAnnotationAttachment(null);
         }}
       />

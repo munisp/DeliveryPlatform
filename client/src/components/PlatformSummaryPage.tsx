@@ -1,7 +1,14 @@
+import type { ReactNode } from "react";
 import type { LucideIcon } from "lucide-react";
 
 import DashboardLayout from "@/components/DashboardLayout";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 
 type Metric = {
   label: string;
@@ -25,6 +32,7 @@ type PlatformSummaryPageProps = {
   sections: Section[];
   loading?: boolean;
   error?: string | null;
+  monitoringPanel?: ReactNode;
 };
 
 function renderItem(item: string | Record<string, unknown>) {
@@ -47,6 +55,7 @@ export default function PlatformSummaryPage({
   sections,
   loading = false,
   error = null,
+  monitoringPanel,
 }: PlatformSummaryPageProps) {
   return (
     <DashboardLayout>
@@ -57,17 +66,24 @@ export default function PlatformSummaryPage({
             {badge}
           </div>
           <div>
-            <h1 className="text-3xl font-semibold tracking-tight text-white">{title}</h1>
+            <h1 className="text-3xl font-semibold tracking-tight text-white">
+              {title}
+            </h1>
             <p className="mt-2 max-w-3xl text-slate-400">{description}</p>
           </div>
         </div>
 
+        {monitoringPanel}
+
         {error && !loading ? (
           <Card className="border-amber-500/40 bg-amber-950/20">
             <CardHeader>
-              <CardTitle className="text-amber-100">Workspace data is unavailable</CardTitle>
+              <CardTitle className="text-amber-100">
+                Workspace data is unavailable
+              </CardTitle>
               <CardDescription>
-                This workspace has not returned verified operational data. No synthetic metrics or fallback records are being shown.
+                This workspace has not returned verified operational data. No
+                synthetic metrics or fallback records are being shown.
               </CardDescription>
             </CardHeader>
             <CardContent>
@@ -76,72 +92,92 @@ export default function PlatformSummaryPage({
           </Card>
         ) : (
           <>
+            <div className="grid gap-4 xl:grid-cols-4">
+              {metrics.map((metric) => (
+                <Card key={metric.label}>
+                  <CardHeader>
+                    <CardDescription>{metric.label}</CardDescription>
+                    <CardTitle className="text-3xl text-white">
+                      {metric.value}
+                    </CardTitle>
+                  </CardHeader>
+                  {metric.supporting ? (
+                    <CardContent>
+                      <p className="text-sm text-slate-400">
+                        {metric.supporting}
+                      </p>
+                    </CardContent>
+                  ) : null}
+                </Card>
+              ))}
+            </div>
 
-        <div className="grid gap-4 xl:grid-cols-4">
-          {metrics.map((metric) => (
-            <Card key={metric.label}>
-              <CardHeader>
-                <CardDescription>{metric.label}</CardDescription>
-                <CardTitle className="text-3xl text-white">{metric.value}</CardTitle>
-              </CardHeader>
-              {metric.supporting ? (
-                <CardContent>
-                  <p className="text-sm text-slate-400">{metric.supporting}</p>
-                </CardContent>
-              ) : null}
-            </Card>
-          ))}
-        </div>
-
-        <div className="grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
-          <Card>
-            <CardHeader>
-              <CardTitle>Operational highlights</CardTitle>
-              <CardDescription>Connected signals and synthesized actions currently available in the rebuilt workspace.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              {loading ? (
-                <p className="text-sm text-slate-400">Loading workspace signals...</p>
-              ) : highlights.length > 0 ? (
-                <ul className="space-y-3 text-sm leading-6 text-slate-300">
-                  {highlights.map((item, index) => (
-                    <li key={`${index}-${renderItem(item)}`} className="rounded-xl border border-slate-800 bg-slate-950/60 px-4 py-3">
-                      {renderItem(item)}
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <p className="text-sm text-slate-400">No highlights are currently available.</p>
-              )}
-            </CardContent>
-          </Card>
-
-          <div className="space-y-4">
-            {sections.map((section) => (
-              <Card key={section.title}>
+            <div className="grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
+              <Card>
                 <CardHeader>
-                  <CardTitle>{section.title}</CardTitle>
-                  <CardDescription>{section.description}</CardDescription>
+                  <CardTitle>Operational highlights</CardTitle>
+                  <CardDescription>
+                    Connected signals and synthesized actions currently
+                    available in the rebuilt workspace.
+                  </CardDescription>
                 </CardHeader>
                 <CardContent>
                   {loading ? (
-                    <p className="text-sm text-slate-400">Loading section data...</p>
-                  ) : section.items.length > 0 ? (
+                    <p className="text-sm text-slate-400">
+                      Loading workspace signals...
+                    </p>
+                  ) : highlights.length > 0 ? (
                     <ul className="space-y-3 text-sm leading-6 text-slate-300">
-                      {section.items.map((item, index) => (
-                        <li key={`${section.title}-${index}-${renderItem(item)}`} className="rounded-xl border border-slate-800 bg-slate-950/60 px-4 py-3">
+                      {highlights.map((item, index) => (
+                        <li
+                          key={`${index}-${renderItem(item)}`}
+                          className="rounded-xl border border-slate-800 bg-slate-950/60 px-4 py-3"
+                        >
                           {renderItem(item)}
                         </li>
                       ))}
                     </ul>
                   ) : (
-                    <p className="text-sm text-slate-400">No entries are currently available.</p>
+                    <p className="text-sm text-slate-400">
+                      No highlights are currently available.
+                    </p>
                   )}
                 </CardContent>
               </Card>
-            ))}
-          </div>
-        </div>
+
+              <div className="space-y-4">
+                {sections.map((section) => (
+                  <Card key={section.title}>
+                    <CardHeader>
+                      <CardTitle>{section.title}</CardTitle>
+                      <CardDescription>{section.description}</CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                      {loading ? (
+                        <p className="text-sm text-slate-400">
+                          Loading section data...
+                        </p>
+                      ) : section.items.length > 0 ? (
+                        <ul className="space-y-3 text-sm leading-6 text-slate-300">
+                          {section.items.map((item, index) => (
+                            <li
+                              key={`${section.title}-${index}-${renderItem(item)}`}
+                              className="rounded-xl border border-slate-800 bg-slate-950/60 px-4 py-3"
+                            >
+                              {renderItem(item)}
+                            </li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <p className="text-sm text-slate-400">
+                          No entries are currently available.
+                        </p>
+                      )}
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+            </div>
           </>
         )}
       </div>

@@ -4,13 +4,15 @@ import config from "../app.config";
 import { themeColors } from "../theme.config";
 
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { resolve } from "node:path";
 
 describe("mobile manifest branding", () => {
   it("uses the final SwitchOS Native name and branded icon assets", () => {
     expect(config.name).toBe("SwitchOS Native");
     expect(config.icon).toBe("./assets/images/icon.png");
-    expect(config.android?.adaptiveIcon?.foregroundImage).toBe("./assets/images/android-icon-foreground.png");
+    expect(config.android?.adaptiveIcon?.foregroundImage).toBe(
+      "./assets/images/android-icon-foreground.png",
+    );
     expect(config.web?.favicon).toBe("./assets/images/favicon.png");
   });
 
@@ -22,8 +24,11 @@ describe("mobile manifest branding", () => {
 });
 
 describe("tab navigation shell", () => {
-  it("declares all five core operational tabs in the router layout", () => {
-    const layoutPath = join(process.cwd(), "mobile/switchos-native/app/(tabs)/_layout.tsx");
+  it("declares the operational tabs and hides administrator workspaces without a verified admin role", () => {
+    const layoutPath = resolve(
+      import.meta.dirname,
+      "../app/(tabs)/_layout.tsx",
+    );
     const contents = readFileSync(layoutPath, "utf8");
 
     expect(contents).toContain('name="index"');
@@ -31,5 +36,7 @@ describe("tab navigation shell", () => {
     expect(contents).toContain('name="dispatch"');
     expect(contents).toContain('name="growth"');
     expect(contents).toContain('name="queue"');
+    expect(contents).toContain("useNativeOperatorSession");
+    expect(contents).toContain("href: isAdministrator ? undefined : null");
   });
 });

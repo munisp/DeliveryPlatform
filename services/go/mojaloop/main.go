@@ -19,12 +19,21 @@ import (
 	_ "github.com/lib/pq"
 )
 
+type TigerBeetleLedger interface {
+	CreatePayerAccount(payerID string) error
+	CreatePayeeAccount(payeeID string) error
+	ProcessMojaloopTransfer(transferID string, payerID string, payeeID string, amount uint64) error
+	ProcessMojaloopTransferBatch(requests []TigerBeetleTransferRequest) ([]TigerBeetleTransferOutcome, error)
+	ReverseMojaloopTransfer(refundID string, originalTransferID string, payerID string, payeeID string, amount uint64) error
+	GetTransferReconciliation(transferID string) (TransferReconciliation, error)
+}
+
 type MojaloopService struct {
 	httpClient           *http.Client
 	switchURL            string
 	participantID        string
 	internalServiceToken string
-	tigerBeetle          *TigerBeetleClient
+	tigerBeetle          TigerBeetleLedger
 	db                   *sql.DB
 }
 
@@ -102,7 +111,7 @@ type ReconciliationReport struct {
 	RecordedAt              time.Time               `json:"recordedAt"`
 }
 
-func NewMojaloopService(tigerBeetle *TigerBeetleClient) (*MojaloopService, error) {
+func NewMojaloopService(tigerBeetle TigerBeetleLedger) (*MojaloopService, error) {
 	if tigerBeetle == nil {
 		return nil, fmt.Errorf("TigerBeetle ledger client is required for Mojaloop funds operations")
 	}
@@ -138,7 +147,7 @@ func NewMojaloopService(tigerBeetle *TigerBeetleClient) (*MojaloopService, error
 	return service, nil
 }
 
-const mojaloopFundsSchemaContractVersion = 7
+const mojaloopFundsSchemaContractVersion = 8
 
 func (s *MojaloopService) verifyPersistenceContract() error {
 	var version int
@@ -163,6 +172,9 @@ func (s *MojaloopService) verifyPersistenceContract() error {
 		{"mojaloop_workflow_events", "workflow_id"},
 		{"mojaloop_workflow_orchestration", "workflow_id"},
 		{"mojaloop_funds_outbox", "dispatch_order"},
+		{"mojaloop_funds_outbox", "ledger_debit_fsp"},
+		{"mojaloop_funds_outbox", "claim_token"},
+		{"mojaloop_funds_outbox", "claim_expires_at"},
 	}
 	for _, requirement := range requiredColumns {
 		var exists bool
@@ -1331,8 +1343,10 @@ func main() {
 		mux := http.NewServeMux()
 		mux.HandleFunc("/health", service.handleHealthHTTP)
 		mux.HandleFunc("/funds/workflows", service.handleTemporalWorkflowBridgeHTTP)
+		mux.HandleFunc("/journeys/catalog", service.handleJourneyCatalogHTTP)
+		mux.HandleFunc("/journeys/start", service.handleJourneyStartHTTP)
 		addr := bindHost + ":" + httpPort
-		log.Printf("Mojaloop Temporal workflow bridge listening on %s (namespace=%s, taskQueue=%s)", addr, effectiveTemporalNamespace(), effectiveTemporalTaskQueue())
+		log.Printf("Mojaloop Temporal workflow bridge listening on %s (namespace=%s, fundsTaskQueue=%s, journeyTaskQueue=%s)", addr, effectiveTemporalNamespace(), effectiveTemporalTaskQueue(), effectiveJourneyTaskQueue())
 		if err := http.ListenAndServe(addr, mux); err != nil {
 			log.Fatalf("Failed to serve Temporal workflow bridge: %v", err)
 		}
