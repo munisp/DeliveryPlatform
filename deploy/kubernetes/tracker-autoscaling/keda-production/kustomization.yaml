@@ -1,0 +1,18 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: switchos
+commonLabels:
+  app.kubernetes.io/part-of: deliveryplatform
+  app.kubernetes.io/managed-by: kustomize
+resources:
+  # The rollout foundation application owns the tracker Deployment and applies
+  # maxSurge: 0 before this application is enabled. Keeping it out of this
+  # package avoids cross-Application ownership of the same Deployment.
+  - ../keda
+  - pre-rollout-gate.yaml
+configMapGenerator:
+  - name: vehicle-tracker-rollout-gate-source
+    files:
+      - main.go=rollout-gate/main.go
+generatorOptions:
+  disableNameSuffixHash: true

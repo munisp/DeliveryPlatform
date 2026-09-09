@@ -1,0 +1,140 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: vehicle-tracker-rollout-gate
+  namespace: switchos
+  labels:
+    app.kubernetes.io/name: vehicle-tracker-rollout-gate
+    app.kubernetes.io/component: deployment-safety
+    app.kubernetes.io/part-of: deliveryplatform
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: vehicle-tracker-rollout-gate
+  namespace: switchos
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    resourceNames: ["vehicle-tracker-ingest", "vehicle-tracker-pgbouncer"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: vehicle-tracker-rollout-gate
+  namespace: switchos
+subjects:
+  - kind: ServiceAccount
+    name: vehicle-tracker-rollout-gate
+    namespace: switchos
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: vehicle-tracker-rollout-gate
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: vehicle-tracker-pre-rollout-gate
+  namespace: switchos
+  annotations:
+    argocd.argoproj.io/hook: PreSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+    argocd.argoproj.io/sync-wave: "-10"
+  labels:
+    app.kubernetes.io/name: vehicle-tracker-rollout-gate
+    app.kubernetes.io/component: deployment-safety
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 90
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: vehicle-tracker-rollout-gate
+        app.kubernetes.io/component: deployment-safety
+        app.kubernetes.io/part-of: deliveryplatform
+    spec:
+      serviceAccountName: vehicle-tracker-rollout-gate
+      automountServiceAccountToken: true
+      restartPolicy: Never
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+      containers:
+        - name: gate
+          # This public builder image is pinned by OCI index digest. It runs only
+          # the standard-library source mounted below; replace it with a reviewed
+          # internally mirrored digest where registry isolation is required.
+          image: docker.io/library/golang@sha256:d0902bacefdde1cf45528c098d14e55d78c107def8a22d148eabd71582d7a99f
+          imagePullPolicy: IfNotPresent
+          workingDir: /tmp
+          command: ["go", "run", "/src/main.go"]
+          env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: PROMETHEUS_URL
+              value: https://prometheus-operated.monitoring.svc:9090
+            - name: PROMETHEUS_USERNAME_FILE
+              value: /var/run/prometheus-auth/username
+            - name: PROMETHEUS_PASSWORD_FILE
+              value: /var/run/prometheus-auth/password
+            - name: PROMETHEUS_CA_FILE
+              value: /var/run/prometheus-auth/ca.crt
+            - name: EXPECTED_POOLERS
+              value: "4"
+            # Retains 40% of the declared 80-session tracker backend budget as
+            # headroom before any rollout begins.
+            - name: MAX_BACKEND_CONNECTIONS
+              value: "48"
+            - name: MAX_CLIENT_WAITING
+              value: "0"
+            - name: MAX_OLDEST_WAIT_SECONDS
+              value: "0.5"
+            - name: MAX_WORKER_CLIENT_CONNECTIONS
+              value: "256"
+            - name: GOCACHE
+              value: /tmp/go-build
+            - name: GOTMPDIR
+              value: /tmp
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 250m
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - name: gate-source
+              mountPath: /src
+              readOnly: true
+            - name: prometheus-auth
+              mountPath: /var/run/prometheus-auth
+              readOnly: true
+            - name: scratch
+              mountPath: /tmp
+      volumes:
+        - name: gate-source
+          configMap:
+            name: vehicle-tracker-rollout-gate-source
+            defaultMode: 0444
+        - name: prometheus-auth
+          secret:
+            secretName: vehicle-tracker-prometheus-query
+            defaultMode: 0400
+        - name: scratch
+          emptyDir:
+            sizeLimit: 64Mi

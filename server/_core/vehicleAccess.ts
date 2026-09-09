@@ -1,5 +1,6 @@
 import { Pool } from "pg";
 import { ENV } from "./env";
+import { vehicleTrackerMetrics } from "./vehicleTrackerMetrics";
 
 type ContractState =
   | "requested"
@@ -26,6 +27,7 @@ type AssetEvidenceKind =
   | "inspection";
 
 let pool: Pool | null = null;
+let trackerPool: Pool | null = null;
 
 function database() {
   if (!ENV.databaseUrl) throw new Error("vehicle_access_database_unconfigured");
@@ -45,7 +47,99 @@ function database() {
   return pool;
 }
 
-function one<T>(rows: T[], label: string): T {
+function trackerDatabase() {
+  if (!ENV.databaseUrl)
+    throw new Error("vehicle_tracker_database_unconfigured");
+  if (!trackerPool) {
+    trackerPool = new Pool({
+      connectionString: ENV.databaseUrl,
+      application_name: "vehicle-tracker-ingest",
+      ssl:
+        ENV.isProduction && !ENV.databaseUrl.includes("sslmode=disable")
+          ? {
+              rejectUnauthorized: true,
+              ...(ENV.databaseSslCa ? { ca: ENV.databaseSslCa } : {}),
+            }
+          : false,
+      max: ENV.vehicleTrackerDatabasePoolMax,
+      idleTimeoutMillis: 30_000,
+      connectionTimeoutMillis: 5_000,
+    });
+  }
+  return trackerPool;
+}
+
+function updateTrackerPoolMetrics(databasePool: Pool) {
+  vehicleTrackerMetrics.setPool(
+    databasePool.totalCount,
+    databasePool.idleCount,
+    databasePool.waitingCount,
+    ENV.vehicleTrackerDatabasePoolMax,
+  );
+}
+
+async function trackerQuery<T>(
+  operation:
+    | "claim"
+    | "renew"
+    | "bulk_record"
+    | "complete"
+    | "release"
+    | "observability",
+  text: string,
+  values: unknown[],
+) {
+  const databasePool = trackerDatabase();
+  updateTrackerPoolMetrics(databasePool);
+  const startedAt = performance.now();
+  let sqlState: string | undefined;
+  try {
+    return await databasePool.query<T>(text, values);
+  } catch (error) {
+    sqlState =
+      error && typeof error === "object" && "code" in error
+        ? `${(error as { code?: unknown }).code ?? ""}`
+        : undefined;
+    if (sqlState === "55000") {
+      vehicleTrackerMetrics.observeFence("other", operation);
+    }
+    throw error;
+  } finally {
+    vehicleTrackerMetrics.observeDatabaseQuery(
+      operation,
+      (performance.now() - startedAt) / 1_000,
+      sqlState,
+    );
+    updateTrackerPoolMetrics(databasePool);
+  }
+}
+
+export async function closeVehicleTrackerPool() {
+  const databasePool = trackerPool;
+  trackerPool = null;
+  if (databasePool) await databasePool.end();
+}
+
+export function getVehicleTrackerPoolSnapshot() {
+  const databasePool = trackerPool;
+  if (!databasePool) {
+    return {
+      total: 0,
+      idle: 0,
+      waiting: 0,
+      max: ENV.vehicleTrackerDatabasePoolMax,
+    };
+  }
+  updateTrackerPoolMetrics(databasePool);
+  return {
+    total: databasePool.totalCount,
+    idle: databasePool.idleCount,
+    waiting: databasePool.waitingCount,
+    max: ENV.vehicleTrackerDatabasePoolMax,
+  };
+}
+
+function one<T>(rows: T[], label: string) {
   const row = rows[0];
   if (!row) throw new Error(`${label}_not_found`);
   return row;
@@ -1208,4 +1302,236 @@ export async function failClaimedVehiclePreventNextStartCommand(input: {
     [input.commandId, input.claimToken, input.reason],
   );
   return one(result.rows, "vehicle_prevent_next_start_failure").state;
+}
+
+export type VehicleTrackerIngestSource =
+  | "geotab_getfeed"
+  | "traccar_rest"
+  | "traccar_websocket";
+
+export type ClaimedVehicleTrackerProviderIngest = {
+  trackerProviderId: string;
+  integrationKey: string;
+  credentialRef: string;
+  providerKind: "geotab_feed" | "traccar_rest";
+  feedCursor: string | null;
+  claimToken: string;
+};
+
+export async function claimVehicleTrackerProviderIngest(input: {
+  providerKind: "geotab_feed" | "traccar_rest";
+  workerId: string;
+}) {
+  const result = await trackerQuery<{
+    tracker_provider_id: string;
+    integration_key: string;
+    credential_ref: string;
+    provider_kind: "geotab_feed" | "traccar_rest";
+    feed_cursor: string | null;
+    claim_token: string;
+  }>(
+    "claim",
+    `SELECT * FROM vehicle_access.claim_tracker_provider_ingest(
+      $1::vehicle_access.tracker_provider_kind,$2
+    )`,
+    [input.providerKind, input.workerId],
+  );
+  const row = result.rows[0];
+  if (!row) return null;
+  return {
+    trackerProviderId: row.tracker_provider_id,
+    integrationKey: row.integration_key,
+    credentialRef: row.credential_ref,
+    providerKind: row.provider_kind,
+    feedCursor: row.feed_cursor,
+    claimToken: row.claim_token,
+  } satisfies ClaimedVehicleTrackerProviderIngest;
+}
+
+export async function renewVehicleTrackerProviderIngestClaim(input: {
+  trackerProviderId: string;
+  claimToken: string;
+}) {
+  await trackerQuery(
+    "renew",
+    `SELECT vehicle_access.renew_tracker_provider_ingest_claim($1::uuid,$2::uuid)`,
+    [input.trackerProviderId, input.claimToken],
+  );
+}
+
+export async function completeVehicleTrackerProviderIngestBatch(input: {
+  trackerProviderId: string;
+  claimToken: string;
+  source: VehicleTrackerIngestSource;
+  batchKey: string;
+  expectedCursor?: string | null;
+  nextCursor?: string | null;
+  payloadSha256Hex: string;
+  recordCount: number;
+  keepClaim?: boolean;
+}) {
+  const result = await trackerQuery<{ cursor: string }>(
+    "complete",
+    `SELECT vehicle_access.complete_tracker_provider_ingest_batch(
+      $1::uuid,$2::uuid,$3::vehicle_access.tracker_ingest_source,
+      $4,$5,$6,$7,$8,$9
+    ) AS cursor`,
+    [
+      input.trackerProviderId,
+      input.claimToken,
+      input.source,
+      input.batchKey,
+      input.expectedCursor ?? null,
+      input.nextCursor ?? null,
+      input.payloadSha256Hex,
+      input.recordCount,
+      input.keepClaim ?? false,
+    ],
+  );
+  return one(result.rows, "vehicle_tracker_provider_ingest_cursor").cursor;
+}
+
+export async function releaseVehicleTrackerProviderIngestClaim(input: {
+  trackerProviderId: string;
+  claimToken: string;
+  errorCode: string;
+}) {
+  await trackerQuery(
+    "release",
+    `SELECT vehicle_access.release_tracker_provider_ingest_claim($1::uuid,$2::uuid,$3)`,
+    [input.trackerProviderId, input.claimToken, input.errorCode],
+  );
+}
+
+export type BulkVehicleTrackerSignalInput = {
+  externalDeviceId: string;
+  externalEventId: string;
+  signalKind: VehicleTrackerSignalKind;
+  observedAt: string;
+  latitude?: number | null;
+  longitude?: number | null;
+  speedKph?: number | null;
+  headingDegrees?: number | null;
+  accuracyM?: number | null;
+  odometerKm?: number | null;
+  ignitionOn?: boolean | null;
+  integrityScore: number;
+  payloadSha256Hex: string;
+  normalizedPayload: Record<string, unknown>;
+};
+
+export type BulkVehicleTrackerSignalResult = {
+  recorded: number;
+  duplicates: number;
+  unknownDevices: number;
+  outcomes: Array<{
+    index: number;
+    external_event_id: string;
+    tracker_signal_id?: string;
+    outcome: "recorded" | "duplicate" | "unknown_device";
+  }>;
+};
+
+export async function bulkRecordVehicleTrackerProviderSignals(input: {
+  trackerProviderId: string;
+  claimToken: string;
+  source: VehicleTrackerIngestSource;
+  records: BulkVehicleTrackerSignalInput[];
+}) {
+  const result = await trackerQuery<{
+    result: {
+      recorded: number;
+      duplicates: number;
+      unknown_devices: number;
+      outcomes: BulkVehicleTrackerSignalResult["outcomes"];
+    };
+  }>(
+    "bulk_record",
+    `SELECT vehicle_access.bulk_record_tracker_provider_signals(
+      $1::uuid,$2::uuid,$3::vehicle_access.tracker_ingest_source,$4::jsonb
+    ) AS result`,
+    [
+      input.trackerProviderId,
+      input.claimToken,
+      input.source,
+      JSON.stringify(
+        input.records.map((record) => ({
+          external_device_id: record.externalDeviceId,
+          external_event_id: record.externalEventId,
+          signal_kind: record.signalKind,
+          observed_at: record.observedAt,
+          latitude: record.latitude ?? null,
+          longitude: record.longitude ?? null,
+          speed_kph: record.speedKph ?? null,
+          heading_degrees: record.headingDegrees ?? null,
+          accuracy_m: record.accuracyM ?? null,
+          odometer_km: record.odometerKm ?? null,
+          ignition_on: record.ignitionOn ?? null,
+          integrity_score: record.integrityScore,
+          payload_sha256_hex: record.payloadSha256Hex,
+          normalized_payload: record.normalizedPayload,
+        })),
+      ),
+    ],
+  );
+  const bulk = one(result.rows, "vehicle_tracker_bulk_signal_result").result;
+  return {
+    recorded: Number(bulk.recorded),
+    duplicates: Number(bulk.duplicates),
+    unknownDevices: Number(bulk.unknown_devices),
+    outcomes: bulk.outcomes,
+  } satisfies BulkVehicleTrackerSignalResult;
+}
+
+export async function getVehicleTrackerDatabaseLockMetrics() {
+  const result = await trackerQuery<{
+    active_transactions: number;
+    lock_waiting_transactions: number;
+    max_lock_wait_seconds: string | number;
+  }>(
+    "observability",
+    `SELECT * FROM vehicle_access.tracker_worker_database_lock_metrics()`,
+    [],
+  );
+  const row = one(result.rows, "vehicle_tracker_database_lock_metrics");
+  return {
+    activeTransactions: Number(row.active_transactions),
+    lockWaitingTransactions: Number(row.lock_waiting_transactions),
+    maxLockWaitSeconds: Number(row.max_lock_wait_seconds),
+  };
+}
+
+export async function listVehicleTrackerProviderIngestObservability() {
+  const result = await trackerQuery<{
+    provider_kind: "geotab_feed" | "traccar_rest";
+    integration_key: string;
+    lease_expires_at_epoch: string | number;
+    cursor_age_seconds: string | number;
+    last_error_age_seconds: string | number | null;
+  }>(
+    "claim",
+    `SELECT * FROM vehicle_access.list_tracker_provider_ingest_observability()`,
+    [],
+  );
+  return result.rows.map((row) => ({
+    providerKind: row.provider_kind,
+    integrationKey: row.integration_key,
+    leaseExpiresAtSeconds: Number(row.lease_expires_at_epoch),
+    cursorAgeSeconds: Number(row.cursor_age_seconds),
+    lastErrorAgeSeconds:
+      row.last_error_age_seconds === null
+        ? null
+        : Number(row.last_error_age_seconds),
+  }));
+}
+
+export async function resolveActiveVehicleTrackerForProviderIngest(input: {
+  trackerProviderId: string;
+  externalDeviceId: string;
+}) {
+  const result = await database().query<{ tracker_id: string }>(
+    `SELECT vehicle_access.resolve_active_tracker_for_provider_ingest($1::uuid,$2) AS tracker_id`,
+    [input.trackerProviderId, input.externalDeviceId],
+  );
+  return result.rows[0]?.tracker_id ?? null;
 }

@@ -1,0 +1,44 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: vehicle-tracker-pgbouncer
+  namespace: monitoring
+  labels:
+    prometheus: platform
+    app.kubernetes.io/name: vehicle-tracker-pgbouncer
+spec:
+  namespaceSelector:
+    matchNames:
+      - switchos
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: vehicle-tracker-pgbouncer
+  endpoints:
+    - port: metrics
+      scheme: https
+      path: /metrics
+      interval: 15s
+      scrapeTimeout: 10s
+      tlsConfig:
+        ca:
+          secret:
+            name: vehicle-tracker-pgbouncer-prometheus-tls
+            key: ca.crt
+        cert:
+          secret:
+            name: vehicle-tracker-pgbouncer-prometheus-tls
+            key: tls.crt
+        keySecret:
+          name: vehicle-tracker-pgbouncer-prometheus-tls
+          key: tls.key
+        serverName: vehicle-tracker-pgbouncer.switchos.svc
+      basicAuth:
+        username:
+          name: vehicle-tracker-pgbouncer-prometheus-auth
+          key: username
+        password:
+          name: vehicle-tracker-pgbouncer-prometheus-auth
+          key: password
+# Required externally managed monitoring secrets in namespace monitoring:
+# vehicle-tracker-pgbouncer-prometheus-tls: ca.crt, tls.crt, tls.key
+# vehicle-tracker-pgbouncer-prometheus-auth: username, password

@@ -1,0 +1,16 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vehicle-tracker-ingest
+  namespace: switchos
+spec:
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      # At 64 desired workers, this prevents a transient 16-pod surge that
+      # would otherwise permit 320 worker-side client connections. The worker
+      # pool limit remains four connections per pod.
+      maxSurge: 0
+      # One-at-a-time replacement preserves a predictable worker count while
+      # the worker's SIGTERM path stops consumers and closes its pool.
+      maxUnavailable: 1

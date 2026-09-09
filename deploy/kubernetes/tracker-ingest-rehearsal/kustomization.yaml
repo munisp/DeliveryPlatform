@@ -1,0 +1,20 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: switchos-rehearsal
+resources:
+  - ../tracker-ingest-safe-rollout
+patches:
+  - target:
+      version: v1
+      kind: ConfigMap
+      name: vehicle-tracker-ingest-runtime-config
+    patch: |-
+      - op: replace
+        path: /data/NODE_ENV
+        value: test
+      - op: replace
+        path: /data/VEHICLE_TRACKER_METRICS_NAMESPACE
+        value: switchos-rehearsal
+commonLabels:
+  resilience.delivery-platform.io/environment: non-production
+  deliveryplatform.io/rehearsal: vehicle-tracker-80-session

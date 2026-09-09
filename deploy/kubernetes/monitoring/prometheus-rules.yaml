@@ -1,0 +1,193 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: deliveryplatform-tracker-ingest
+  namespace: monitoring
+  labels:
+    prometheus: platform
+    app.kubernetes.io/name: vehicle-tracker-ingest
+spec:
+  groups:
+    - name: vehicle-tracker-ingest-lease
+      rules:
+        - alert: VehicleTrackerLeaseRenewalAtRisk
+          expr: |
+            vehicle_tracker_provider_cursor_lease_expires_at_seconds > time()
+            and
+            vehicle_tracker_provider_cursor_lease_expires_at_seconds - time() < 45
+          for: 45s
+          labels:
+            severity: warning
+            service: vehicle-tracker-ingest
+          annotations:
+            summary: "Tracker UUID lease is approaching expiry"
+            description: "A provider cursor lease has under 45 seconds remaining for 45 seconds. Inspect renewal, pool wait, provider transport, and lock-wait metrics before PostgreSQL's five-minute fence expires."
+        - alert: VehicleTrackerLeaseExpiredWhileClaimed
+          expr: |
+            vehicle_tracker_provider_cursor_lease_expires_at_seconds > 0
+            and vehicle_tracker_provider_cursor_lease_expires_at_seconds < time() - 15
+          for: 2m
+          labels:
+            severity: critical
+            service: vehicle-tracker-ingest
+          annotations:
+            summary: "Tracker provider lease appears expired"
+            description: "A nonzero provider lease expiry timestamp is more than 15 seconds in the past. Confirm replacement-worker recovery and provider cursor state."
+        - alert: VehicleTrackerCursorStalled
+          expr: vehicle_tracker_provider_cursor_age_seconds > 600
+          for: 5m
+          labels:
+            severity: warning
+            service: vehicle-tracker-ingest
+          annotations:
+            summary: "Tracker provider cursor has not advanced"
+            description: "No durable cursor success has occurred for more than ten minutes for this provider. Check provider availability, credentials, queue ownership, and error-age metrics."
+        - alert: VehicleTrackerCursorFenceFailures
+          expr: increase(vehicle_tracker_provider_cursor_fence_failures_total[5m]) >= 3
+          for: 0s
+          labels:
+            severity: warning
+            service: vehicle-tracker-ingest
+          annotations:
+            summary: "Repeated tracker cursor UUID fence failures"
+            description: "At least three claim, renewal, bulk, completion, or release fence failures occurred within five minutes. Investigate concurrent ownership and worker restarts."
+    - name: vehicle-tracker-ingest-database
+      rules:
+        - alert: VehicleTrackerPoolSaturated
+          expr: |
+            vehicle_tracker_pool_connections{state="waiting"} > 0
+            or
+            (
+              vehicle_tracker_pool_connections{state="in_use"}
+              / clamp_min(vehicle_tracker_pool_max_connections, 1)
+            ) >= 0.90
+          for: 2m
+          labels:
+            severity: warning
+            service: vehicle-tracker-ingest
+          annotations:
+            summary: "Tracker worker database pool is saturated"
+            description: "At least one authority query is waiting for a pool connection or in-use connections are at least 90% of the configured per-pod maximum. Do not scale replicas until PostgreSQL connection admission headroom is verified."
+        - alert: VehicleTrackerDatabaseLockWait
+          expr: |
+            vehicle_tracker_database_lock_observability_up == 1
+            and
+            (
+              vehicle_tracker_database_lock_waiting_transactions > 0
+              or vehicle_tracker_database_max_lock_wait_seconds > 5
+            )
+          for: 1m
+          labels:
+            severity: warning
+            service: vehicle-tracker-ingest
+          annotations:
+            summary: "Tracker worker PostgreSQL lock waits detected"
+            description: "One or more active tracker-worker PostgreSQL transactions are waiting on locks, or the longest current wait exceeds five seconds. Correlate with UUID lease fencing and query-duration histograms."
+        - alert: VehicleTrackerLockObservabilityUnavailable
+          expr: vehicle_tracker_database_lock_observability_up == 0
+          for: 5m
+          labels:
+            severity: warning
+            service: vehicle-tracker-ingest
+          annotations:
+            summary: "Tracker database lock metrics are unavailable"
+            description: "The tracker-worker metrics process cannot read lock-wait statistics. Verify that the SECURITY DEFINER owner has pg_read_all_stats or pg_monitor and that the metrics endpoint is scraped."
+        - alert: VehicleTrackerMetricsMissing
+          expr: absent(vehicle_tracker_pool_max_connections)
+          for: 2m
+          labels:
+            severity: critical
+            service: vehicle-tracker-ingest
+          annotations:
+            summary: "Tracker worker metrics are missing"
+            description: "No tracker-worker metrics have been observed for two minutes. Verify the worker metrics port, ServiceMonitor selection, NetworkPolicy, and Prometheus target health."
+    - name: vehicle-tracker-pgbouncer
+      rules:
+        - record: vehicle_tracker_pgbouncer_client_connections
+          expr: |
+            sum by (instance, database) (
+              pgbouncer_pools_client_active_connections
+              + pgbouncer_pools_client_waiting_connections
+            )
+        - record: vehicle_tracker_pgbouncer_server_connections
+          expr: |
+            sum by (instance, database) (
+              pgbouncer_pools_server_active_connections
+              + pgbouncer_pools_server_idle_connections
+              + pgbouncer_pools_server_used_connections
+              + pgbouncer_pools_server_testing_connections
+              + pgbouncer_pools_server_login_connections
+            )
+        - record: vehicle_tracker_pgbouncer_tracker_server_utilization
+          expr: |
+            sum(vehicle_tracker_pgbouncer_server_connections) / 80
+        - record: vehicle_tracker_provider_overdue_cursors_total
+          expr: |
+            sum(max by (namespace, provider_kind, integration_key) (
+              vehicle_tracker_provider_overdue_cursors{
+                autoscaling_scope="vehicle-tracker-ingest"
+              }
+            ))
+        - record: vehicle_tracker_provider_overdue_cursors_by_namespace
+          expr: |
+            sum by (namespace) (max by (namespace, provider_kind, integration_key) (
+              vehicle_tracker_provider_overdue_cursors{
+                autoscaling_scope="vehicle-tracker-ingest"
+              }
+            ))
+        - alert: VehicleTrackerPgBouncerExporterDown
+          expr: min(pgbouncer_up) < 1
+          for: 2m
+          labels:
+            severity: critical
+            service: vehicle-tracker-pgbouncer
+          annotations:
+            summary: "Tracker PgBouncer exporter is unavailable"
+            description: "At least one PgBouncer exporter cannot scrape its local pooler for two minutes. Queue and backend-exhaustion metrics are no longer trustworthy."
+        - alert: VehicleTrackerPgBouncerClientQueue
+          expr: sum by (instance, database) (pgbouncer_pools_client_waiting_connections) > 0
+          for: 1m
+          labels:
+            severity: warning
+            service: vehicle-tracker-pgbouncer
+          annotations:
+            summary: "Tracker PgBouncer clients are waiting for a backend"
+            description: "One or more tracker clients have waited for an available PgBouncer server connection for one minute. Correlate with worker pool waiters, PostgreSQL lock waits, and provider backlog before scaling."
+        - alert: VehicleTrackerPgBouncerClientMaxWait
+          expr: max by (instance, database) (pgbouncer_pools_client_maxwait_seconds) > 2
+          for: 1m
+          labels:
+            severity: critical
+            service: vehicle-tracker-pgbouncer
+          annotations:
+            summary: "Tracker PgBouncer oldest client wait exceeds two seconds"
+            description: "The oldest unserved tracker client has waited more than two seconds for one minute. Check PgBouncer server capacity and PostgreSQL admission headroom."
+        - alert: VehicleTrackerPgBouncerClientSaturation
+          expr: |
+            sum(vehicle_tracker_pgbouncer_client_connections)
+            / clamp_min(max(pgbouncer_config_max_client_connections), 1) >= 0.80
+          for: 2m
+          labels:
+            severity: warning
+            service: vehicle-tracker-pgbouncer
+          annotations:
+            summary: "Tracker PgBouncer client capacity exceeds 80 percent"
+            description: "Active plus queued tracker clients are at least 80 percent of the configured PgBouncer client ceiling for two minutes. Do not raise tracker worker replicas without reviewing queues and PostgreSQL server capacity."
+        - alert: VehicleTrackerPgBouncerBackendExhaustion
+          expr: vehicle_tracker_pgbouncer_tracker_server_utilization >= 0.90
+          for: 2m
+          labels:
+            severity: critical
+            service: vehicle-tracker-pgbouncer
+          annotations:
+            summary: "Tracker PgBouncer backend server budget exceeds 90 percent"
+            description: "The aggregate PgBouncer backend-server use is at least 90 percent of the configured 80-connection tracker budget for two minutes. Preserve PostgreSQL reserve capacity; investigate transaction duration and lock waits before scaling."
+        - alert: VehicleTrackerPgBouncerWaitRateElevated
+          expr: sum(rate(pgbouncer_stats_client_wait_seconds_total[5m])) > 0.25
+          for: 5m
+          labels:
+            severity: warning
+            service: vehicle-tracker-pgbouncer
+          annotations:
+            summary: "Tracker PgBouncer client waiting time is increasing"
+            description: "Aggregate client wait time is accumulating faster than 0.25 seconds per second over five minutes, indicating sustained transaction-pool pressure even if point-in-time queues clear."
