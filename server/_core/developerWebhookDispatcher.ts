@@ -66,6 +66,15 @@ function isSuccessfulStatus(status: number) {
   return status >= 200 && status < 300;
 }
 
+function safeWebhookUrl(value: string) {
+  const url = new URL(value);
+  const testLoopback = process.env.NODE_ENV === "test" && (url.protocol === "http:" || url.protocol === "https:") && (url.hostname === "localhost" || /^(?:127\.)/.test(url.hostname));
+  if ((!testLoopback && (url.protocol !== "https:" || url.username || url.password || url.port || !url.hostname || /^(?:\d{1,3}\.){3}\d{1,3}$/.test(url.hostname) || url.hostname === "localhost" || url.hostname.endsWith(".local")))) {
+    throw new Error("webhook_endpoint_not_permitted");
+  }
+  return url.toString();
+}
+
 async function resolveDelivery(
   delivery: ClaimedDelivery,
   secrets: Map<string, string>,
@@ -77,6 +86,8 @@ async function resolveDelivery(
       status: 599,
       error: "signing_secret_reference_unavailable",
     };
+  const endpointUrl = safeWebhookUrl(delivery.endpoint_url);
+  const deliveredAt = new Date().toISOString();
   const body = JSON.stringify({
     id: delivery.event_id,
     type: delivery.event_type,
@@ -85,7 +96,8 @@ async function resolveDelivery(
   });
   const signature = createHmac("sha256", secret).update(body).digest("hex");
   try {
-    const response = await fetch(delivery.endpoint_url, {
+          const response = await fetch(endpointUrl, {
+
       method: "POST",
       redirect: "error",
       headers: {
@@ -93,6 +105,7 @@ async function resolveDelivery(
         "User-Agent": "DeliveryPlatform-Webhook/1.0",
         "X-Delivery-Id": delivery.delivery_id,
         "X-Event-Id": delivery.event_id,
+        "X-Webhook-Delivered-At": deliveredAt,
         "X-Webhook-Signature-256": `sha256=${signature}`,
       },
       body,

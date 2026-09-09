@@ -18,7 +18,7 @@ const panel = readFileSync(
 );
 const vehicleAccessRouter = router.slice(
   router.indexOf("vehicleAccess: router({"),
-  router.indexOf("  commerceFulfillment: router({"),
+  router.indexOf("  merchantCommerce: router({"),
 );
 const page = readFileSync(
   resolve(root, "client/src/pages/VehicleAccessOperations.tsx"),

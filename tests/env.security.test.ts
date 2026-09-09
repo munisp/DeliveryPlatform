@@ -13,6 +13,8 @@ const productionEnvironment = {
 	PICKUP_CODE_HMAC_KEY: "test-pickup-code-hmac-key-with-sufficient-entropy-20260905",
 	SAFETY_CONTACT_ENCRYPTION_KEY: "test-safety-contact-encryption-key-with-sufficient-entropy-20260905",
 	SAFETY_SHARE_TOKEN_KEY: "test-safety-share-token-key-with-sufficient-entropy-20260905",
+	MEDUSA_MERCHANT_API_URL: "https://merchant-gateway.switchos.test",
+	MEDUSA_MERCHANT_API_TOKEN: "a-high-entropy-test-medusa-merchant-token",
 };
 
 async function loadEnvironment(

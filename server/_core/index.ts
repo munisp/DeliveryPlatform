@@ -98,6 +98,11 @@ import {
   VehicleTrackerIntegrationError,
 } from "./vehicleTrackerIntegration";
 import {
+  dispatchOneVehicleTrackerProviderIngest,
+  startVehicleTrackerProviderConsumers,
+  VehicleTrackerProviderConsumerError,
+} from "./vehicleTrackerProviderConsumers";
+import {
   getFinancialTopology,
   getLatestDeliveryLocation,
   recordDeliveryLocation,
@@ -112,6 +117,8 @@ import {
 import { startDeveloperWebhookDispatcher } from "./developerWebhookDispatcher";
 import { developerOpenApi } from "./developerOpenApi";
 import { ingestMedusaWebhook, MedusaCommerceError } from "./medusaCommerce";
+import { ingestExternalCommerceWebhook } from "./commerceFulfillment";
+import { openRoleScopedTrackingStream } from "./realtimeTracking";
 import {
   assertWorkOrderTenant,
   createGeofence,
@@ -457,6 +464,51 @@ app.post(
         return;
       }
       res.status(503).json({ error: "medusa_event_unavailable" });
+    }
+  },
+);
+
+app.post(
+  "/api/internal/commerce/platforms/:connectionKey/events",
+  express.raw({ type: "application/json", limit: ENV.apiBodyLimit }),
+  rateLimit(120),
+  async (req, res) => {
+    const eventId = `${req.header("X-Commerce-Event-Id") ?? ""}`.trim();
+    const eventType = `${req.header("X-Commerce-Event-Type") ?? ""}`.trim();
+    const rawBody = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+    try {
+      const event = await ingestExternalCommerceWebhook({
+        connectionKey: req.params.connectionKey,
+        externalEventId: eventId,
+        eventType: eventType as "commerce.order.placed" | "commerce.order.cancelled" | "commerce.fulfillment.ready",
+        signature: req.header("X-Commerce-Signature"),
+        rawBody,
+        parsedBody: rawBody.length ? JSON.parse(rawBody.toString("utf8")) : null,
+      });
+      await recordOperationalEvent({
+        eventType: "commerce.external_platform_event.received",
+        route: req.path,
+        outcome: "success",
+        payload: { connectionKey: req.params.connectionKey, eventId, eventType, eventRecordId: event.id },
+      });
+      res.status(202).json({ accepted: true, eventId: event.id });
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : "external_commerce_event_ingestion_failed";
+      await recordOperationalEvent({
+        eventType: "commerce.external_platform_event.received",
+        route: req.path,
+        outcome: "failure",
+        payload: { connectionKey: req.params.connectionKey, eventId, eventType, reason },
+      });
+      if (reason.includes("signature") || reason.includes("not_configured")) {
+        res.status(401).json({ error: "external_commerce_signature_invalid" });
+      } else if (reason.includes("identity") || reason.includes("payload") || reason.includes("input")) {
+        res.status(400).json({ error: "external_commerce_event_invalid" });
+      } else if (reason.includes("disabled") || reason.includes("not found") || reason.includes("required")) {
+        res.status(404).json({ error: "external_commerce_connection_unavailable" });
+      } else {
+        res.status(503).json({ error: "external_commerce_event_unavailable" });
+      }
     }
   },
 );
@@ -1170,6 +1222,16 @@ async function operationsRoute(
 app.get("/api/operations/snapshot", rateLimit(60), async (req, res) => {
   await operationsRoute(req, res, (actor) => listOperationsSnapshot(actor));
 });
+app.get("/api/tracking/live/:scope", rateLimit(12), async (req, res) => {
+  const user = await getSessionUserFromRequest(req.headers);
+  if (!user) { res.status(401).json({ error: "authentication_required" }); return; }
+  try {
+    await openRoleScopedTrackingStream(req, res, user);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "tracking_stream_unavailable";
+    res.status(code === "tracking_scope_denied" ? 403 : 400).json({ error: code });
+  }
+});
 app.post("/api/operations/zones", rateLimit(20), async (req, res) => {
   await operationsRoute(req, res, (actor) =>
     createServiceZone(actor, {
@@ -1598,6 +1660,39 @@ app.post(
           : code === "vehicle_tracker_ingress_disabled" ||
               code === "vehicle_tracker_webhook_secret_unavailable"
             ? 503
+            : 400;
+      res.status(status).json({ error: code });
+    }
+  },
+);
+
+app.post(
+  "/internal/vehicle-trackers/providers/poll-once",
+  rateLimit(10),
+  async (req: AppRequest, res) => {
+    if (!requireInternalServiceAccess(req, res)) return;
+    const providerKind = req.body?.providerKind;
+    if (providerKind !== "geotab_feed" && providerKind !== "traccar_rest") {
+      res.status(400).json({ error: "vehicle_tracker_provider_kind_invalid" });
+      return;
+    }
+    try {
+      const result = await dispatchOneVehicleTrackerProviderIngest({
+        providerKind,
+        workerId: `vehicle-tracker-provider-${req.requestId ?? randomUUID()}`,
+      });
+      res.status(200).json(result);
+    } catch (error) {
+      const code =
+        error instanceof VehicleTrackerProviderConsumerError
+          ? error.code
+          : "vehicle_tracker_provider_transport_failed";
+      const status =
+        code === "vehicle_tracker_provider_consumers_disabled" ||
+        code === "vehicle_tracker_provider_credentials_unavailable"
+          ? 503
+          : code === "vehicle_tracker_provider_authentication_failed"
+            ? 502
             : 400;
       res.status(status).json({ error: code });
     }
@@ -4049,8 +4144,17 @@ app.post(
 );
 
 const stopDeveloperWebhookDispatcher = startDeveloperWebhookDispatcher();
-process.once("SIGTERM", () => stopDeveloperWebhookDispatcher());
-process.once("SIGINT", () => stopDeveloperWebhookDispatcher());
+const stopVehicleTrackerProviderConsumers = ENV.vehicleTrackerConsumerEmbedded
+  ? startVehicleTrackerProviderConsumers({ workerIdPrefix: "central-app" })
+  : () => undefined;
+process.once("SIGTERM", () => {
+  stopDeveloperWebhookDispatcher();
+  stopVehicleTrackerProviderConsumers();
+});
+process.once("SIGINT", () => {
+  stopDeveloperWebhookDispatcher();
+  stopVehicleTrackerProviderConsumers();
+});
 
 app.listen(ENV.port, ENV.bindHost, () => {
   console.log(
