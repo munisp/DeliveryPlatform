@@ -16,11 +16,20 @@ BEGIN
   PERFORM commerce.append_merchant_portal_audit(p_provider_id,p_actor_user_id,'merchant.api_credential.revoked',jsonb_build_object('key_id',p_key_id),p_key_id||'.revoke',p_now);
 END $$;
 CREATE OR REPLACE FUNCTION commerce.verify_merchant_api_credential(p_key_id text,p_secret_sha256 bytea,p_required_scope text,p_now timestamptz DEFAULT clock_timestamp()) RETURNS TABLE(provider_id integer,credential_id uuid) LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,commerce AS $$
+DECLARE v_expires_at timestamptz;
 BEGIN
   IF p_key_id !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$' OR octet_length(p_secret_sha256)<>32 THEN RAISE EXCEPTION 'invalid merchant credential' USING ERRCODE='42501'; END IF;
-  UPDATE commerce.merchant_api_credential SET last_used_at=p_now,state=CASE WHEN expires_at<=p_now THEN 'expired' ELSE state END,revoked_at=CASE WHEN expires_at<=p_now THEN p_now ELSE revoked_at END WHERE key_id=p_key_id AND state='active' AND expires_at>p_now AND secret_sha256=p_secret_sha256 AND p_required_scope=ANY(scopes) RETURNING merchant_api_credential.provider_id,id INTO provider_id,credential_id;
+  SELECT expires_at INTO v_expires_at FROM commerce.merchant_api_credential
+   WHERE key_id=p_key_id AND state='active' AND secret_sha256=p_secret_sha256 AND p_required_scope=ANY(scopes)
+   FOR UPDATE;
   IF NOT FOUND THEN RAISE EXCEPTION 'merchant credential denied' USING ERRCODE='42501'; END IF;
+  IF v_expires_at<=p_now THEN
+    UPDATE commerce.merchant_api_credential SET state='expired',revoked_at=p_now WHERE key_id=p_key_id AND state='active';
+    RETURN;
+  END IF;
+  UPDATE commerce.merchant_api_credential SET last_used_at=p_now WHERE key_id=p_key_id AND state='active'
+    RETURNING merchant_api_credential.provider_id,id INTO provider_id,credential_id;
   RETURN NEXT;
 END $$;
-DO $$ BEGIN IF EXISTS(SELECT 1 FROM pg_roles WHERE rolname='commerce_gateway_service') THEN GRANT EXECUTE ON FUNCTION commerce.verify_merchant_api_credential(text,bytea,text,timestamp with time zone) TO commerce_gateway_service; END IF; IF EXISTS(SELECT 1 FROM pg_roles WHERE rolname='commerce_operator_service') THEN GRANT EXECUTE ON FUNCTION commerce.issue_merchant_api_credential(integer,integer,text,bytea,text[],timestamp with time zone,timestamp with time zone),commerce.revoke_merchant_api_credential(integer,integer,text,timestamp with time zone) TO commerce_operator_service; END IF; END $$;
+DO $$ BEGIN IF EXISTS(SELECT 1 FROM pg_roles WHERE rolname='commerce_gateway_service') THEN GRANT USAGE ON SCHEMA commerce TO commerce_gateway_service; GRANT EXECUTE ON FUNCTION commerce.verify_merchant_api_credential(text,bytea,text,timestamp with time zone) TO commerce_gateway_service; END IF; IF EXISTS(SELECT 1 FROM pg_roles WHERE rolname='commerce_operator_service') THEN GRANT EXECUTE ON FUNCTION commerce.issue_merchant_api_credential(integer,integer,text,bytea,text[],timestamp with time zone,timestamp with time zone),commerce.revoke_merchant_api_credential(integer,integer,text,timestamp with time zone) TO commerce_operator_service; END IF; END $$;
 REVOKE ALL ON FUNCTION commerce.issue_merchant_api_credential(integer,integer,text,bytea,text[],timestamp with time zone,timestamp with time zone),commerce.revoke_merchant_api_credential(integer,integer,text,timestamp with time zone),commerce.verify_merchant_api_credential(text,bytea,text,timestamp with time zone) FROM PUBLIC;

@@ -23,3 +23,4 @@ tests/multiplatform-commerce-driver-handoff.config.test.ts
 tests/env.security.test.ts
 tests/gig-vehicle-rental-operations.config.test.ts
 scripts/testing/selective-stage-offline-sync-and-merchant.txt
+scripts/testing/validate-merchant-api-credential-lifecycle.sh
