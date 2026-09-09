@@ -11,6 +11,10 @@ export default async function deliverDeliveryPlatformInventoryOutbox(
   container: MedusaContainer,
 ) {
   const logger = container.resolve("logger") as Logger;
+  if ((process.env.MEDUSA_PROCESS_ROLE || "").trim().toLowerCase() !== "inventory-dispatcher") {
+    logger.info("DeliveryPlatform inventory outbox delivery is owned by the dedicated inventory-dispatcher process");
+    return;
+  }
   const outbox = container.resolve(
     DELIVERYPLATFORM_INVENTORY_OUTBOX_MODULE,
   ) as DeliveryPlatformInventoryOutboxService;

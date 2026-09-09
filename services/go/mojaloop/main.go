@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -127,6 +128,15 @@ func NewMojaloopService(tigerBeetle TigerBeetleLedger) (*MojaloopService, error)
 	if err != nil {
 		return nil, fmt.Errorf("open mojaloop database: %w", err)
 	}
+	poolMax, err := boundedEnvironmentInteger("MOJALOOP_DATABASE_POOL_MAX", 8, 1, 48)
+	if err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	db.SetMaxOpenConns(poolMax)
+	db.SetMaxIdleConns(poolMax)
+	db.SetConnMaxIdleTime(30 * time.Second)
+	db.SetConnMaxLifetime(30 * time.Minute)
 	if err := db.Ping(); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("ping mojaloop database: %w", err)
@@ -145,6 +155,18 @@ func NewMojaloopService(tigerBeetle TigerBeetleLedger) (*MojaloopService, error)
 		return nil, err
 	}
 	return service, nil
+}
+
+func boundedEnvironmentInteger(name string, fallback int, minimum int, maximum int) (int, error) {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return fallback, nil
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value < minimum || value > maximum {
+		return 0, fmt.Errorf("%s must be an integer between %d and %d", name, minimum, maximum)
+	}
+	return value, nil
 }
 
 const mojaloopFundsSchemaContractVersion = 8
@@ -1333,9 +1355,29 @@ func main() {
 		if _, err := requiredFundsOutboxDestinations(); err != nil {
 			log.Fatalf("Failed to configure funds outbox worker: %v", err)
 		}
-		log.Printf("Mojaloop durable funds outbox worker started as %s", workerID)
-		if err := service.RunFundsOutboxDispatcher(ctx, workerID); err != nil {
-			log.Fatalf("Failed to run funds outbox worker: %v", err)
+		mux := http.NewServeMux()
+		mux.HandleFunc("/health", service.handleHealthHTTP)
+		mux.HandleFunc("/metrics/funds-outbox", service.handleFundsOutboxMetricsHTTP)
+		server := &http.Server{
+			Addr:              bindHost + ":" + httpPort,
+			Handler:           mux,
+			ReadHeaderTimeout: 5 * time.Second,
+		}
+		serverErrors := make(chan error, 1)
+		go func() {
+			log.Printf("Mojaloop durable funds outbox worker started as %s (health port %s)", workerID, server.Addr)
+			serverErrors <- server.ListenAndServe()
+		}()
+		workerError := service.RunFundsOutboxDispatcher(ctx, workerID)
+		shutdownContext, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		_ = server.Shutdown(shutdownContext)
+		serverError := <-serverErrors
+		if workerError != nil && workerError != context.Canceled {
+			log.Fatalf("Failed to run funds outbox worker: %v", workerError)
+		}
+		if serverError != nil && serverError != http.ErrServerClosed {
+			log.Fatalf("Funds outbox worker health server failed: %v", serverError)
 		}
 		return
 	}
@@ -1355,6 +1397,7 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", service.handleHealthHTTP)
+	mux.HandleFunc("/metrics/funds-outbox", service.handleFundsOutboxMetricsHTTP)
 	mux.HandleFunc("/callbacks/transfers", service.handleTransferCallback)
 	mux.HandleFunc("/callbacks/quotes", service.handleQuoteCallback)
 	mux.HandleFunc("/callbacks/refunds", service.handleRefundCallback)

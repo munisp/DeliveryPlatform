@@ -2,9 +2,80 @@ import { createHash, createHmac, randomUUID } from "crypto";
 import { Pool, type PoolClient } from "pg";
 
 const MAX_ATTEMPTS = 16;
-const CLAIM_LIMIT = 50;
-const LEASE_MILLISECONDS = 30_000;
+const DEFAULT_CLAIM_LIMIT = 2;
+const MAX_CLAIM_LIMIT = 25;
+const DEFAULT_LEASE_MILLISECONDS = 45_000;
+const DEFAULT_DELIVERY_TIMEOUT_MILLISECONDS = 10_000;
+const DELIVERY_COMPLETION_SAFETY_MILLISECONDS = 5_000;
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{2,159}$/;
+
+type InventoryOutboxRuntimeConfig = {
+  poolMax: number;
+  claimLimit: number;
+  leaseMilliseconds: number;
+  deliveryTimeoutMilliseconds: number;
+  applicationName: string;
+};
+
+function boundedInteger(
+  name: string,
+  fallback: number,
+  minimum: number,
+  maximum: number,
+): number {
+  const raw = process.env[name]?.trim();
+  if (!raw) return fallback;
+  if (!/^[0-9]+$/.test(raw)) {
+    throw new Error(`${name} must be an integer`);
+  }
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < minimum || value > maximum) {
+    throw new Error(`${name} must be between ${minimum} and ${maximum}`);
+  }
+  return value;
+}
+
+function inventoryOutboxRuntimeConfig(): InventoryOutboxRuntimeConfig {
+  const leaseMilliseconds = boundedInteger(
+    "MEDUSA_INVENTORY_OUTBOX_LEASE_MS",
+    DEFAULT_LEASE_MILLISECONDS,
+    15_000,
+    300_000,
+  );
+  const deliveryTimeoutMilliseconds = boundedInteger(
+    "MEDUSA_INVENTORY_OUTBOX_DELIVERY_TIMEOUT_MS",
+    DEFAULT_DELIVERY_TIMEOUT_MILLISECONDS,
+    1_000,
+    15_000,
+  );
+  const safeSequentialMaximum = Math.floor(
+    (leaseMilliseconds - DELIVERY_COMPLETION_SAFETY_MILLISECONDS) /
+      deliveryTimeoutMilliseconds,
+  );
+  if (safeSequentialMaximum < 1) {
+    throw new Error(
+      "MEDUSA_INVENTORY_OUTBOX_LEASE_MS is too short for the configured delivery timeout",
+    );
+  }
+  const requestedClaimLimit = boundedInteger(
+    "MEDUSA_INVENTORY_OUTBOX_CLAIM_LIMIT",
+    DEFAULT_CLAIM_LIMIT,
+    1,
+    MAX_CLAIM_LIMIT,
+  );
+  const applicationRole =
+    process.env.MEDUSA_PROCESS_ROLE?.trim().toLowerCase() || "shared";
+  if (!/^[a-z][a-z0-9-]{0,31}$/.test(applicationRole)) {
+    throw new Error("MEDUSA_PROCESS_ROLE must be a bounded lowercase role name");
+  }
+  return {
+    poolMax: boundedInteger("MEDUSA_INVENTORY_OUTBOX_POOL_MAX", 4, 1, 16),
+    claimLimit: Math.min(requestedClaimLimit, safeSequentialMaximum),
+    leaseMilliseconds,
+    deliveryTimeoutMilliseconds,
+    applicationName: `deliveryplatform-medusa-inventory-outbox-${applicationRole}`,
+  };
+}
 
 type Logger = {
   info(message: string): void;
@@ -53,6 +124,17 @@ type OutboxRow = {
   payload: DeliveryPlatformInventoryPayload;
   claim_token: string;
   attempts: number;
+};
+
+export type InventoryOutboxMetrics = {
+  readyUnits: number;
+  processingUnits: number;
+  expiredLeaseUnits: number;
+  deadLetterUnits: number;
+  oldestReadySeconds: number;
+  poolTotal: number;
+  poolIdle: number;
+  poolWaiting: number;
 };
 
 function requiredEnvironment(name: string): string {
@@ -193,15 +275,27 @@ export function inventoryBackoff(attempts: number, eventId: string): number {
 export default class DeliveryPlatformInventoryOutboxService {
   private readonly pool: Pool;
   private readonly logger: Logger;
+  private readonly runtime: InventoryOutboxRuntimeConfig;
 
   constructor({ logger }: { logger: Logger }) {
     this.logger = logger;
+    this.runtime = inventoryOutboxRuntimeConfig();
     this.pool = new Pool({
       connectionString: requiredEnvironment("MEDUSA_DATABASE_URL"),
-      max: 8,
+      max: this.runtime.poolMax,
       idleTimeoutMillis: 30_000,
-      application_name: "deliveryplatform-medusa-inventory-outbox",
+      connectionTimeoutMillis: 5_000,
+      application_name: this.runtime.applicationName,
     });
+    this.pool.on("error", (error) => {
+      this.logger.error(
+        `DeliveryPlatform inventory outbox PostgreSQL pool error: ${error.message}`,
+      );
+    });
+  }
+
+  async close(): Promise<void> {
+    await this.pool.end();
   }
 
   async enqueue(payload: DeliveryPlatformInventoryPayload): Promise<string> {
@@ -286,7 +380,7 @@ export default class DeliveryPlatformInventoryOutboxService {
        FROM candidates
        WHERE o.id = candidates.id
        RETURNING o.id, o.event_type, o.payload, o.claim_token, o.attempts`,
-      [CLAIM_LIMIT, LEASE_MILLISECONDS],
+      [this.runtime.claimLimit, this.runtime.leaseMilliseconds],
     );
     return result.rows.map((row) => ({
       id: row.id,
@@ -297,11 +391,8 @@ export default class DeliveryPlatformInventoryOutboxService {
     }));
   }
 
-  private async complete(
-    client: PoolClient,
-    event: ClaimedEvent,
-  ): Promise<boolean> {
-    const result = await client.query(
+  private async complete(event: ClaimedEvent): Promise<boolean> {
+    const result = await this.pool.query(
       `UPDATE deliveryplatform_inventory_outbox
        SET state = 'delivered', claim_token = NULL, lease_expires_at = NULL,
            delivered_at = now(), last_error = NULL, updated_at = now()
@@ -311,17 +402,13 @@ export default class DeliveryPlatformInventoryOutboxService {
     return result.rowCount === 1;
   }
 
-  private async fail(
-    client: PoolClient,
-    event: ClaimedEvent,
-    error: unknown,
-  ): Promise<boolean> {
+  private async fail(event: ClaimedEvent, error: unknown): Promise<boolean> {
     const description =
       error instanceof Error
         ? error.message.slice(0, 1000)
         : "unknown delivery error";
     const terminal = event.attempts >= MAX_ATTEMPTS;
-    const result = await client.query(
+    const result = await this.pool.query(
       `UPDATE deliveryplatform_inventory_outbox
        SET state = CASE WHEN $3 THEN 'dead_letter' ELSE 'pending' END,
            claim_token = NULL,
@@ -344,6 +431,48 @@ export default class DeliveryPlatformInventoryOutboxService {
     return result.rowCount === 1;
   }
 
+  async metrics(): Promise<InventoryOutboxMetrics> {
+    const result = await this.pool.query<{
+      ready_units: string;
+      processing_units: string;
+      expired_lease_units: string;
+      dead_letter_units: string;
+      oldest_ready_seconds: string;
+    }>(`
+      SELECT
+        count(*) FILTER (WHERE state = 'pending' AND next_attempt_at <= now())::text AS ready_units,
+        count(*) FILTER (WHERE state = 'processing')::text AS processing_units,
+        count(*) FILTER (WHERE state = 'processing' AND lease_expires_at <= now())::text AS expired_lease_units,
+        count(*) FILTER (WHERE state = 'dead_letter')::text AS dead_letter_units,
+        coalesce(
+          greatest(0, extract(epoch FROM now() - min(created_at) FILTER (
+            WHERE state = 'pending' AND next_attempt_at <= now()
+          )))::bigint,
+          0
+        )::text AS oldest_ready_seconds
+      FROM deliveryplatform_inventory_outbox
+    `);
+    const row = result.rows[0];
+    if (!row) throw new Error("inventory outbox metrics query returned no row");
+    const parseMetric = (value: string, name: string): number => {
+      const parsed = Number(value);
+      if (!Number.isSafeInteger(parsed) || parsed < 0) {
+        throw new Error(`${name} must be a non-negative safe integer`);
+      }
+      return parsed;
+    };
+    return {
+      readyUnits: parseMetric(row.ready_units, "ready_units"),
+      processingUnits: parseMetric(row.processing_units, "processing_units"),
+      expiredLeaseUnits: parseMetric(row.expired_lease_units, "expired_lease_units"),
+      deadLetterUnits: parseMetric(row.dead_letter_units, "dead_letter_units"),
+      oldestReadySeconds: parseMetric(row.oldest_ready_seconds, "oldest_ready_seconds"),
+      poolTotal: this.pool.totalCount,
+      poolIdle: this.pool.idleCount,
+      poolWaiting: this.pool.waitingCount,
+    };
+  }
+
   private async deliver(event: ClaimedEvent): Promise<void> {
     const ingressUrl = requiredEnvironment(
       "DELIVERYPLATFORM_MEDUSA_INGRESS_URL",
@@ -363,7 +492,7 @@ export default class DeliveryPlatformInventoryOutboxService {
         "X-Medusa-Signature": `sha256=${createHmac("sha256", secret).update(body).digest("hex")}`,
       },
       body,
-      signal: AbortSignal.timeout(10_000),
+      signal: AbortSignal.timeout(this.runtime.deliveryTimeoutMilliseconds),
     });
     if (response.status !== 202) {
       const responseText = (await response.text()).slice(0, 512);
@@ -380,29 +509,33 @@ export default class DeliveryPlatformInventoryOutboxService {
     stale: number;
   }> {
     const client = await this.pool.connect();
+    let events: ClaimedEvent[];
     try {
       await client.query("BEGIN");
-      const events = await this.claim(client);
+      events = await this.claim(client);
       await client.query("COMMIT");
-      let delivered = 0;
-      let failed = 0;
-      let stale = 0;
-      for (const event of events) {
-        try {
-          await this.deliver(event);
-          if (await this.complete(client, event)) delivered += 1;
-          else stale += 1;
-        } catch (error) {
-          if (await this.fail(client, event, error)) failed += 1;
-          else stale += 1;
-          this.logger.error(
-            `DeliveryPlatform inventory outbox delivery failed for ${event.id}: ${error instanceof Error ? error.message : "unknown error"}`,
-          );
-        }
-      }
-      return { claimed: events.length, delivered, failed, stale };
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw error;
     } finally {
       client.release();
     }
+    let delivered = 0;
+      let failed = 0;
+      let stale = 0;
+    for (const event of events) {
+      try {
+        await this.deliver(event);
+        if (await this.complete(event)) delivered += 1;
+        else stale += 1;
+      } catch (error) {
+        if (await this.fail(event, error)) failed += 1;
+        else stale += 1;
+        this.logger.error(
+          `DeliveryPlatform inventory outbox delivery failed for ${event.id}: ${error instanceof Error ? error.message : "unknown error"}`,
+        );
+      }
+    }
+    return { claimed: events.length, delivered, failed, stale };
   }
 }
