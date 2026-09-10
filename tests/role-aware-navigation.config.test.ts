@@ -52,7 +52,7 @@ describe("role-aware operator navigation", () => {
 
   it("uses the readable position map style, bounds durable markers, and allows a visible retry", () => {
     const map = readFileSync(
-      resolve(root, "client/src/components/VehicleTrackingMap.tsx"),
+      resolve(root, "client/src/components/MapLibreFleetCanvas.tsx"),
       "utf8",
     );
     const environment = readFileSync(

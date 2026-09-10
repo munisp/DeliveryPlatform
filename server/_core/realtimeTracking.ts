@@ -3,7 +3,7 @@ import { Pool } from "pg";
 import { ENV } from "./env";
 import type { SessionUser } from "./trpc";
 
-const ALLOWED_SCOPES = new Set(["admin", "customer", "merchant", "driver"]);
+const ALLOWED_SCOPES = new Set(["admin", "customer", "merchant", "driver", "me"]);
 const POLL_MS = 5_000;
 const HEARTBEAT_MS = 15_000;
 const MAX_STREAM_MS = 55 * 60 * 1000;
@@ -31,13 +31,38 @@ export type TrackingDelta = {
   etaSeconds: number | null;
 };
 
+export type RoleScopedTrackingSnapshot = {
+  cursor: number;
+  truncated: boolean;
+  deltas: TrackingDelta[];
+};
+
 function actorScope(user: SessionUser, requested: string) {
   if (!ALLOWED_SCOPES.has(requested)) throw new Error("tracking_scope_invalid");
   const role = `${user.role ?? ""}`.toLowerCase();
+  if (requested === "me") {
+    if (["admin", "platform_admin", "super_admin"].includes(role)) return "admin";
+    if (["merchant", "merchant_owner", "merchant_manager"].includes(role)) return "merchant";
+    if (["driver", "courier", "technician"].includes(role)) return "driver";
+    if (["customer", "rider"].includes(role)) return "customer";
+    throw new Error("tracking_scope_denied");
+  }
   if (requested === "admin" && !["admin", "platform_admin", "super_admin"].includes(role)) {
     throw new Error("tracking_scope_denied");
   }
   return requested;
+}
+
+function mapTrackingDelta(row: Record<string, unknown>): TrackingDelta {
+  return {
+    cursor: Number(row.cursor),
+    orderId: Number(row.order_id),
+    observedAt: new Date(`${row.observed_at}`).toISOString(),
+    latitude: Number(row.latitude),
+    longitude: Number(row.longitude),
+    accuracyM: row.accuracy_m === null ? null : Number(row.accuracy_m),
+    etaSeconds: row.eta_seconds === null ? null : Number(row.eta_seconds),
+  };
 }
 
 export async function listRoleScopedTrackingDeltas(input: { user: SessionUser; scope: string; cursor: number; limit?: number }) {
@@ -47,11 +72,73 @@ export async function listRoleScopedTrackingDeltas(input: { user: SessionUser; s
     "SELECT cursor,order_id,observed_at,latitude,longitude,accuracy_m,eta_seconds FROM operations.list_role_scoped_delivery_tracking($1,$2,$3,$4)",
     [input.user.id, scope, cursor, Math.min(250, Math.max(1, input.limit ?? 100))],
   );
-  return result.rows.map((row) => ({
-    cursor: Number(row.cursor), orderId: Number(row.order_id), observedAt: new Date(row.observed_at).toISOString(),
-    latitude: Number(row.latitude), longitude: Number(row.longitude), accuracyM: row.accuracy_m === null ? null : Number(row.accuracy_m),
-    etaSeconds: row.eta_seconds === null ? null : Number(row.eta_seconds),
-  })) satisfies TrackingDelta[];
+  return result.rows.map(mapTrackingDelta) satisfies TrackingDelta[];
+}
+
+export async function getRoleScopedTrackingSnapshot(input: {
+  user: SessionUser;
+  scope: string;
+  limit?: number;
+}): Promise<RoleScopedTrackingSnapshot> {
+  const scope = actorScope(input.user, input.scope);
+  const result = await db().query(
+    "SELECT stream_cursor,truncated,cursor,order_id,observed_at,latitude,longitude,accuracy_m,eta_seconds FROM operations.list_role_scoped_delivery_tracking_snapshot($1,$2,$3)",
+    [input.user.id, scope, Math.min(250, Math.max(1, input.limit ?? 250))],
+  );
+  const first = result.rows[0] as Record<string, unknown> | undefined;
+  return {
+    cursor: first ? Number(first.stream_cursor) : 0,
+    truncated: first?.truncated === true,
+    deltas: result.rows.map(mapTrackingDelta),
+  };
+}
+
+export type TrackingSessionResolver = (headers: Request["headers"]) => Promise<SessionUser | null>;
+
+function trackingErrorStatus(error: unknown) {
+  return error instanceof Error && error.message === "tracking_scope_denied" ? 403 : 400;
+}
+
+export async function handleRoleScopedTrackingSnapshot(
+  req: Request,
+  res: Response,
+  resolveSession: TrackingSessionResolver,
+) {
+  const user = await resolveSession(req.headers);
+  if (!user) { res.status(401).json({ error: "authentication_required" }); return; }
+  try {
+    const snapshot = await getRoleScopedTrackingSnapshot({
+      user,
+      scope: req.params.scope,
+      limit: Number(req.query.limit ?? 250),
+    });
+    res.set("Cache-Control", "no-store").status(200).json(snapshot);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "tracking_snapshot_unavailable";
+    res.status(trackingErrorStatus(error)).json({ error: code });
+  }
+}
+
+export async function handleRoleScopedTrackingStream(
+  req: Request,
+  res: Response,
+  resolveSession: TrackingSessionResolver,
+) {
+  const user = await resolveSession(req.headers);
+  if (!user) { res.status(401).json({ error: "authentication_required" }); return; }
+  try {
+    await openRoleScopedTrackingStream(req, res, user);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "tracking_stream_unavailable";
+    res.status(trackingErrorStatus(error)).json({ error: code });
+  }
+}
+
+export async function closeRoleScopedTrackingPoolForTest() {
+  if (!pool) return;
+  const active = pool;
+  pool = null;
+  await active.end();
 }
 
 function sse(res: Response, event: string, body: unknown) {

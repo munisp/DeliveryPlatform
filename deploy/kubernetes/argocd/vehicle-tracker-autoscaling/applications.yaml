@@ -1,0 +1,120 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: vehicle-tracker-autoscaling
+  namespace: argocd
+  labels:
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  description: Constrained GitOps delivery for vehicle tracker rollout safety and KEDA autoscaling.
+  sourceRepos:
+    - https://github.com/munisp/DeliveryPlatform.git
+  destinations:
+    - namespace: switchos
+      server: https://kubernetes.default.svc
+  clusterResourceWhitelist: []
+  namespaceResourceWhitelist:
+    - group: ""
+      kind: ConfigMap
+    - group: ""
+      kind: ServiceAccount
+    - group: apps
+      kind: Deployment
+    - group: autoscaling
+      kind: HorizontalPodAutoscaler
+    - group: batch
+      kind: Job
+    - group: keda.sh
+      kind: ScaledObject
+    - group: keda.sh
+      kind: TriggerAuthentication
+    - group: networking.k8s.io
+      kind: NetworkPolicy
+    - group: rbac.authorization.k8s.io
+      kind: Role
+    - group: rbac.authorization.k8s.io
+      kind: RoleBinding
+---
+# Bootstrap this application and wait for it to be Healthy before enabling the
+# autoscaling application below. It is deliberately separated so the gate does
+# not try to validate an older maxSurge: 25% Deployment before the protective
+# patch is present.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: vehicle-tracker-rollout-foundation
+  namespace: argocd
+  labels:
+    app.kubernetes.io/part-of: deliveryplatform
+  annotations:
+    argocd.argoproj.io/sync-wave: "-10"
+spec:
+  project: vehicle-tracker-autoscaling
+  source:
+    repoURL: https://github.com/munisp/DeliveryPlatform.git
+    targetRevision: main
+    path: deploy/kubernetes/tracker-ingest-keda-foundation
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: switchos
+  revisionHistoryLimit: 10
+  syncPolicy:
+    automated:
+      prune: false
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=false
+      - FailOnSharedResource=true
+      - ServerSideApply=true
+      - Validate=false
+      - PruneLast=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 20s
+        factor: 2
+        maxDuration: 3m
+---
+# Enable only after vehicle-tracker-rollout-foundation is Healthy and after the
+# secret vehicle-tracker-prometheus-query has been created by the approved
+# secret-management controller. The PreSync gate rejects unsafe capacity state.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: vehicle-tracker-autoscaling
+  namespace: argocd
+  labels:
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  project: vehicle-tracker-autoscaling
+  source:
+    repoURL: https://github.com/munisp/DeliveryPlatform.git
+    targetRevision: main
+    path: deploy/kubernetes/tracker-autoscaling/keda-production
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: switchos
+  revisionHistoryLimit: 10
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      name: vehicle-tracker-ingest
+      namespace: switchos
+      jsonPointers:
+        - /spec/replicas
+  syncPolicy:
+    automated:
+      prune: false
+      selfHeal: false
+    syncOptions:
+      - CreateNamespace=false
+      - FailOnSharedResource=true
+      - ServerSideApply=true
+      - RespectIgnoreDifferences=true
+      - PruneLast=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 20s
+        factor: 2
+        maxDuration: 3m

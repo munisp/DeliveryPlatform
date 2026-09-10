@@ -118,7 +118,10 @@ import { startDeveloperWebhookDispatcher } from "./developerWebhookDispatcher";
 import { developerOpenApi } from "./developerOpenApi";
 import { ingestMedusaWebhook, MedusaCommerceError } from "./medusaCommerce";
 import { ingestExternalCommerceWebhook } from "./commerceFulfillment";
-import { openRoleScopedTrackingStream } from "./realtimeTracking";
+import {
+  handleRoleScopedTrackingSnapshot,
+  handleRoleScopedTrackingStream,
+} from "./realtimeTracking";
 import {
   assertWorkOrderTenant,
   createGeofence,
@@ -1222,15 +1225,12 @@ async function operationsRoute(
 app.get("/api/operations/snapshot", rateLimit(60), async (req, res) => {
   await operationsRoute(req, res, (actor) => listOperationsSnapshot(actor));
 });
+app.get("/api/tracking/live/:scope/snapshot", rateLimit(30), async (req, res) => {
+  await handleRoleScopedTrackingSnapshot(req, res, getSessionUserFromRequest);
+});
+
 app.get("/api/tracking/live/:scope", rateLimit(12), async (req, res) => {
-  const user = await getSessionUserFromRequest(req.headers);
-  if (!user) { res.status(401).json({ error: "authentication_required" }); return; }
-  try {
-    await openRoleScopedTrackingStream(req, res, user);
-  } catch (error) {
-    const code = error instanceof Error ? error.message : "tracking_stream_unavailable";
-    res.status(code === "tracking_scope_denied" ? 403 : 400).json({ error: code });
-  }
+  await handleRoleScopedTrackingStream(req, res, getSessionUserFromRequest);
 });
 app.post("/api/operations/zones", rateLimit(20), async (req, res) => {
   await operationsRoute(req, res, (actor) =>

@@ -31,10 +31,13 @@ export default defineConfig({
     },
   },
   build: {
+    chunkSizeWarningLimit: 500,
     rollupOptions: {
       output: {
         manualChunks(id) {
           if (!id.includes("node_modules")) return;
+          if (id.includes("maplibre-gl") || id.includes("@mapbox") || id.includes("geojson"))
+            return "vendor-map";
           if (id.includes("recharts") || id.includes("d3-"))
             return "vendor-visualization";
           if (id.includes("@radix-ui")) return "vendor-ui";
