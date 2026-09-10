@@ -1,4 +1,5 @@
 import importlib.util
+import json
 import pathlib
 import sys
 import tempfile
@@ -83,6 +84,13 @@ class OfflinePolicyEvaluatorTests(unittest.TestCase):
             self.assertGreaterEqual(first["confidence_score"], 0.0)
             self.assertLessEqual(first["confidence_score"], 1.0)
             self.assertEqual(MODULE._validate_existing_audit_chain(audit_path), second["entry_hash"])
+            audit_lines = audit_path.read_text(encoding="utf-8").splitlines()
+            first_entry = json.loads(audit_lines[0])
+            first_entry["reason"] = "tampered"
+            audit_lines[0] = json.dumps(first_entry, sort_keys=True)
+            audit_path.write_text("\n".join(audit_lines) + "\n", encoding="utf-8")
+            with self.assertRaisesRegex(MODULE.PolicyEvaluationError, "hash-chain"):
+                MODULE._validate_existing_audit_chain(audit_path)
 
 
 if __name__ == "__main__":
