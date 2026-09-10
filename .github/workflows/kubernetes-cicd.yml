@@ -33,44 +33,33 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "22"
           cache: pnpm
-
-      - name: Set up pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: "10"
-
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
           go-version: "1.22.x"
-
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.75.0"
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-
       - name: Install Node.js dependencies
         run: pnpm install --frozen-lockfile --ignore-scripts
-
       - name: Validate TypeScript and production bundle
         run: |
           pnpm check
           pnpm build
-
       - name: Run frontend and server tests
         run: pnpm test
-
       - name: Run Go tests with race detection
         shell: bash
         run: |
@@ -79,7 +68,6 @@ jobs:
             echo "Testing $module"
             (cd "$module" && go test -race ./...)
           done < <(find services/go -name go.mod -printf '%h\n' | sort)
-
       - name: Run Rust tests
         shell: bash
         run: |
@@ -87,19 +75,15 @@ jobs:
           for module in services/rust/pricing-engine services/rust/dispatch-optimizer; do
             (cd "$module" && cargo test --locked --all-targets)
           done
-
       - name: Install Python validation dependencies
         run: python -m pip install --disable-pip-version-check -r services/python/requirements.txt PyYAML==6.0.3
-
       - name: Run Python syntax and service contract checks
         run: |
           python -m compileall -q services/python
           (cd services/python/speech-runtime && python -m unittest test_main.py)
           (cd services/python/payment-webhook && python -m unittest test_service.py)
-
       - name: Regenerate deterministic Kubernetes manifests
         run: python scripts/testing/generate-service-kubernetes-manifests.py
-
       - name: Validate Kubernetes security and resilience configuration
         run: |
           python scripts/testing/validate-kubernetes-manifests.py
@@ -108,18 +92,65 @@ jobs:
           bash scripts/testing/validate-resilience-test-templates.sh
           bash -n deploy/kubernetes/pricing-dispatch/apply-migrations.sh
           git diff --exit-code -- deploy/kubernetes/go-services/workloads.yaml deploy/kubernetes/python-services/workloads.yaml
-
       - name: Run static production gates
         run: scripts/testing/audit-production-readiness.sh
-
       - name: Scan repository for known vulnerabilities
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.28.0
         with:
           scan-type: fs
           scan-ref: .
           severity: HIGH,CRITICAL
           exit-code: "1"
           ignore-unfixed: true
+
+  kubernetes-template-policy:
+    name: Render and validate Kubernetes templates
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v4
+        with:
+          version: v1.30.0
+      - name: Set up Go for Conftest
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22.x"
+      - name: Install pinned Conftest
+        shell: bash
+        run: |
+          set -euo pipefail
+          export GOBIN="$RUNNER_TEMP/bin"
+          export GOTOOLCHAIN=go1.26.8
+          mkdir -p "$GOBIN"
+          go install github.com/open-policy-agent/conftest@v0.56.0
+          "$GOBIN/conftest" --version
+          echo "$GOBIN" >> "$GITHUB_PATH"
+      - name: Render source templates
+        shell: bash
+        run: |
+          set -euo pipefail
+          kubectl kustomize deploy/kubernetes > "$RUNNER_TEMP/workloads-template.yaml"
+      - name: Enforce pull-request source policy
+        shell: bash
+        run: |
+          set -euo pipefail
+          conftest test --output github \
+            --policy policy/kubernetes-template \
+            "$RUNNER_TEMP/workloads-template.yaml"
+          conftest test --combine --output github \
+            --policy policy/kubernetes-template \
+            "$RUNNER_TEMP/workloads-template.yaml"
+      - name: Verify hardening policy unit fixtures
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/ci/test-kubernetes-hardening-policy.sh
 
   logistics-microservice-integration:
     name: Run PostgreSQL/PostGIS logistics microservice integration
@@ -129,22 +160,18 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "22"
-
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.75.0"
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-
       - name: Install PostgreSQL/PostGIS, Redis, and Python dependencies
         run: |
           set -euo pipefail
@@ -152,10 +179,8 @@ jobs:
           sudo apt-get install --yes postgresql postgresql-16-postgis-3 redis-server
           sudo pg_ctlcluster 16 main start
           python -m pip install --disable-pip-version-check -r services/python/requirements.txt
-
       - name: Run real Python compliance and Rust route-planning workflows
         run: scripts/testing/run-logistics-microservice-integration-suite.sh
-
       - name: Upload integration evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -170,10 +195,10 @@ jobs:
 
   build-and-publish:
     name: Build, attest, scan, and publish immutable images
-    needs: logistics-microservice-integration
+    needs: [logistics-microservice-integration, kubernetes-template-policy]
     if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.deploy_staging)
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 75
     permissions:
       contents: read
       packages: write
@@ -182,62 +207,59 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
+      - name: Set up QEMU for multi-architecture builds
+        uses: docker/setup-qemu-action@v3
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Build and publish central application
         uses: docker/build-push-action@v6
         with:
           context: .
           file: Dockerfile
           push: true
+          platforms: linux/amd64,linux/arm64
           tags: ${{ env.IMAGE_PREFIX }}-central-app:${{ env.IMAGE_TAG }}
           provenance: mode=max
           sbom: true
-
       - name: Build and publish Go services
         shell: bash
         run: |
           set -euo pipefail
           for service in inventory-control local-commerce-gateway mojaloop notification-dispatcher vertical-provisioning voice-gateway ride-matching-worker; do
-            docker buildx build --push --provenance=true --sbom=true \
+            docker buildx build --push --platform linux/amd64,linux/arm64 --provenance=true --sbom=true \
               --build-arg "SERVICE=$service" \
               --file services/go/Dockerfile \
               --tag "${IMAGE_PREFIX}-${service}:${IMAGE_TAG}" \
               services/go
           done
-
       - name: Build and publish Python services
         shell: bash
         run: |
           set -euo pipefail
           for service in intake-orchestrator lakehouse procurement-planner retail-forecast speech-runtime ride-payment-webhook; do
-            docker buildx build --push --provenance=true --sbom=true \
+            docker buildx build --push --platform linux/amd64,linux/arm64 --provenance=true --sbom=true \
               --build-arg "SERVICE=$service" \
               --file services/python/Dockerfile \
               --tag "${IMAGE_PREFIX}-${service}:${IMAGE_TAG}" \
               services/python
           done
-
       - name: Build and publish Rust services and migration image
         shell: bash
         run: |
           set -euo pipefail
-          docker buildx build --push --provenance=true --sbom=true \
+          docker buildx build --push --platform linux/amd64,linux/arm64 --provenance=true --sbom=true \
             --file services/rust/pricing-engine/Dockerfile \
             --tag "${IMAGE_PREFIX}-pricing-engine:${IMAGE_TAG}" services/rust/pricing-engine
-          docker buildx build --push --provenance=true --sbom=true \
+          docker buildx build --push --platform linux/amd64,linux/arm64 --provenance=true --sbom=true \
             --file services/rust/dispatch-optimizer/Dockerfile \
             --tag "${IMAGE_PREFIX}-dispatch-optimizer:${IMAGE_TAG}" services/rust/dispatch-optimizer
-          docker buildx build --push --provenance=true --sbom=true \
+          docker buildx build --push --platform linux/amd64,linux/arm64 --provenance=true --sbom=true \
             --file deploy/kubernetes/pricing-dispatch/Dockerfile.migrations \
             --tag "${IMAGE_PREFIX}-migrations:${IMAGE_TAG}" .
 
@@ -246,10 +268,11 @@ jobs:
     needs: build-and-publish
     if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.deploy_staging)
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 35
     environment: staging
     permissions:
       contents: read
+      packages: read
       id-token: write
     concurrency:
       group: deliveryplatform-staging-deployment
@@ -257,12 +280,24 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
       - name: Set up kubectl
         uses: azure/setup-kubectl@v4
         with:
           version: v1.30.0
-
+      - name: Set up Go for Conftest
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22.x"
+      - name: Install pinned Conftest
+        shell: bash
+        run: |
+          set -euo pipefail
+          export GOBIN="$RUNNER_TEMP/bin"
+          export GOTOOLCHAIN=go1.26.8
+          mkdir -p "$GOBIN"
+          go install github.com/open-policy-agent/conftest@v0.56.0
+          "$GOBIN/conftest" --version
+          echo "$GOBIN" >> "$GITHUB_PATH"
       - name: Configure protected staging cluster access
         shell: bash
         env:
@@ -276,7 +311,6 @@ jobs:
           kubectl auth can-i get deployments -n switchos
           kubectl auth can-i get configmaps -n resilience-test | grep -qx yes
           kubectl auth can-i get secrets -n switchos && exit 1 || true
-
       - name: Enforce closed resilience circuit breaker before deployment
         shell: bash
         run: |
@@ -286,53 +320,74 @@ jobs:
             echo "Refusing staging migration and rollout: resilience validation circuit breaker is ${breaker_state:-missing}" >&2
             exit 1
           fi
-
       - name: Verify required secret synchronization prerequisites
         run: |
           set -euo pipefail
           kubectl get crd externalsecrets.external-secrets.io
           kubectl get clustersecretstore deliveryplatform-secrets
-
       - name: Apply namespace security controls and wait for External Secrets
         run: |
           set -euo pipefail
           kubectl apply --server-side --field-manager=deliveryplatform-cicd -k deploy/kubernetes/security
           kubectl wait --for=condition=Ready externalsecret --all -n switchos --timeout=180s
-
-      - name: Render immutable staging manifests
+      - name: Render multi-architecture digest-pinned staging manifests
         shell: bash
         env:
           STAGING_PUBLIC_APP_ORIGIN: ${{ vars.STAGING_PUBLIC_APP_ORIGIN }}
           STAGING_AUTH_ORIGIN: ${{ vars.STAGING_AUTH_ORIGIN }}
+          REGISTRY_USERNAME: ${{ github.actor }}
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           test -n "$STAGING_PUBLIC_APP_ORIGIN"
           test -n "$STAGING_AUTH_ORIGIN"
-          image_tag_escaped="${IMAGE_TAG//\//\\/}"
           public_origin_escaped="${STAGING_PUBLIC_APP_ORIGIN//\//\\/}"
           auth_origin_escaped="${STAGING_AUTH_ORIGIN//\//\\/}"
           sed \
-            -e "s/REPLACE_WITH_IMMUTABLE_TAG/${image_tag_escaped}/g" \
             -e "s#https://REPLACE_WITH_PUBLIC_APP_HOST#${public_origin_escaped}#g" \
             -e "s#https://REPLACE_WITH_AUTH_HOST#${auth_origin_escaped}#g" \
-            <(kubectl kustomize deploy/kubernetes) > "$RUNNER_TEMP/workloads.yaml"
-          if grep -q 'REPLACE_WITH_' "$RUNNER_TEMP/workloads.yaml"; then
-            echo "Rendered Kubernetes workload still contains a placeholder" >&2
-            exit 1
-          fi
-
+            <(kubectl kustomize deploy/kubernetes) > "$RUNNER_TEMP/workloads-template.yaml"
+          REGISTRY_USERNAME="$REGISTRY_USERNAME" REGISTRY_TOKEN="$REGISTRY_TOKEN" \
+            python3 scripts/ci/render-manifests-with-digests.py \
+              --input "$RUNNER_TEMP/workloads-template.yaml" \
+              --output "$RUNNER_TEMP/workloads.yaml" \
+              --tag "$IMAGE_TAG" \
+              --registry ghcr.io \
+              --username-env REGISTRY_USERNAME \
+              --token-env REGISTRY_TOKEN
+          ! grep -q 'REPLACE_WITH_' "$RUNNER_TEMP/workloads.yaml"
+      - name: Enforce trusted release Kubernetes policy
+        shell: bash
+        run: |
+          set -euo pipefail
+          conftest test --output github \
+            --policy policy/kubernetes \
+            "$RUNNER_TEMP/workloads.yaml"
+          conftest test --combine --output github \
+            --policy policy/kubernetes \
+            "$RUNNER_TEMP/workloads.yaml"
       - name: Run unique schema migration Job
         shell: bash
+        env:
+          REGISTRY_USERNAME: ${{ github.actor }}
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           job_name="deliveryplatform-schema-migration-${GITHUB_SHA::12}"
           sed \
             -e "s/name: deliveryplatform-schema-migration/name: ${job_name}/" \
-            -e "s/REPLACE_WITH_IMMUTABLE_TAG/${IMAGE_TAG}/g" \
-            deploy/kubernetes/pricing-dispatch/migration-job.yaml > "$RUNNER_TEMP/migration-job.yaml"
+            deploy/kubernetes/pricing-dispatch/migration-job.yaml > "$RUNNER_TEMP/migration-job-template.yaml"
+          REGISTRY_USERNAME="$REGISTRY_USERNAME" REGISTRY_TOKEN="$REGISTRY_TOKEN" \
+            python3 scripts/ci/render-manifests-with-digests.py \
+              --input "$RUNNER_TEMP/migration-job-template.yaml" \
+              --output "$RUNNER_TEMP/migration-job.yaml" \
+              --tag "$IMAGE_TAG" \
+              --registry ghcr.io \
+              --username-env REGISTRY_USERNAME \
+              --token-env REGISTRY_TOKEN
+          ! grep -q 'REPLACE_WITH_' "$RUNNER_TEMP/migration-job.yaml"
           kubectl create -f "$RUNNER_TEMP/migration-job.yaml"
           kubectl wait --for=condition=complete "job/${job_name}" -n switchos --timeout=10m
-
       - name: Apply workloads and verify rollout
         run: |
           set -euo pipefail
