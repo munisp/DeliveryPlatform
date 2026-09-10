@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import maplibregl, { type GeoJSONSource, type Map as MapLibreMap } from "maplibre-gl";
+import { LngLatBounds, Map, NavigationControl, Popup, ScaleControl, type GeoJSONSource, type Map as MapLibreMap } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { Crosshair, MapPin, Pause, Play, RefreshCw, ShieldAlert } from "lucide-react";
 
@@ -186,7 +186,7 @@ export default function MapLibreFleetCanvas({
     const container = mapContainerRef.current;
     if (!container || mapRef.current) return;
 
-    const map = new maplibregl.Map({
+    const map = new Map({
       container,
       style: mapStyleUrl,
       center: defaultMapCenter,
@@ -195,11 +195,11 @@ export default function MapLibreFleetCanvas({
     mapRef.current = map;
     fittedInitialBoundsRef.current = false;
     map.addControl(
-      new maplibregl.NavigationControl({ visualizePitch: true }),
+      new NavigationControl({ visualizePitch: true }),
       "top-right",
     );
     map.addControl(
-      new maplibregl.ScaleControl({ maxWidth: 120, unit: "metric" }),
+      new ScaleControl({ maxWidth: 120, unit: "metric" }),
       "bottom-left",
     );
 
@@ -277,7 +277,7 @@ export default function MapLibreFleetCanvas({
         const properties = feature.properties as TrackingFeatureProperties | undefined;
         if (!properties?.id) return;
         setSelectedId(properties.id);
-        new maplibregl.Popup({ offset: 14, closeButton: true })
+        new Popup({ offset: 14, closeButton: true })
           .setLngLat(feature.geometry.coordinates as [number, number])
           .setDOMContent(popupContent(properties))
           .addTo(map);
@@ -329,7 +329,7 @@ export default function MapLibreFleetCanvas({
       });
       return;
     }
-    const bounds = new maplibregl.LngLatBounds();
+    const bounds = new LngLatBounds();
     renderablePositions.forEach((position) => {
       bounds.extend([position.longitude, position.latitude]);
     });

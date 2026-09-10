@@ -163,6 +163,7 @@ describeLive("role-scoped tracking snapshot HTTP and SSE handoff", () => {
     const ready = await stream.reader.next();
     expect(ready).toMatchObject({ event: "ready", data: { cursor: 1 } });
 
+    const notificationStartedAt = Date.now();
     await pool.query(
       "INSERT INTO public.delivery_tracking_events(delivery_id,occurred_at,latitude,longitude,accuracy_meters) VALUES ($1,$2,$3,$4,$5)",
       ["100", "2026-09-10T10:01:00.000Z", 6.525, 3.38, 7],
@@ -176,6 +177,7 @@ describeLive("role-scoped tracking snapshot HTTP and SSE handoff", () => {
         break;
       }
     }
+    expect(Date.now() - notificationStartedAt).toBeLessThan(1_500);
     expect(delta).toMatchObject({
       event: "tracking.delta",
       data: {
@@ -184,5 +186,5 @@ describeLive("role-scoped tracking snapshot HTTP and SSE handoff", () => {
       },
     });
     stream.reader.close();
-  }, 12_000);
+  }, 6_000);
 });

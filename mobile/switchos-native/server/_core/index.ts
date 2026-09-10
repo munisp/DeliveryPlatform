@@ -28,10 +28,10 @@ async function findAvailablePort(startPort: number = 3000): Promise<number> {
 }
 
 function configuredCorsOrigins() {
-  const origins = [
-    process.env.EXPO_WEB_PREVIEW_URL,
-    process.env.EXPO_PACKAGER_PROXY_URL,
-  ].filter((value): value is string => Boolean(value));
+  const origins = (process.env.WEB_ALLOWED_ORIGINS ?? "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
 
   if (process.env.NODE_ENV !== "production") {
     origins.push("http://localhost:8081", "http://127.0.0.1:8081");

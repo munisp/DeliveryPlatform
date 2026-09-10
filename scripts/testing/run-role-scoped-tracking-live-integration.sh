@@ -20,5 +20,6 @@ fi
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$ROOT_DIR/tests/fixtures/role_scoped_tracking_snapshot_fixture.sql"
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$ROOT_DIR/drizzle/0066_realtime_tracking_offline_sync_tenant_api.sql"
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$ROOT_DIR/drizzle/0068_role_scoped_tracking_snapshot.sql"
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$ROOT_DIR/drizzle/0069_realtime_tracking_delta_notifications.sql"
 RUN_ROLE_SCOPED_TRACKING_LIVE_INTEGRATION="$ACKNOWLEDGMENT" \
   pnpm --dir "$ROOT_DIR" exec vitest run tests/role-scoped-tracking-live.integration.test.ts

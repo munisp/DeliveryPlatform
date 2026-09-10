@@ -243,8 +243,6 @@ export const ENV = {
     process.env.LIFECYCLE_INVITATION_TTL_MINUTES,
     60 * 24 * 7,
   ),
-  forgeApiUrl: process.env.BUILT_IN_FORGE_API_URL ?? "",
-  forgeApiKey: process.env.BUILT_IN_FORGE_API_KEY ?? "",
   ollamaUrl: normalizeOptionalUrl("OLLAMA_URL") || "http://127.0.0.1:11434",
   ollamaModel: (process.env.OLLAMA_MODEL ?? "qwen2.5:3b").trim(),
   // Tiered fallback model routing configuration

@@ -1,24 +1,109 @@
 import type { Request, Response } from "express";
-import { Pool } from "pg";
+import { Client, Pool } from "pg";
 import { ENV } from "./env";
 import type { SessionUser } from "./trpc";
 
 const ALLOWED_SCOPES = new Set(["admin", "customer", "merchant", "driver", "me"]);
-const POLL_MS = 5_000;
+const RESYNC_MS = 60_000;
 const HEARTBEAT_MS = 15_000;
 const MAX_STREAM_MS = 55 * 60 * 1000;
+const TRACKING_DELTA_CHANNEL = "delivery_tracking_delta";
+const NOTIFIER_RECONNECT_MS = 5_000;
 let pool: Pool | null = null;
+let notificationClient: Client | null = null;
+let notificationStart: Promise<void> | null = null;
+let notificationReconnect: ReturnType<typeof setTimeout> | null = null;
+const notificationListeners = new Set<() => void>();
+
+function databaseSsl() {
+  return ENV.isProduction && !ENV.databaseUrl.includes("sslmode=disable")
+    ? { rejectUnauthorized: true, ...(ENV.databaseSslCa ? { ca: ENV.databaseSslCa } : {}) }
+    : false;
+}
 
 function db() {
   if (!pool) {
     pool = new Pool({
       connectionString: ENV.databaseUrl,
-      ssl: ENV.isProduction && !ENV.databaseUrl.includes("sslmode=disable") ? { rejectUnauthorized: true, ...(ENV.databaseSslCa ? { ca: ENV.databaseSslCa } : {}) } : false,
+      ssl: databaseSsl(),
       max: 4,
       application_name: "delivery-realtime-tracking",
     });
   }
   return pool;
+}
+
+function scheduleNotificationReconnect() {
+  if (notificationReconnect || !notificationListeners.size) return;
+  notificationReconnect = setTimeout(() => {
+    notificationReconnect = null;
+    void ensureNotificationClient();
+  }, NOTIFIER_RECONNECT_MS);
+  notificationReconnect.unref?.();
+}
+
+async function closeNotificationClient() {
+  if (notificationReconnect) {
+    clearTimeout(notificationReconnect);
+    notificationReconnect = null;
+  }
+  const active = notificationClient;
+  notificationClient = null;
+  if (active) await active.end().catch(() => undefined);
+}
+
+async function ensureNotificationClient() {
+  if (!notificationListeners.size || notificationClient) return;
+  if (notificationStart) return notificationStart;
+
+  notificationStart = (async () => {
+    const client = new Client({
+      connectionString: ENV.databaseUrl,
+      ssl: databaseSsl(),
+      application_name: "delivery-realtime-tracking-notifier",
+    });
+    const disconnect = () => {
+      if (notificationClient !== client) return;
+      notificationClient = null;
+      scheduleNotificationReconnect();
+    };
+    client.on("notification", (message) => {
+      if (message.channel !== TRACKING_DELTA_CHANNEL) return;
+      for (const listener of notificationListeners) {
+        try {
+          listener();
+        } catch {
+          // Individual SSE handlers retain their own error response and resync guard.
+        }
+      }
+    });
+    client.on("error", disconnect);
+    client.on("end", disconnect);
+    try {
+      await client.connect();
+      await client.query(`LISTEN ${TRACKING_DELTA_CHANNEL}`);
+      if (!notificationListeners.size) {
+        await client.end();
+        return;
+      }
+      notificationClient = client;
+    } catch {
+      await client.end().catch(() => undefined);
+      scheduleNotificationReconnect();
+    }
+  })().finally(() => {
+    notificationStart = null;
+  });
+  return notificationStart;
+}
+
+async function subscribeToTrackingNotifications(listener: () => void) {
+  notificationListeners.add(listener);
+  await ensureNotificationClient();
+  return () => {
+    notificationListeners.delete(listener);
+    if (!notificationListeners.size) void closeNotificationClient();
+  };
 }
 
 export type TrackingDelta = {
@@ -135,10 +220,10 @@ export async function handleRoleScopedTrackingStream(
 }
 
 export async function closeRoleScopedTrackingPoolForTest() {
-  if (!pool) return;
+  await closeNotificationClient();
   const active = pool;
   pool = null;
-  await active.end();
+  if (active) await active.end();
 }
 
 function sse(res: Response, event: string, body: unknown) {
@@ -158,7 +243,8 @@ export async function openRoleScopedTrackingStream(req: Request, res: Response, 
     "X-Accel-Buffering": "no",
   });
   res.flushHeaders();
-  sse(res, "ready", { scope, cursor, retry_after_ms: POLL_MS });
+  sse(res, "ready", { scope, cursor, retry_after_ms: NOTIFIER_RECONNECT_MS });
+
   const tick = async () => {
     if (closed || inFlight) return;
     inFlight = true;
@@ -170,11 +256,22 @@ export async function openRoleScopedTrackingStream(req: Request, res: Response, 
       }
     } catch {
       sse(res, "error", { code: "tracking_stream_unavailable" });
-    } finally { inFlight = false; }
+    } finally {
+      inFlight = false;
+    }
   };
+
+  const unsubscribe = await subscribeToTrackingNotifications(() => { void tick(); });
   await tick();
-  const poll = setInterval(() => void tick(), POLL_MS);
+  // A low-frequency resync guards against a database notification disconnect or missed wake-up.
+  const resync = setInterval(() => void tick(), RESYNC_MS);
   const heartbeat = setInterval(() => sse(res, "heartbeat", { cursor }), HEARTBEAT_MS);
   const expiry = setTimeout(() => { sse(res, "rotate", { cursor }); res.end(); }, MAX_STREAM_MS);
-  req.on("close", () => { closed = true; clearInterval(poll); clearInterval(heartbeat); clearTimeout(expiry); });
+  req.on("close", () => {
+    closed = true;
+    unsubscribe();
+    clearInterval(resync);
+    clearInterval(heartbeat);
+    clearTimeout(expiry);
+  });
 }

@@ -14,18 +14,18 @@ describe("Driver Mobility durable vehicle map", () => {
     expect(wrapper).toContain('lazy(() => import("@/components/MapLibreFleetCanvas"))');
     expect(wrapper).toContain("IntersectionObserver");
     expect(wrapper).toContain("Load interactive map");
-    expect(canvas).toContain('import maplibregl, { type GeoJSONSource, type Map as MapLibreMap } from "maplibre-gl"');
+    expect(canvas).toContain('import { LngLatBounds, Map, NavigationControl, Popup, ScaleControl, type GeoJSONSource, type Map as MapLibreMap } from "maplibre-gl"');
     expect(canvas).toContain('import "maplibre-gl/dist/maplibre-gl.css"');
     expect(canvas).toContain("const defaultMapStyle");
     expect(canvas).toContain("positions.filter(isRenderablePosition).slice(0, 250)");
-    expect(canvas).toContain("new maplibregl.Map");
+    expect(canvas).toContain("new Map({");
     expect(canvas).toContain("map.addSource(TRACKING_SOURCE_ID");
     expect(canvas).toContain("cluster: true");
     expect(canvas).toContain('type: "circle"');
     expect(canvas).toContain("source.setData(featureCollection(renderablePositions))");
     expect(canvas).toContain("getClusterExpansionZoom");
     expect(canvas).toContain("setDOMContent(");
-    expect(canvas).not.toContain("new maplibregl.Marker");
+    expect(canvas).not.toContain("new Marker");
     expect(canvas).not.toContain("setHTML(");
     expect(canvas).toContain("No authorized current vehicle positions are available");
     expect(model).toContain("function isRenderablePosition");
@@ -62,8 +62,11 @@ describe("Driver Mobility durable vehicle map", () => {
     const css = read("client/src/index.css");
 
     expect(vite).toContain('import tailwindcss from "@tailwindcss/vite"');
-    expect(vite).toContain("plugins: [tailwindcss(), react()]");
+    expect(vite).toContain("tailwindcss(),");
+    expect(vite).toContain("react(),");
+    expect(vite).toContain("viteStaticCopy(");
     expect(vite).toContain('return "vendor-map"');
+    expect(vite).toContain('return "vendor-cesium"');
     expect(vite).toContain("chunkSizeWarningLimit: 500");
     expect(css).toContain('@import "tailwindcss";');
     expect(css).toContain(".vehicle-map-popup");

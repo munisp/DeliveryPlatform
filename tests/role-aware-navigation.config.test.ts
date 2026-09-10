@@ -65,7 +65,7 @@ describe("role-aware operator navigation", () => {
     expect(map).toContain(
       "positions.filter(isRenderablePosition).slice(0, 250)",
     );
-    expect(map).toContain("new maplibregl.LngLatBounds()");
+    expect(map).toContain("new LngLatBounds()");
     expect(map).toContain(
       "padding: { top: 52, right: 52, bottom: 52, left: 52 }",
     );
