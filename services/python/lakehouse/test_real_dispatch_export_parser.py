@@ -132,5 +132,126 @@ class RealDispatchExportParserTests(unittest.TestCase):
                 PARSER.load_real_dispatch_export(records_path, manifest_path)
 
 
+    def test_manifest_object_syntax_required_fields_and_versions_fail_closed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            records_path, manifest_path = self.write_export(directory, [self.raw_record()])
+            manifest_path.write_text("[]", encoding="utf-8")
+            with self.assertRaisesRegex(EVALUATOR.PolicyEvaluationError, "manifest must be a JSON object"):
+                PARSER.load_real_dispatch_export(records_path, manifest_path)
+
+            manifest_path.write_text("{", encoding="utf-8")
+            with self.assertRaisesRegex(EVALUATOR.PolicyEvaluationError, "manifest is invalid JSON"):
+                PARSER.load_real_dispatch_export(records_path, manifest_path)
+
+            records_path, manifest_path = self.write_export(directory, [self.raw_record()])
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            del manifest["source_system"]
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            with self.assertRaisesRegex(EVALUATOR.PolicyEvaluationError, "missing required fields"):
+                PARSER.load_real_dispatch_export(records_path, manifest_path)
+
+            records_path, manifest_path = self.write_export(directory, [self.raw_record()])
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["manifest_schema_version"] = 2
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            with self.assertRaisesRegex(EVALUATOR.PolicyEvaluationError, "unsupported manifest_schema_version"):
+                PARSER.load_real_dispatch_export(records_path, manifest_path)
+
+            records_path, manifest_path = self.write_export(directory, [self.raw_record()])
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["record_schema_version"] = 2
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            with self.assertRaisesRegex(EVALUATOR.PolicyEvaluationError, "unsupported record_schema_version"):
+                PARSER.load_real_dispatch_export(records_path, manifest_path)
+
+    def test_manifest_string_timestamp_digest_and_read_errors_fail_closed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            records_path, manifest_path = self.write_export(directory, [self.raw_record()])
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["domain"] = ""
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            with self.assertRaisesRegex(EVALUATOR.PolicyEvaluationError, "manifest.domain must be a non-empty string"):
+                PARSER.load_real_dispatch_export(records_path, manifest_path)
+
+            records_path, manifest_path = self.write_export(directory, [self.raw_record()])
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["exported_at"] = "not-a-timestamp"
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            with self.assertRaisesRegex(EVALUATOR.PolicyEvaluationError, "ISO-8601 UTC"):
+                PARSER.load_real_dispatch_export(records_path, manifest_path)
+
+            records_path, manifest_path = self.write_export(directory, [self.raw_record()])
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["source_export_digest"] = "not-hex"
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            with self.assertRaisesRegex(EVALUATOR.PolicyEvaluationError, "SHA-256 hex digest"):
+                PARSER.load_real_dispatch_export(records_path, manifest_path)
+
+            with self.assertRaisesRegex(EVALUATOR.PolicyEvaluationError, "cannot read manifest"):
+                PARSER.load_real_dispatch_export(records_path, pathlib.Path(directory))
+
+    def test_records_file_syntax_and_read_errors_fail_closed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            records_path, manifest_path = self.write_export(directory, [self.raw_record()])
+            records_path.write_text("\n", encoding="utf-8")
+            with self.assertRaisesRegex(EVALUATOR.PolicyEvaluationError, "blank records"):
+                PARSER.load_real_dispatch_export(records_path, manifest_path)
+
+            records_path, manifest_path = self.write_export(directory, [self.raw_record()])
+            records_path.write_text("{\n", encoding="utf-8")
+            with self.assertRaisesRegex(EVALUATOR.PolicyEvaluationError, "invalid JSON"):
+                PARSER.load_real_dispatch_export(records_path, manifest_path)
+
+            records_path, manifest_path = self.write_export(directory, [self.raw_record()])
+            records_path.write_text("[]\n", encoding="utf-8")
+            with self.assertRaisesRegex(EVALUATOR.PolicyEvaluationError, "must be a JSON object"):
+                PARSER.load_real_dispatch_export(records_path, manifest_path)
+
+            with self.assertRaisesRegex(EVALUATOR.PolicyEvaluationError, "cannot read records"):
+                PARSER.load_real_dispatch_export(pathlib.Path(directory), manifest_path)
+
+    def test_record_provenance_schema_digest_domain_and_empty_rejections(self):
+        with tempfile.TemporaryDirectory() as directory:
+            missing_provenance = self.raw_record()
+            records_path, manifest_path = self.write_export(directory, [missing_provenance])
+            delivered = json.loads(records_path.read_text(encoding="utf-8").strip())
+            del delivered["event_time"]
+            canonical = dict(delivered)
+            canonical.pop("source_export_digest")
+            digest = hashlib.sha256(
+                (json.dumps(canonical, sort_keys=True, separators=(",", ":"), ensure_ascii=True) + "\n").encode("utf-8")
+            ).hexdigest()
+            delivered["source_export_digest"] = digest
+            records_path.write_text(json.dumps(delivered) + "\n", encoding="utf-8")
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["source_export_digest"] = digest
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            with self.assertRaisesRegex(EVALUATOR.PolicyEvaluationError, "missing provenance fields"):
+                PARSER.load_real_dispatch_export(records_path, manifest_path)
+
+            invalid_schema = self.raw_record()
+            invalid_schema["schema_version"] = 2
+            records_path, manifest_path = self.write_export(directory, [invalid_schema])
+            with self.assertRaisesRegex(EVALUATOR.PolicyEvaluationError, "unsupported record schema_version"):
+                PARSER.load_real_dispatch_export(records_path, manifest_path)
+
+            records_path, manifest_path = self.write_export(directory, [self.raw_record()])
+            delivered = json.loads(records_path.read_text(encoding="utf-8").strip())
+            delivered["source_export_digest"] = "0" * 64
+            records_path.write_text(json.dumps(delivered) + "\n", encoding="utf-8")
+            with self.assertRaisesRegex(EVALUATOR.PolicyEvaluationError, "source_export_digest does not match manifest"):
+                PARSER.load_real_dispatch_export(records_path, manifest_path)
+
+            alternate_domain = self.raw_record()
+            alternate_domain["domain"] = "notification_timing"
+            records_path, manifest_path = self.write_export(directory, [alternate_domain])
+            with self.assertRaisesRegex(EVALUATOR.PolicyEvaluationError, "domain does not match manifest"):
+                PARSER.load_real_dispatch_export(records_path, manifest_path)
+
+            records_path, manifest_path = self.write_export(directory, [])
+            with self.assertRaisesRegex(EVALUATOR.PolicyEvaluationError, "contains no records"):
+                PARSER.load_real_dispatch_export(records_path, manifest_path)
+
+
 if __name__ == "__main__":
     unittest.main()
