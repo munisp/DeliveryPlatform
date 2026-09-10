@@ -70,6 +70,7 @@ wait_for_tcp 127.0.0.1 3002
 wait_for_tcp 127.0.0.1 3003
 wait_for_tcp 127.0.0.1 19092
 wait_for_tcp 127.0.0.1 17233
+wait_for_http http://127.0.0.1:8474/version
 wait_for_http http://127.0.0.1:18086/health
 wait_for_http http://127.0.0.1:18087/health
 
@@ -77,6 +78,7 @@ wait_for_http http://127.0.0.1:18087/health
 source "${env_file}"
 export REAL_FINANCIAL_REHEARSAL=1
 export DATABASE_URL="postgresql://financial_rehearsal:${FINANCIAL_TEST_POSTGRES_PASSWORD}@127.0.0.1:55432/financial_rehearsal?sslmode=disable"
+export TEST_DATABASE_URL="${DATABASE_URL}"
 export INTERNAL_SERVICE_TOKEN="${FINANCIAL_TEST_INTERNAL_SERVICE_TOKEN}"
 export TIGERBEETLE_ADDRESSES="127.0.0.1:3001,127.0.0.1:3002,127.0.0.1:3003"
 export TIGERBEETLE_CLUSTER_ID="${FINANCIAL_TEST_CLUSTER_ID}"
@@ -88,6 +90,9 @@ export TEMPORAL_ADDRESS=127.0.0.1:17233
 export TEMPORAL_NAMESPACE=default
 export TEMPORAL_TASK_QUEUE=switchos-funds-workflows
 export TEMPORAL_BRIDGE_URL=http://127.0.0.1:18087
+export TIGERBEETLE_FAULT_PROXY_API_URL=http://127.0.0.1:8474
+export TIGERBEETLE_FAULT_PROXY_ADDRESSES=127.0.0.1:3101,127.0.0.1:3102,127.0.0.1:3103
+export TIGERBEETLE_FAULT_PROXY_DIRECT_ADDRESSES=127.0.0.1:3001,127.0.0.1:3002,127.0.0.1:3003
 
 run_phase() {
   local phase="$1"
@@ -113,6 +118,15 @@ run_phase temporal-recovery
 
 "${compose[@]}" start temporal-worker
 run_phase temporal-worker-recovery
+
+if [[ "${RUN_TIGERBEETLE_FAULT_PROXY_REHEARSAL:-0}" == "1" ]]; then
+  export REAL_TIGERBEETLE_FAULT_PROXY_REHEARSAL=1
+  (
+    cd "${repo_root}/services/go/mojaloop"
+    go test -tags=tigerbeetle_fault_proxy -race -count=1 -v \
+      -run '^TestTigerBeetleFaultProxy' ./...
+  )
+fi
 
 curl --fail --silent --show-error \
   -H "X-Internal-Service-Token: ${FINANCIAL_TEST_INTERNAL_SERVICE_TOKEN}" \
