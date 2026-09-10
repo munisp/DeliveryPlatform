@@ -37,4 +37,22 @@ describe("SwitchOS PWA shell assets", () => {
     expect(existsSync(resolve(publicRoot, "icons/switchos-icon.svg"))).toBe(true);
     expect(existsSync(resolve(publicRoot, "icons/switchos-maskable.svg"))).toBe(true);
   });
+
+  it("prevents browser caching of the HTML entry document", () => {
+    const entryHtml = readFileSync(resolve(process.cwd(), "index.html"), "utf8");
+
+    expect(entryHtml).toContain('http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate"');
+    expect(entryHtml).toContain('http-equiv="Pragma" content="no-cache"');
+    expect(entryHtml).toContain('http-equiv="Expires" content="0"');
+  });
+
+  it("uses a versioned service-worker shell cache and excludes APIs", () => {
+    const worker = readFileSync(resolve(process.cwd(), "public/sw.js"), "utf8");
+
+    expect(worker).toContain('const BUILD_VERSION = "__SW_BUILD_VERSION__"');
+    expect(worker).toContain('const CACHE_PREFIX = "switchos-shell-"');
+    expect(worker).toContain('pathname.startsWith("/api/")');
+    expect(worker).toContain('fetch(request, { cache: "no-store" })');
+    expect(worker).toContain("clearStaleShellCaches");
+  });
 });

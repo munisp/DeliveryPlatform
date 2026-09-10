@@ -200,6 +200,8 @@ jobs:
           file: Dockerfile
           push: true
           tags: ${{ env.IMAGE_PREFIX }}-central-app:${{ env.IMAGE_TAG }}
+          build-args: |
+            PWA_BUILD_VERSION=${{ github.sha }}
           provenance: mode=max
           sbom: true
 
