@@ -27,14 +27,16 @@ command -v psql >/dev/null 2>&1 || fail "psql_is_required"
 command -v go >/dev/null 2>&1 || fail "go_is_required"
 
 # The harness creates transfers and outbox rows in the nominated disposable
-# database. These four migrations are the minimum reviewed contract required by
-# the claim-token, lane-index, and exact-money code paths. Never point this at a
-# shared or production database.
+# database. These six migrations are the minimum reviewed contract required by
+# the claim-token, lane-index, exact-money, and approved head-resolution code
+# paths. Never point this at a shared or production database.
 printf '%s\n' 'Applying financial rehearsal migrations to isolated database...'
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$ROOT_DIR/drizzle/0006_mojaloop_exact_money_and_outbox.sql"
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$ROOT_DIR/drizzle/0007_mojaloop_schema_contract.sql"
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$ROOT_DIR/drizzle/0055_tigerbeetle_batch_outbox.sql"
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$ROOT_DIR/drizzle/0056_financial_dead_letter_remediation.sql"
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$ROOT_DIR/drizzle/0070_financial_partitioned_tigerbeetle_dispatch.sql"
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$ROOT_DIR/drizzle/0071_financial_dead_letter_head_resolution.sql"
 
 printf '%s\n' 'Running PostgreSQL outbox and deterministic TigerBeetle-contract simulation...'
 (

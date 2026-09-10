@@ -151,7 +151,7 @@ func NewMojaloopService(tigerBeetle TigerBeetleLedger) (*MojaloopService, error)
 	return service, nil
 }
 
-const mojaloopFundsSchemaContractVersion = 9
+const mojaloopFundsSchemaContractVersion = 10
 
 func (s *MojaloopService) verifyPersistenceContract() error {
 	var version int

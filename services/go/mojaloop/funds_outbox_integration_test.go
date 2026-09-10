@@ -22,7 +22,7 @@ func TestFundsOutboxAtomicPersistenceAndRecovery(t *testing.T) {
 		t.Fatalf("open test database: %v", err)
 	}
 	defer db.Close()
-	if _, err := db.Exec(`TRUNCATE mojaloop_funds_outbox, mojaloop_workflow_events, mojaloop_workflows RESTART IDENTITY`); err != nil {
+	if _, err := db.Exec(`TRUNCATE mojaloop_dead_letter_head_resolution, mojaloop_dead_letter_case_event, mojaloop_dead_letter_case, mojaloop_funds_outbox, mojaloop_workflow_events, mojaloop_workflows RESTART IDENTITY`); err != nil {
 		t.Fatalf("reset isolated outbox tables: %v", err)
 	}
 
@@ -303,7 +303,7 @@ func TestRefundReservationsIncludePendingLedgerAndSerializeConcurrentRequests(t 
 		t.Fatalf("open test database: %v", err)
 	}
 	defer db.Close()
-	if _, err := db.Exec(`TRUNCATE mojaloop_funds_outbox, mojaloop_workflow_events, mojaloop_workflows, mojaloop_refunds, mojaloop_idempotency_keys, mojaloop_transfers RESTART IDENTITY`); err != nil {
+	if _, err := db.Exec(`TRUNCATE mojaloop_dead_letter_head_resolution, mojaloop_dead_letter_case_event, mojaloop_dead_letter_case, mojaloop_funds_outbox, mojaloop_workflow_events, mojaloop_workflows, mojaloop_refunds, mojaloop_idempotency_keys, mojaloop_transfers RESTART IDENTITY`); err != nil {
 		t.Fatalf("reset isolated refund tables: %v", err)
 	}
 	if _, err := db.Exec(`INSERT INTO mojaloop_transfers (transfer_id, payer_fsp, payee_fsp, amount, amount_minor, currency, ilp_packet, condition, expiration, state, created_at, updated_at)

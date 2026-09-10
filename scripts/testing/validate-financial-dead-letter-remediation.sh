@@ -33,7 +33,9 @@ for migration in \
   "$ROOT_DIR/drizzle/0006_mojaloop_exact_money_and_outbox.sql" \
   "$ROOT_DIR/drizzle/0007_mojaloop_schema_contract.sql" \
   "$ROOT_DIR/drizzle/0055_tigerbeetle_batch_outbox.sql" \
-  "$ROOT_DIR/drizzle/0056_financial_dead_letter_remediation.sql"; do
+  "$ROOT_DIR/drizzle/0056_financial_dead_letter_remediation.sql" \
+  "$ROOT_DIR/drizzle/0070_financial_partitioned_tigerbeetle_dispatch.sql" \
+  "$ROOT_DIR/drizzle/0071_financial_dead_letter_head_resolution.sql"; do
   PGPASSWORD="$OWNER_PASSWORD" psql "$OWNER_URL" -X -v ON_ERROR_STOP=1 < "$migration" >/dev/null
 done
 
@@ -45,6 +47,10 @@ GRANT EXECUTE ON FUNCTION mojaloop_request_dead_letter_remediation(integer,uuid,
 GRANT EXECUTE ON FUNCTION mojaloop_approve_dead_letter_remediation(integer,uuid,text,text,timestamptz) TO ${RUNTIME_ROLE};
 GRANT EXECUTE ON FUNCTION mojaloop_reject_dead_letter_remediation(integer,uuid,text,text,timestamptz) TO ${RUNTIME_ROLE};
 GRANT EXECUTE ON FUNCTION mojaloop_list_dead_letter_cases(integer,integer) TO ${RUNTIME_ROLE};
+GRANT EXECUTE ON FUNCTION mojaloop_get_dead_letter_head_resolution(integer,uuid) TO ${RUNTIME_ROLE};
+GRANT EXECUTE ON FUNCTION mojaloop_request_dead_letter_head_resolution(integer,uuid,text,text,text,text,text,timestamptz) TO ${RUNTIME_ROLE};
+GRANT EXECUTE ON FUNCTION mojaloop_approve_dead_letter_head_resolution(integer,uuid,text,text,timestamptz) TO ${RUNTIME_ROLE};
+GRANT EXECUTE ON FUNCTION mojaloop_reject_dead_letter_head_resolution(integer,uuid,text,text,timestamptz) TO ${RUNTIME_ROLE};
 SQL
 
 printf '%s\n' '=== Financial dead-letter two-person remediation validation ==='
@@ -111,6 +117,62 @@ SQL
 APPROVAL="$(PGPASSWORD="$RUNTIME_PASSWORD" psql "$RUNTIME_URL" -X -A -F '|' -t -v ON_ERROR_STOP=1 -c "SELECT case_id,replacement_transfer_id,remediation_outbox_id,state FROM mojaloop_approve_dead_letter_remediation(101,'${CASE_ID}'::uuid,'independent reconciler approved','approve-independent-0001',clock_timestamp());")"
 [[ "$APPROVAL" =~ ^${CASE_ID}\|replacement-transfer-0001\|[0-9]+\|replacement_intent_created$ ]]
 
+HEAD_RESOLUTION="$(PGPASSWORD="$RUNTIME_PASSWORD" psql "$RUNTIME_URL" -X -A -F '|' -t -v ON_ERROR_STOP=1 -c "SELECT resolution_id,state FROM mojaloop_request_dead_letter_head_resolution(100,'${CASE_ID}'::uuid,'original_confirmed_not_committed_superseded','replacement evidence reviewed','recon://local/confirmed','dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd','head-resolution-request-0001',clock_timestamp());")"
+[[ "$HEAD_RESOLUTION" =~ ^[0-9a-f-]{36}\|approval_pending$ ]]
+HEAD_RESOLUTION_ID="${HEAD_RESOLUTION%%|*}"
+
+PGPASSWORD="$RUNTIME_PASSWORD" psql "$RUNTIME_URL" -X -v ON_ERROR_STOP=1 <<SQL >/dev/null
+DO \$\$
+BEGIN
+  PERFORM mojaloop_approve_dead_letter_head_resolution(100,'${CASE_ID}'::uuid,'same operator attempt','head-resolution-approve-same-0001',clock_timestamp());
+  RAISE EXCEPTION 'head-resolution requester self-approval was accepted';
+EXCEPTION WHEN SQLSTATE '42501' THEN
+  RAISE NOTICE 'expected head-resolution self-approval rejection observed: SQLSTATE 42501';
+END \$\$;
+SQL
+
+HEAD_APPROVAL="$(PGPASSWORD="$RUNTIME_PASSWORD" psql "$RUNTIME_URL" -X -A -F '|' -t -v ON_ERROR_STOP=1 -c "SELECT resolution_id,state,resolution_disposition FROM mojaloop_approve_dead_letter_head_resolution(102,'${CASE_ID}'::uuid,'independent head resolution approval','head-resolution-approve-independent-0001',clock_timestamp());")"
+[[ "$HEAD_APPROVAL" == "${HEAD_RESOLUTION_ID}|approved|original_confirmed_not_committed_superseded" ]]
+
+PGPASSWORD="$OWNER_PASSWORD" psql "$OWNER_URL" -X -v ON_ERROR_STOP=1 <<SQL >/dev/null
+INSERT INTO mojaloop_transfers (
+  transfer_id,payer_fsp,payee_fsp,amount,currency,ilp_packet,condition,expiration,state,amount_minor
+) VALUES (
+  'transfer-successor-0001','payer-a','payee-c',40.00,'NGN','ilp-successor','condition-successor-0001',
+  clock_timestamp()+interval '2 hours','PREPARED',4000
+);
+INSERT INTO mojaloop_workflows(workflow_id,workflow_type,resource_id,current_step,status)
+VALUES ('transfer-successor-0001','transfer','transfer-successor-0001','initiated','RESERVED');
+INSERT INTO mojaloop_funds_outbox (
+  event_id,destination,idempotency_key,workflow_id,workflow_type,resource_id,step,workflow_status,
+  payload,dispatch_order,status,attempt_count,next_attempt_at,ledger_debit_fsp
+) VALUES (
+  'evt-successor-0001','tigerbeetle','transfer-successor-0001','transfer-successor-0001','transfer',
+  'transfer-successor-0001','transfer_prepare','RESERVED',
+  '{"amountMinor":4000,"payerFsp":"payer-a","payeeFsp":"payee-c"}'::jsonb,
+  10,'pending',0,clock_timestamp(),'payer-a'
+);
+DO \$\$
+DECLARE
+  v_replacement_outbox bigint;
+  v_successor_outbox bigint;
+BEGIN
+  SELECT remediation_outbox_id INTO v_replacement_outbox
+  FROM mojaloop_dead_letter_case WHERE id='${CASE_ID}'::uuid;
+  SELECT id INTO v_successor_outbox FROM mojaloop_funds_outbox WHERE workflow_id='transfer-successor-0001';
+  IF mojaloop_dead_letter_predecessor_blocks(1, v_replacement_outbox) THEN
+    RAISE EXCEPTION 'approved replacement remained blocked by original head';
+  END IF;
+  IF NOT mojaloop_dead_letter_predecessor_blocks(1, v_successor_outbox) THEN
+    RAISE EXCEPTION 'ordinary successor bypassed unresolved approved replacement';
+  END IF;
+  UPDATE mojaloop_funds_outbox SET status='delivered' WHERE id=v_replacement_outbox;
+  IF mojaloop_dead_letter_predecessor_blocks(1, v_successor_outbox) THEN
+    RAISE EXCEPTION 'ordinary successor remained blocked after replacement delivery';
+  END IF;
+END \$\$;
+SQL
+
 PGPASSWORD="$OWNER_PASSWORD" psql "$OWNER_URL" -X -v ON_ERROR_STOP=1 <<SQL >/dev/null
 DO \$\$
 DECLARE
@@ -125,7 +187,7 @@ BEGIN
   SELECT state INTO v_replacement_state FROM mojaloop_transfers WHERE transfer_id='replacement-transfer-0001';
   SELECT status INTO v_outbox_status FROM mojaloop_funds_outbox WHERE workflow_id='replacement-transfer-0001';
   SELECT count(*) INTO v_case_events FROM mojaloop_dead_letter_case_event WHERE case_id='${CASE_ID}'::uuid;
-  IF v_status <> 'dead_letter' OR v_original_state <> 'PREPARED' OR v_replacement_state <> 'PENDING' OR v_outbox_status <> 'pending' OR v_case_events <> 3 THEN
+  IF v_status <> 'dead_letter' OR v_original_state <> 'PREPARED' OR v_replacement_state <> 'PENDING' OR v_outbox_status <> 'delivered' OR v_case_events <> 5 THEN
     RAISE EXCEPTION 'remediation state mismatch: old=% original=% replacement=% outbox=% events=%',v_status,v_original_state,v_replacement_state,v_outbox_status,v_case_events;
   END IF;
   BEGIN
@@ -156,4 +218,7 @@ printf '%s\n' 'original_dead_letter_immutable=PASS'
 printf '%s\n' 'replacement_intent_created_without_replaying_original=PASS'
 printf '%s\n' 'append_only_case_evidence=PASS'
 printf '%s\n' 'runtime_direct_table_read_denied=PASS'
+printf '%s\n' 'head_resolution_request_and_independent_approval=PASS'
+printf '%s\n' 'approved_replacement_logically_occupies_original_head=PASS'
+printf '%s\n' 'ordinary_successor_blocked_until_replacement_delivered=PASS'
 printf '%s\n' 'financial_dead_letter_remediation_validation=PASS'

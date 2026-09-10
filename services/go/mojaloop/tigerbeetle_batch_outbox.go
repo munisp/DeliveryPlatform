@@ -73,6 +73,7 @@ func (s *MojaloopService) claimTigerBeetleTransferBatch(workerID string, limit i
 				  AND earlier.ledger_debit_fsp = candidate.ledger_debit_fsp
 				  AND earlier.id < candidate.id
 				  AND earlier.status <> 'delivered'
+				  AND public.mojaloop_dead_letter_predecessor_blocks(earlier.id, candidate.id)
 			  )
 			ORDER BY candidate.id
 			FOR UPDATE SKIP LOCKED

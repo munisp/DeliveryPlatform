@@ -75,13 +75,17 @@ import {
   getFinancialAdminAlerts,
   getFinancialDatabaseEvidence,
   getFinancialAdminSettings,
+  getFinancialDeadLetterHeadResolution,
   listFinancialAlertDeliveryReceipts,
   listFinancialDeadLetterCases,
   listFinancialDependencyHealthHistory,
   openFinancialDeadLetterCase,
+  approveFinancialDeadLetterHeadResolution,
   approveFinancialDeadLetterRemediation,
   recordFinancialAdminAlertAction,
+  rejectFinancialDeadLetterHeadResolution,
   rejectFinancialDeadLetterRemediation,
+  requestFinancialDeadLetterHeadResolution,
   requestFinancialDeadLetterRemediation,
   recordFinancialAlertDeliveryReceipt,
   recordFinancialDependencyHealth,
@@ -2346,6 +2350,178 @@ app.post(
       res
         .status(409)
         .json({ error: "financial_dead_letter_independent_approval_required" });
+    }
+  },
+);
+
+app.get(
+  "/api/admin/finance/dead-letter-cases/:caseId/head-resolution",
+  rateLimit(10),
+  async (req, res) => {
+    const user = requireFinancialAdministrator(req, res);
+    if (!user) return;
+    const caseId = `${req.params.caseId ?? ""}`.trim();
+    if (!/^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(caseId)) {
+      res.status(400).json({ error: "invalid_dead_letter_case_id" });
+      return;
+    }
+    try {
+      const resolution = await getFinancialDeadLetterHeadResolution({
+        actorId: Number(user.id),
+        caseId,
+      });
+      if (!resolution) {
+        res.status(404).json({ error: "financial_dead_letter_head_resolution_not_found" });
+        return;
+      }
+      res.status(200).json({ resolution, retrievedAt: new Date().toISOString() });
+    } catch (error) {
+      console.error("[SwitchOS] Unable to get financial dead-letter head resolution", error);
+      res.status(503).json({ error: "financial_dead_letter_head_resolution_unavailable" });
+    }
+  },
+);
+
+app.post(
+  "/api/admin/finance/dead-letter-cases/:caseId/head-resolution-requests",
+  rateLimit(5),
+  async (req, res) => {
+    const user = requireFinancialAdministrator(req, res);
+    if (!user) return;
+    const caseId = `${req.params.caseId ?? ""}`.trim();
+    const resolutionDisposition = `${req.body?.resolutionDisposition ?? ""}`.trim();
+    const reason = `${req.body?.reason ?? ""}`.trim();
+    const reconciliationReference = `${req.body?.reconciliationReference ?? ""}`.trim();
+    const reconciliationDigestHex = `${req.body?.reconciliationDigestHex ?? ""}`.trim();
+    const idempotencyKey = `${req.body?.idempotencyKey ?? ""}`.trim();
+    if (
+      !/^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(caseId) ||
+      ![
+        "original_confirmed_committed_resolved",
+        "original_confirmed_not_committed_superseded",
+      ].includes(resolutionDisposition) ||
+      reason.length < 3 ||
+      reason.length > 1000 ||
+      !/^[A-Za-z0-9][A-Za-z0-9._:/.-]{2,199}$/.test(reconciliationReference) ||
+      !/^[a-f0-9]{64}$/.test(reconciliationDigestHex) ||
+      !/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/.test(idempotencyKey)
+    ) {
+      res.status(400).json({ error: "invalid_dead_letter_head_resolution_request" });
+      return;
+    }
+    try {
+      const result = await requestFinancialDeadLetterHeadResolution({
+        actorId: Number(user.id),
+        caseId,
+        resolutionDisposition: resolutionDisposition as
+          | "original_confirmed_committed_resolved"
+          | "original_confirmed_not_committed_superseded",
+        reason,
+        reconciliationReference,
+        reconciliationDigestHex,
+        idempotencyKey,
+      });
+      await recordOperationalEvent({
+        eventType: "finance.dead_letter.head_resolution.requested",
+        actorId: `${user.id}`,
+        actorRole: user.role ?? null,
+        tenantId: user.tenantId ?? null,
+        route: req.path,
+        outcome: "success",
+        payload: { caseId, resolutionDisposition, resolutionId: result.resolutionId },
+      });
+      res.status(202).json(result);
+    } catch (error) {
+      console.error("[SwitchOS] Unable to request financial dead-letter head resolution", error);
+      res.status(409).json({ error: "financial_dead_letter_head_resolution_request_rejected" });
+    }
+  },
+);
+
+app.post(
+  "/api/admin/finance/dead-letter-cases/:caseId/head-resolution-approve",
+  rateLimit(5),
+  async (req, res) => {
+    const user = requireFinancialAdministrator(req, res);
+    if (!user) return;
+    const caseId = `${req.params.caseId ?? ""}`.trim();
+    const reason = `${req.body?.reason ?? ""}`.trim();
+    const idempotencyKey = `${req.body?.idempotencyKey ?? ""}`.trim();
+    if (
+      !/^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(caseId) ||
+      reason.length < 3 ||
+      reason.length > 1000 ||
+      !/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/.test(idempotencyKey)
+    ) {
+      res.status(400).json({ error: "invalid_dead_letter_head_resolution_approval" });
+      return;
+    }
+    try {
+      const result = await approveFinancialDeadLetterHeadResolution({
+        actorId: Number(user.id),
+        caseId,
+        reason,
+        idempotencyKey,
+      });
+      await recordOperationalEvent({
+        eventType: "finance.dead_letter.head_resolution.approved",
+        actorId: `${user.id}`,
+        actorRole: user.role ?? null,
+        tenantId: user.tenantId ?? null,
+        route: req.path,
+        outcome: "success",
+        payload: {
+          caseId,
+          resolutionId: result.resolutionId,
+          resolutionDisposition: result.resolutionDisposition,
+        },
+      });
+      res.status(201).json(result);
+    } catch (error) {
+      console.error("[SwitchOS] Unable to approve financial dead-letter head resolution", error);
+      res.status(409).json({ error: "financial_dead_letter_head_resolution_independent_approval_required" });
+    }
+  },
+);
+
+app.post(
+  "/api/admin/finance/dead-letter-cases/:caseId/head-resolution-reject",
+  rateLimit(5),
+  async (req, res) => {
+    const user = requireFinancialAdministrator(req, res);
+    if (!user) return;
+    const caseId = `${req.params.caseId ?? ""}`.trim();
+    const reason = `${req.body?.reason ?? ""}`.trim();
+    const idempotencyKey = `${req.body?.idempotencyKey ?? ""}`.trim();
+    if (
+      !/^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(caseId) ||
+      reason.length < 3 ||
+      reason.length > 1000 ||
+      !/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/.test(idempotencyKey)
+    ) {
+      res.status(400).json({ error: "invalid_dead_letter_head_resolution_rejection" });
+      return;
+    }
+    try {
+      const result = await rejectFinancialDeadLetterHeadResolution({
+        actorId: Number(user.id),
+        caseId,
+        reason,
+        idempotencyKey,
+      });
+      await recordOperationalEvent({
+        eventType: "finance.dead_letter.head_resolution.rejected",
+        actorId: `${user.id}`,
+        actorRole: user.role ?? null,
+        tenantId: user.tenantId ?? null,
+        route: req.path,
+        outcome: "success",
+        payload: { caseId, resolutionId: result.resolutionId },
+      });
+      res.status(200).json(result);
+    } catch (error) {
+      console.error("[SwitchOS] Unable to reject financial dead-letter head resolution", error);
+      res.status(409).json({ error: "financial_dead_letter_head_resolution_rejection_rejected" });
     }
   },
 );
