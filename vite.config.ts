@@ -16,10 +16,14 @@ export default defineConfig({
     react(),
     viteStaticCopy({
       targets: [
-        { src: "node_modules/cesium/Build/Cesium/Assets", dest: "cesium" },
-        { src: "node_modules/cesium/Build/Cesium/ThirdParty", dest: "cesium" },
-        { src: "node_modules/cesium/Build/Cesium/Workers", dest: "cesium" },
-        { src: "node_modules/cesium/Build/Cesium/Widgets", dest: "cesium" },
+        // The optional Cesium fleet globe is terrain-free and disables sky,
+        // atmosphere, moon, sun, water, widgets, Ion, 3D Tiles, and decoders.
+        // Preserve only the flat worker files its WebGL engine resolves from
+        // CESIUM_BASE_URL; no multi-megabyte texture catalog is deployed.
+        {
+          src: "node_modules/@cesium/engine/Source/Workers/*",
+          dest: "cesium/Workers",
+        },
       ],
     }),
   ],
@@ -48,7 +52,6 @@ export default defineConfig({
       output: {
         manualChunks(id) {
           if (!id.includes("node_modules")) return;
-          if (id.includes("cesium") || id.includes("@cesium")) return "vendor-cesium";
           if (id.includes("maplibre-gl") || id.includes("@mapbox") || id.includes("geojson"))
             return "vendor-map";
           if (id.includes("recharts") || id.includes("d3-"))

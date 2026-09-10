@@ -66,7 +66,7 @@ describe("Driver Mobility durable vehicle map", () => {
     expect(vite).toContain("react(),");
     expect(vite).toContain("viteStaticCopy(");
     expect(vite).toContain('return "vendor-map"');
-    expect(vite).toContain('return "vendor-cesium"');
+    expect(vite).not.toContain('return "vendor-cesium-engine"');
     expect(vite).toContain("chunkSizeWarningLimit: 500");
     expect(css).toContain('@import "tailwindcss";');
     expect(css).toContain(".vehicle-map-popup");

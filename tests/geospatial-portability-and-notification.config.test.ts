@@ -21,8 +21,13 @@ describe("geospatial portability and event-driven tracking contracts", () => {
     expect(wrapper).toContain('lazy(() => import("@/components/CesiumFleetGlobe"))');
     expect(wrapper).toContain("downloadAuthorizedGeoJson");
     expect(wrapper).toContain("VITE_GEOLIBRE_WORKSPACE_URL");
-    expect(vite).toContain('return "vendor-cesium"');
-    expect(vite).toContain("node_modules/cesium/Build/Cesium/Workers");
+    const globe = read("client/src/components/CesiumFleetGlobe.tsx");
+    expect(vite).not.toContain('return "vendor-cesium-engine"');
+    expect(vite).toContain("node_modules/@cesium/engine/Source/Workers/*");
+    expect(vite).not.toContain("node_modules/cesium/Build/Cesium");
+    expect(globe).toContain("@cesium/engine/Source/Widget/CesiumWidget.js");
+    expect(globe).not.toContain('from "cesium"');
+    expect(globe).not.toContain("createOsmBuildingsAsync");
   });
 
   it("uses a cursor-only PostgreSQL wake-up and retains bounded resynchronization", () => {
