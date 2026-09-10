@@ -44,10 +44,14 @@ services:
     volumes:
       - ../../drizzle/0006_mojaloop_exact_money_and_outbox.sql:/migrations/0006.sql:ro
       - ../../drizzle/0007_mojaloop_schema_contract.sql:/migrations/0007.sql:ro
+      - ../../drizzle/0055_tigerbeetle_batch_outbox.sql:/migrations/0055.sql:ro
+      - ../../drizzle/0070_financial_partitioned_tigerbeetle_dispatch.sql:/migrations/0070.sql:ro
     entrypoint: ["/bin/sh", "-ec"]
     command: >-
       psql -v ON_ERROR_STOP=1 -f /migrations/0006.sql
       && psql -v ON_ERROR_STOP=1 -f /migrations/0007.sql
+      && psql -v ON_ERROR_STOP=1 -f /migrations/0055.sql
+      && psql -v ON_ERROR_STOP=1 -f /migrations/0070.sql
     restart: "no"
 
   tigerbeetle-0:

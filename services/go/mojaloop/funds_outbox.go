@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"time"
 )
 
 const (
@@ -514,20 +513,8 @@ func (s *MojaloopService) markFundsOutboxDelivered(id int64) error {
 	return nil
 }
 
+// RunFundsOutboxDispatcher retains the public worker entrypoint while routing
+// production callers through the bounded, partition-aware implementation.
 func (s *MojaloopService) RunFundsOutboxDispatcher(ctx context.Context, workerID string) error {
-	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
-	for {
-		if _, err := s.DispatchTigerBeetleTransferBatch(workerID, defaultTigerBeetleDispatchBatch); err != nil {
-			return err
-		}
-		if _, err := s.DispatchFundsOutbox(ctx, workerID, defaultOutboxBatchSize); err != nil {
-			return err
-		}
-		select {
-		case <-ctx.Done():
-			return nil
-		case <-ticker.C:
-		}
-	}
+	return s.RunPartitionAwareFundsOutboxDispatcher(ctx, workerID)
 }

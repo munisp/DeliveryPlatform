@@ -127,6 +127,10 @@ func NewMojaloopService(tigerBeetle TigerBeetleLedger) (*MojaloopService, error)
 	if err != nil {
 		return nil, fmt.Errorf("open mojaloop database: %w", err)
 	}
+	if err := configureFinancialDatabasePool(db); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("configure Mojaloop database pool: %w", err)
+	}
 	if err := db.Ping(); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("ping mojaloop database: %w", err)
@@ -147,18 +151,18 @@ func NewMojaloopService(tigerBeetle TigerBeetleLedger) (*MojaloopService, error)
 	return service, nil
 }
 
-const mojaloopFundsSchemaContractVersion = 8
+const mojaloopFundsSchemaContractVersion = 9
 
 func (s *MojaloopService) verifyPersistenceContract() error {
 	var version int
 	if err := s.db.QueryRow(`SELECT version FROM platform_schema_contracts WHERE component = 'mojaloop_funds'`).Scan(&version); err != nil {
 		if err == sql.ErrNoRows {
-			return fmt.Errorf("Mojaloop funds schema contract is missing; apply migration 0007_mojaloop_schema_contract.sql before starting the service")
+			return fmt.Errorf("Mojaloop funds schema contract is missing; apply the reviewed Mojaloop financial migrations before starting the service")
 		}
 		return fmt.Errorf("read Mojaloop funds schema contract: %w", err)
 	}
 	if version < mojaloopFundsSchemaContractVersion {
-		return fmt.Errorf("Mojaloop funds schema contract version %d is obsolete; apply migration 0007_mojaloop_schema_contract.sql", version)
+		return fmt.Errorf("Mojaloop funds schema contract version %d is obsolete; apply the reviewed Mojaloop financial migrations before starting the service", version)
 	}
 
 	requiredColumns := [][2]string{
@@ -796,6 +800,13 @@ func (s *MojaloopService) updateTransferState(transferID, state string) error {
 }
 
 func (s *MojaloopService) buildReconciliationReport(transferID string) (ReconciliationReport, error) {
+	return s.buildReconciliationReportWithLedger(s.tigerBeetle, transferID)
+}
+
+func (s *MojaloopService) buildReconciliationReportWithLedger(ledgerClient TigerBeetleLedger, transferID string) (ReconciliationReport, error) {
+	if ledgerClient == nil {
+		return ReconciliationReport{}, fmt.Errorf("TigerBeetle ledger client is required for reconciliation")
+	}
 	transfer, ok := s.getTransfer(transferID)
 	if !ok {
 		return ReconciliationReport{}, fmt.Errorf("transfer not found")
@@ -820,7 +831,7 @@ func (s *MojaloopService) buildReconciliationReport(transferID string) (Reconcil
 		platformNetSettled = transfer.AmountMinor - platformRefunded
 	}
 
-	reconciliation, err := s.tigerBeetle.GetTransferReconciliation(transferID)
+	reconciliation, err := ledgerClient.GetTransferReconciliation(transferID)
 	if err != nil {
 		return ReconciliationReport{}, err
 	}

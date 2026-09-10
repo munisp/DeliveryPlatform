@@ -159,7 +159,11 @@ func tigerBeetleBatchRequest(record claimedTigerBeetleOutboxRecord) (TigerBeetle
 }
 
 func (s *MojaloopService) verifyTigerBeetleTransferReconciliation(transferID string) (ReconciliationReport, error) {
-	report, err := s.buildReconciliationReport(transferID)
+	return s.verifyTigerBeetleTransferReconciliationWithLedger(s.tigerBeetle, transferID)
+}
+
+func (s *MojaloopService) verifyTigerBeetleTransferReconciliationWithLedger(ledger TigerBeetleLedger, transferID string) (ReconciliationReport, error) {
+	report, err := s.buildReconciliationReportWithLedger(ledger, transferID)
 	if err != nil {
 		return ReconciliationReport{}, fmt.Errorf("build TigerBeetle reconciliation: %w", err)
 	}
@@ -170,10 +174,14 @@ func (s *MojaloopService) verifyTigerBeetleTransferReconciliation(transferID str
 }
 
 func (s *MojaloopService) finalizeTigerBeetleBatchRecord(record claimedTigerBeetleOutboxRecord) error {
+	return s.finalizeTigerBeetleBatchRecordWithLedger(record, s.tigerBeetle)
+}
+
+func (s *MojaloopService) finalizeTigerBeetleBatchRecordWithLedger(record claimedTigerBeetleOutboxRecord, ledger TigerBeetleLedger) error {
 	// Reconcile before committing the platform state. The report is recomputed
 	// after any retry so an ambiguous network result cannot become final solely
 	// because the batch call returned.
-	report, err := s.verifyTigerBeetleTransferReconciliation(record.WorkflowID)
+	report, err := s.verifyTigerBeetleTransferReconciliationWithLedger(ledger, record.WorkflowID)
 	if err != nil {
 		return err
 	}
@@ -331,6 +339,13 @@ func (s *MojaloopService) retryOrDeadLetterTigerBeetleBatchRecord(record claimed
 }
 
 func (s *MojaloopService) DispatchTigerBeetleTransferBatch(workerID string, limit int) (int, error) {
+	return s.dispatchTigerBeetleTransferBatchWithLedger(workerID, limit, s.tigerBeetle)
+}
+
+func (s *MojaloopService) dispatchTigerBeetleTransferBatchWithLedger(workerID string, limit int, ledger TigerBeetleLedger) (int, error) {
+	if ledger == nil {
+		return 0, fmt.Errorf("TigerBeetle ledger client is required")
+	}
 	claimed, err := s.claimTigerBeetleTransferBatch(workerID, limit)
 	if err != nil || len(claimed) == 0 {
 		return len(claimed), err
@@ -353,7 +368,7 @@ func (s *MojaloopService) DispatchTigerBeetleTransferBatch(workerID string, limi
 		return len(claimed), nil
 	}
 
-	outcomes, submitErr := s.tigerBeetle.ProcessMojaloopTransferBatch(requests)
+	outcomes, submitErr := ledger.ProcessMojaloopTransferBatch(requests)
 	if submitErr != nil {
 		for _, record := range valid {
 			if retryErr := s.retryOrDeadLetterTigerBeetleBatchRecord(record, submitErr); retryErr != nil {
@@ -388,7 +403,7 @@ func (s *MojaloopService) DispatchTigerBeetleTransferBatch(workerID string, limi
 			}
 			continue
 		}
-		if err := s.finalizeTigerBeetleBatchRecord(record); err != nil {
+		if err := s.finalizeTigerBeetleBatchRecordWithLedger(record, ledger); err != nil {
 			if retryErr := s.retryOrDeadLetterTigerBeetleBatchRecord(record, err); retryErr != nil {
 				return len(claimed), retryErr
 			}
