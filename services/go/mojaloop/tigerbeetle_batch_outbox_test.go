@@ -10,10 +10,11 @@ import (
 )
 
 type simulatedTigerBeetleLedger struct {
-	mu           sync.Mutex
-	batches      [][]TigerBeetleTransferRequest
-	outcomeError map[string]error
-	seen         map[string]int
+	mu              sync.Mutex
+	batches         [][]TigerBeetleTransferRequest
+	outcomeError    map[string]error
+	seen            map[string]int
+	reconciliations map[string]TransferReconciliation
 }
 
 func (s *simulatedTigerBeetleLedger) CreatePayerAccount(string) error { return nil }
@@ -37,6 +38,9 @@ func (s *simulatedTigerBeetleLedger) ProcessMojaloopTransferBatch(requests []Tig
 	return outcomes, nil
 }
 func (s *simulatedTigerBeetleLedger) GetTransferReconciliation(transferID string) (TransferReconciliation, error) {
+	if reconciliation, ok := s.reconciliations[transferID]; ok {
+		return reconciliation, nil
+	}
 	return TransferReconciliation{
 		TransferID:       transferID,
 		TransferExists:   true,

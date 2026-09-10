@@ -77,8 +77,11 @@ func TestFundsOutboxAtomicPersistenceAndRecovery(t *testing.T) {
 	if err := db.QueryRow(`SELECT id FROM mojaloop_funds_outbox WHERE workflow_id = $1 AND destination = 'tigerbeetle'`, event.WorkflowID).Scan(&tigerBeetleID); err != nil {
 		t.Fatalf("read batch-reserved TigerBeetle record: %v", err)
 	}
-	if err := service.markFundsOutboxDelivered(tigerBeetleID); err != nil {
-		t.Fatalf("simulate completed ledger batch before downstream delivery: %v", err)
+	if _, err := db.Exec(`UPDATE mojaloop_funds_outbox
+		SET status = 'delivered', delivered_at = NOW(), locked_at = NULL, locked_by = NULL,
+			claim_token = NULL, claim_expires_at = NULL, last_error = NULL, updated_at = NOW()
+		WHERE id = $1`, tigerBeetleID); err != nil {
+		t.Fatalf("simulate completed batch ledger record before downstream delivery: %v", err)
 	}
 	nextRecord, found, err := service.claimFundsOutboxRecord("outbox-test-worker")
 	if err != nil || !found {
@@ -87,7 +90,7 @@ func TestFundsOutboxAtomicPersistenceAndRecovery(t *testing.T) {
 	if nextRecord.Destination != "kafka" && nextRecord.Destination != "temporal" {
 		t.Fatalf("expected a downstream broker intent after ledger delivery, got %q", nextRecord.Destination)
 	}
-	if err := service.retryFundsOutboxRecord(nextRecord.ID, assertableOutboxError{}); err != nil {
+	if err := service.retryFundsOutboxRecord(nextRecord, assertableOutboxError{}); err != nil {
 		t.Fatalf("record downstream durable retry state: %v", err)
 	}
 	if _, err := db.Exec(`UPDATE mojaloop_funds_outbox SET next_attempt_at = NOW() WHERE id = $1`, nextRecord.ID); err != nil {
@@ -97,8 +100,128 @@ func TestFundsOutboxAtomicPersistenceAndRecovery(t *testing.T) {
 	if err != nil || !found || retryRecord.ID != nextRecord.ID {
 		t.Fatalf("reclaim downstream retry record: record=%+v found=%v err=%v", retryRecord, found, err)
 	}
-	if err := service.markFundsOutboxDelivered(retryRecord.ID); err != nil {
+	if err := service.markFundsOutboxDelivered(retryRecord); err != nil {
 		t.Fatalf("record downstream delivered state: %v", err)
+	}
+}
+
+func TestGenericOutboxClaimsRejectStaleCompletionAndRetry(t *testing.T) {
+	db := batchTestDatabase(t)
+	if _, err := db.Exec(`INSERT INTO mojaloop_funds_outbox (
+		event_id, destination, idempotency_key, workflow_id, workflow_type,
+		resource_id, step, workflow_status, payload, dispatch_order, status,
+		next_attempt_at, created_at, updated_at
+	) VALUES (
+		'generic-fence-event', 'kafka', 'generic-fence-key', 'generic-fence-workflow', 'quote',
+		'generic-fence-resource', 'quoted', 'PENDING', '{}'::jsonb, 20, 'pending', NOW(), NOW(), NOW()
+	)`); err != nil {
+		t.Fatalf("seed generic outbox record: %v", err)
+	}
+	service := &MojaloopService{db: db}
+	first, found, err := service.claimFundsOutboxRecord("generic-worker-a")
+	if err != nil || !found || first.ClaimToken == "" {
+		t.Fatalf("claim generic outbox record: record=%+v found=%v err=%v", first, found, err)
+	}
+	if _, err := db.Exec(`UPDATE mojaloop_funds_outbox SET claim_expires_at = NOW() - INTERVAL '1 second' WHERE id = $1`, first.ID); err != nil {
+		t.Fatalf("expire first generic claim: %v", err)
+	}
+	second, found, err := service.claimFundsOutboxRecord("generic-worker-b")
+	if err != nil || !found || second.ClaimToken == "" || second.ClaimToken == first.ClaimToken {
+		t.Fatalf("reclaim expired generic outbox record: first=%+v second=%+v found=%v err=%v", first, second, found, err)
+	}
+	if err := service.markFundsOutboxDelivered(first); err == nil || !strings.Contains(err.Error(), "stale funds outbox claim") {
+		t.Fatalf("expected stale worker completion rejection, got %v", err)
+	}
+	if err := service.retryFundsOutboxRecord(first, assertableOutboxError{}); err == nil || !strings.Contains(err.Error(), "stale funds outbox retry") {
+		t.Fatalf("expected stale worker retry rejection, got %v", err)
+	}
+	if err := service.markFundsOutboxDelivered(second); err != nil {
+		t.Fatalf("complete current generic claim: %v", err)
+	}
+	var status string
+	if err := db.QueryRow(`SELECT status FROM mojaloop_funds_outbox WHERE id = $1`, second.ID).Scan(&status); err != nil {
+		t.Fatalf("read generic outbox terminal state: %v", err)
+	}
+	if status != "delivered" {
+		t.Fatalf("expected delivered generic outbox record, got %q", status)
+	}
+}
+
+func TestTigerBeetleRefundFinalizationRejectsExpiredClaim(t *testing.T) {
+	db := batchTestDatabase(t)
+	const transferID = "fenced-refund-transfer"
+	const refundID = "fenced-refund"
+	if _, err := db.Exec(`INSERT INTO mojaloop_transfers (
+		transfer_id, payer_fsp, payee_fsp, amount, amount_minor, currency,
+		ilp_packet, condition, expiration, state, created_at, updated_at
+	) VALUES ($1, 'payer', 'payee', 10.00, 1000, 'EUR', 'packet', 'condition', NOW() + INTERVAL '1 hour', 'SETTLED', NOW(), NOW())`, transferID); err != nil {
+		t.Fatalf("seed fenced refund transfer: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO mojaloop_refunds (
+		refund_id, original_transfer_id, payer_fsp, payee_fsp, amount, amount_minor,
+		currency, reason, state, created_at, updated_at
+	) VALUES ($1, $2, 'payer', 'payee', 7.00, 700, 'EUR', 'test', 'PENDING_LEDGER', NOW(), NOW())`, refundID, transferID); err != nil {
+		t.Fatalf("seed pending fenced refund: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO mojaloop_funds_outbox (
+		event_id, destination, idempotency_key, workflow_id, workflow_type, resource_id,
+		step, workflow_status, payload, ledger_debit_fsp, dispatch_order, status,
+		next_attempt_at, created_at, updated_at
+	) VALUES (
+		'fenced-refund-event', 'tigerbeetle', 'fenced-refund-key', $1, 'refund', $2,
+		'queued', 'PENDING_LEDGER', '{"payerFsp":"payer","payeeFsp":"payee","amountMinor":700,"currency":"EUR"}'::jsonb,
+		'payee', 10, 'pending', NOW(), NOW(), NOW()
+	)`, refundID, transferID); err != nil {
+		t.Fatalf("seed fenced refund outbox: %v", err)
+	}
+	ledger := &simulatedTigerBeetleLedger{
+		outcomeError: map[string]error{},
+		seen:         map[string]int{},
+		reconciliations: map[string]TransferReconciliation{
+			transferID: {
+				TransferID:       transferID,
+				TransferExists:   true,
+				TransferAmount:   1000,
+				RefundedAmount:   700,
+				NetSettledAmount: 300,
+				LedgerConsistent: true,
+			},
+		},
+	}
+	service := &MojaloopService{db: db, tigerBeetle: ledger}
+	first, found, err := service.claimFundsOutboxRecord("refund-worker-a")
+	if err != nil || !found || first.ClaimToken == "" {
+		t.Fatalf("claim fenced refund outbox: record=%+v found=%v err=%v", first, found, err)
+	}
+	if _, err := db.Exec(`UPDATE mojaloop_funds_outbox SET claim_expires_at = NOW() - INTERVAL '1 second' WHERE id = $1`, first.ID); err != nil {
+		t.Fatalf("expire fenced refund claim: %v", err)
+	}
+	if err := service.finalizeTigerBeetleDispatch(first); err == nil || !strings.Contains(err.Error(), "stale funds outbox claim") {
+		t.Fatalf("expected stale refund finalization rejection, got %v", err)
+	}
+	var refundState string
+	if err := db.QueryRow(`SELECT state FROM mojaloop_refunds WHERE refund_id = $1`, refundID).Scan(&refundState); err != nil {
+		t.Fatalf("read stale refund state: %v", err)
+	}
+	if refundState != "PENDING_LEDGER" {
+		t.Fatalf("stale refund worker changed local refund state to %q", refundState)
+	}
+	second, found, err := service.claimFundsOutboxRecord("refund-worker-b")
+	if err != nil || !found || second.ClaimToken == "" || second.ClaimToken == first.ClaimToken {
+		t.Fatalf("reclaim fenced refund outbox: first=%+v second=%+v found=%v err=%v", first, second, found, err)
+	}
+	if err := service.finalizeTigerBeetleDispatch(second); err != nil {
+		t.Fatalf("finalize current refund claim: %v", err)
+	}
+	var outboxStatus string
+	if err := db.QueryRow(`SELECT state FROM mojaloop_refunds WHERE refund_id = $1`, refundID).Scan(&refundState); err != nil {
+		t.Fatalf("read completed refund state: %v", err)
+	}
+	if err := db.QueryRow(`SELECT status FROM mojaloop_funds_outbox WHERE id = $1`, second.ID).Scan(&outboxStatus); err != nil {
+		t.Fatalf("read completed refund outbox status: %v", err)
+	}
+	if refundState != "COMPLETED" || outboxStatus != "delivered" {
+		t.Fatalf("current refund claim did not complete atomically: refund=%q outbox=%q", refundState, outboxStatus)
 	}
 }
 
