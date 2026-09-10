@@ -225,6 +225,66 @@ func TestTigerBeetleRefundFinalizationRejectsExpiredClaim(t *testing.T) {
 	}
 }
 
+func TestGenericOutboxLeaseTimestampFaultsRemainFailClosed(t *testing.T) {
+	db := batchTestDatabase(t)
+	service := &MojaloopService{db: db}
+	seed := func(eventID, workflowID string, dispatchOrder int) int64 {
+		t.Helper()
+		var id int64
+		if err := db.QueryRow(`INSERT INTO mojaloop_funds_outbox (
+			event_id, destination, idempotency_key, workflow_id, workflow_type,
+			resource_id, step, workflow_status, payload, dispatch_order, status,
+			next_attempt_at, created_at, updated_at
+		) VALUES (
+			$1, 'kafka', $1 || '-key', $2, 'quote', $1 || '-resource',
+			'quoted', 'PENDING', '{}'::jsonb, $3, 'pending', NOW(), NOW(), NOW()
+		) RETURNING id`, eventID, workflowID, dispatchOrder).Scan(&id); err != nil {
+			t.Fatalf("seed time-fault outbox record %q: %v", eventID, err)
+		}
+		return id
+	}
+
+	// Simulated forward-clock outcome: an expiration timestamp appears far in the
+	// past to the database authority. A new worker may reclaim, while the prior
+	// claim token remains unable to complete the row.
+	forwardID := seed("clock-forward-event", "clock-forward-workflow", 10)
+	first, found, err := service.claimFundsOutboxRecord("clock-forward-worker-a")
+	if err != nil || !found || first.ID != forwardID || first.ClaimToken == "" {
+		t.Fatalf("claim forward-fault record: record=%+v found=%v err=%v", first, found, err)
+	}
+	if _, err := db.Exec(`UPDATE mojaloop_funds_outbox SET claim_expires_at = NOW() - INTERVAL '5 minutes' WHERE id = $1`, forwardID); err != nil {
+		t.Fatalf("simulate forward-clock expired timestamp: %v", err)
+	}
+	second, found, err := service.claimFundsOutboxRecord("clock-forward-worker-b")
+	if err != nil || !found || second.ID != forwardID || second.ClaimToken == first.ClaimToken {
+		t.Fatalf("reclaim forward-fault record: first=%+v second=%+v found=%v err=%v", first, second, found, err)
+	}
+	if err := service.markFundsOutboxDelivered(first); err == nil || !strings.Contains(err.Error(), "stale funds outbox claim") {
+		t.Fatalf("forward time-fault allowed stale completion: %v", err)
+	}
+	if err := service.markFundsOutboxDelivered(second); err != nil {
+		t.Fatalf("complete current forward-fault claim: %v", err)
+	}
+
+	// Simulated backward-clock outcome: an existing lease appears farther in the
+	// future. The authority must fail closed by withholding the row from another
+	// worker rather than allowing a concurrent reclaim.
+	backwardID := seed("clock-backward-event", "clock-backward-workflow", 20)
+	active, found, err := service.claimFundsOutboxRecord("clock-backward-worker-a")
+	if err != nil || !found || active.ID != backwardID || active.ClaimToken == "" {
+		t.Fatalf("claim backward-fault record: record=%+v found=%v err=%v", active, found, err)
+	}
+	if _, err := db.Exec(`UPDATE mojaloop_funds_outbox SET claim_expires_at = NOW() + INTERVAL '5 minutes' WHERE id = $1`, backwardID); err != nil {
+		t.Fatalf("simulate backward-clock future timestamp: %v", err)
+	}
+	if contender, found, err := service.claimFundsOutboxRecord("clock-backward-worker-b"); err != nil || found || contender.ID != 0 {
+		t.Fatalf("backward time-fault allowed concurrent reclaim: record=%+v found=%v err=%v", contender, found, err)
+	}
+	if err := service.markFundsOutboxDelivered(active); err != nil {
+		t.Fatalf("complete active backward-fault claim: %v", err)
+	}
+}
+
 type assertableOutboxError struct{}
 
 func (assertableOutboxError) Error() string { return "simulated broker acknowledgment failure" }
