@@ -303,6 +303,11 @@ def evaluate_offline_policy(
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Evaluate a non-authoritative offline operational policy from logged JSONL decisions")
     parser.add_argument("--input", required=True, type=pathlib.Path, help="immutable logged-decision JSONL file")
+    parser.add_argument(
+        "--provenance-manifest",
+        type=pathlib.Path,
+        help="required sidecar manifest when --input is a real historical dispatch export",
+    )
     parser.add_argument("--action-priority", required=True, help="comma-separated candidate-action priority; never an execution command")
     parser.add_argument("--minimum-records", type=int, default=1000)
     parser.add_argument("--minimum-uplift", type=float, default=0.01)
@@ -311,8 +316,16 @@ def main(argv: list[str] | None = None) -> int:
     arguments = parser.parse_args(argv)
     try:
         priority = tuple(part.strip() for part in arguments.action_priority.split(",") if part.strip())
+        if arguments.provenance_manifest:
+            try:
+                from .real_dispatch_export_parser import load_real_dispatch_export
+            except ImportError:  # Direct script execution from this directory.
+                from real_dispatch_export_parser import load_real_dispatch_export
+            records = load_real_dispatch_export(arguments.input, arguments.provenance_manifest).records
+        else:
+            records = load_records(arguments.input)
         result = evaluate_offline_policy(
-            load_records(arguments.input),
+            records,
             priority,
             minimum_records=arguments.minimum_records,
             minimum_uplift=arguments.minimum_uplift,

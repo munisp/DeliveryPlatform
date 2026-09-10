@@ -1,0 +1,116 @@
+name: switchos-local-ci
+
+x-source: &source
+  - ../../:/src:ro
+
+x-node-environment: &node-environment
+  CI: "true"
+  COREPACK_HOME: /tmp/corepack
+  PNPM_HOME: /tmp/pnpm
+
+services:
+  postgres:
+    image: postgis/postgis:16-3.5
+    environment:
+      POSTGRES_DB: local_ci
+      POSTGRES_USER: local_ci
+      POSTGRES_PASSWORD: ${LOCAL_CI_POSTGRES_PASSWORD:?LOCAL_CI_POSTGRES_PASSWORD must be set}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U local_ci -d local_ci"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+    tmpfs:
+      - /var/lib/postgresql/data:rw,noexec,nosuid,size=512m
+    restart: "no"
+
+  migrate-tracking:
+    image: postgis/postgis:16-3.5
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGDATABASE: local_ci
+      PGUSER: local_ci
+      PGPASSWORD: ${LOCAL_CI_POSTGRES_PASSWORD:?LOCAL_CI_POSTGRES_PASSWORD must be set}
+    volumes:
+      - ../../drizzle/0066_realtime_tracking_offline_sync_tenant_api.sql:/migrations/0066.sql:ro
+      - ../../drizzle/0068_role_scoped_tracking_snapshot.sql:/migrations/0068.sql:ro
+      - ../../drizzle/0069_realtime_tracking_delta_notifications.sql:/migrations/0069.sql:ro
+      - ../../tests/fixtures/role_scoped_tracking_snapshot_fixture.sql:/migrations/fixture.sql:ro
+    entrypoint: ["/bin/sh", "-ec"]
+    command: >-
+      psql -v ON_ERROR_STOP=1 -f /migrations/fixture.sql
+      && psql -v ON_ERROR_STOP=1 -f /migrations/0066.sql
+      && psql -v ON_ERROR_STOP=1 -f /migrations/0068.sql
+      && psql -v ON_ERROR_STOP=1 -f /migrations/0069.sql
+    restart: "no"
+
+  node-check:
+    image: node:22-bookworm
+    working_dir: /workspace
+    environment: *node-environment
+    volumes: *source
+    tmpfs:
+      - /workspace:rw,exec,nosuid,size=1024m
+      - /tmp:rw,exec,nosuid,size=512m
+    entrypoint: ["/bin/bash", "-ec"]
+    command: >-
+      tar --exclude=node_modules --exclude=coverage --exclude=dist -C /src -cf - . | tar -C /workspace -xf -
+      && corepack enable
+      && pnpm install --frozen-lockfile
+      && pnpm exec tsc --noEmit
+      && pnpm exec vitest run
+    restart: "no"
+
+  python-check:
+    image: python:3.12-slim
+    working_dir: /src
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+    volumes: *source
+    entrypoint: ["/bin/sh", "-ec"]
+    command: >-
+      python -m unittest
+      services/python/lakehouse/test_offline_rl_policy_evaluator.py
+      services/python/lakehouse/test_real_dispatch_export_parser.py
+      && python -m py_compile
+      services/python/lakehouse/offline_rl_policy_evaluator.py
+      services/python/lakehouse/real_dispatch_export_parser.py
+    restart: "no"
+
+  go-check:
+    image: golang:1.22-bookworm
+    working_dir: /workspace/services/go/mojaloop
+    volumes: *source
+    tmpfs:
+      - /workspace:rw,exec,nosuid,size=1024m
+      - /tmp:rw,exec,nosuid,size=512m
+    entrypoint: ["/bin/bash", "-ec"]
+    command: >-
+      tar --exclude=node_modules --exclude=coverage --exclude=dist -C /src -cf - . | tar -C /workspace -xf -
+      && go test ./...
+    restart: "no"
+
+  node-postgres-integration:
+    image: node:22-bookworm
+    working_dir: /workspace
+    depends_on:
+      migrate-tracking:
+        condition: service_completed_successfully
+    environment:
+      <<: *node-environment
+      DATABASE_URL: postgresql://local_ci:${LOCAL_CI_POSTGRES_PASSWORD:?LOCAL_CI_POSTGRES_PASSWORD must be set}@postgres:5432/local_ci?sslmode=disable
+    volumes: *source
+    tmpfs:
+      - /workspace:rw,exec,nosuid,size=1024m
+      - /tmp:rw,exec,nosuid,size=512m
+    entrypoint: ["/bin/bash", "-ec"]
+    command: >-
+      tar --exclude=node_modules --exclude=coverage --exclude=dist -C /src -cf - . | tar -C /workspace -xf -
+      && corepack enable
+      && pnpm install --frozen-lockfile
+      && pnpm exec vitest run tests/role-scoped-tracking-live.integration.test.ts
+    restart: "no"
