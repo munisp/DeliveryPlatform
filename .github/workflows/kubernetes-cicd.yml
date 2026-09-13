@@ -244,7 +244,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for service in intake-orchestrator lakehouse procurement-planner retail-forecast speech-runtime payment-webhook; do
+          for service in intake-orchestrator lakehouse procurement-planner retail-forecast speech-runtime payment-webhook compliance-review; do
             image_name="$service"
             if [ "$service" = "payment-webhook" ]; then
               image_name="ride-payment-webhook"
@@ -255,6 +255,16 @@ jobs:
               --tag "${IMAGE_PREFIX}-${image_name}:${IMAGE_TAG}" \
               services/python
           done
+      - name: Build and publish Medusa commerce core
+        uses: docker/build-push-action@v6
+        with:
+          context: services/medusa/commerce-core
+          file: services/medusa/commerce-core/Dockerfile
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ env.IMAGE_PREFIX }}-medusa:${{ env.IMAGE_TAG }}
+          provenance: mode=max
+          sbom: true
       - name: Build and publish Rust services and migration image
         shell: bash
         run: |

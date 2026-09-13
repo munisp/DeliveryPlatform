@@ -13,3 +13,4 @@ services/go/*/switchos-*
 __pycache__/
 .pytest_cache/
 .DS_Store
+.audit-static-report.txt

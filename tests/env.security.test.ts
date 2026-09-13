@@ -22,6 +22,7 @@ async function loadEnvironment(
 	permifyOverrides: Partial<Record<"endpoint" | "authToken", string>> = {},
 	lifecycleOverrides: Partial<Record<"publicOrigin" | "signupEnabled" | "notificationDispatcher", string>> = {},
 	opaOverrides: Partial<Record<"endpoint" | "authToken", string>> = {},
+	medusaOverrides: Partial<Record<"url" | "token", string>> = {},
 ) {
 	vi.resetModules();
 	for (const [key, value] of Object.entries(productionEnvironment)) {
@@ -35,6 +36,8 @@ async function loadEnvironment(
 	if (lifecycleOverrides.publicOrigin !== undefined) vi.stubEnv("PUBLIC_APP_ORIGIN", lifecycleOverrides.publicOrigin);
 	if (lifecycleOverrides.signupEnabled !== undefined) vi.stubEnv("ENABLE_SELF_SERVICE_SIGNUP", lifecycleOverrides.signupEnabled);
 	if (lifecycleOverrides.notificationDispatcher !== undefined) vi.stubEnv("NOTIFICATION_DISPATCHER_URL", lifecycleOverrides.notificationDispatcher);
+	if (medusaOverrides.url !== undefined) vi.stubEnv("MEDUSA_MERCHANT_API_URL", medusaOverrides.url);
+	if (medusaOverrides.token !== undefined) vi.stubEnv("MEDUSA_MERCHANT_API_TOKEN", medusaOverrides.token);
   return import("../server/_core/env");
 }
 
@@ -86,5 +89,26 @@ describe("production internal-service credential configuration", () => {
 		await expect(loadEnvironment("a-high-entropy-test-internal-token", {}, { signupEnabled: "true", notificationDispatcher: "" })).rejects.toThrow(
 			"NOTIFICATION_DISPATCHER_URL is required in production when self-service signup is enabled",
 		);
+	});
+
+	it("degrades explicitly instead of crashing when the Medusa merchant gateway is absent in production", async () => {
+		const { ENV } = await loadEnvironment("a-high-entropy-test-internal-token", {}, {}, {}, { url: "", token: "" });
+		expect(ENV.medusaMerchantConfigured).toBe(false);
+		expect(ENV.medusaMerchantApiUrl).toBe("");
+		expect(ENV.medusaMerchantApiToken).toBe("");
+	});
+
+	it("fails fast naming the missing variable on partial Medusa merchant configuration", async () => {
+		await expect(
+			loadEnvironment("a-high-entropy-test-internal-token", {}, {}, {}, { token: "" }),
+		).rejects.toThrow("MEDUSA_MERCHANT_API_TOKEN");
+		await expect(
+			loadEnvironment("a-high-entropy-test-internal-token", {}, {}, {}, { url: "" }),
+		).rejects.toThrow("MEDUSA_MERCHANT_API_URL");
+	});
+
+	it("reports the Medusa merchant gateway as configured when both variables are set", async () => {
+		const { ENV } = await loadEnvironment("a-high-entropy-test-internal-token");
+		expect(ENV.medusaMerchantConfigured).toBe(true);
 	});
 });

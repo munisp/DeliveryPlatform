@@ -11,6 +11,7 @@ data:
   KAFKA_INVENTORY_TOPIC: "inventory-events"
   KAFKA_LOCAL_COMMERCE_TOPIC: "local-commerce-events"
   KAFKA_NOTIFICATION_TOPIC: "notification-events"
+  KAFKA_FUNDS_TOPIC: "funds-events"
   FLUVIO_KAFKA_BROKERS: "fluvio.switchos.svc.cluster.local:9092"
   FLUVIO_INVENTORY_TOPIC: "inventory-events"
   FLUVIO_LOCAL_COMMERCE_TOPIC: "local-commerce-events"
@@ -34,6 +35,7 @@ data:
   TIGERBEETLE_CLUSTER_ID: "0"
   # Bounded worker concurrency: a separate TigerBeetle client session is used
   # per lane. Keep this below the reviewed cluster client-session budget.
+  FUNDS_OUTBOX_DESTINATIONS: "tigerbeetle,dapr,kafka"
   FUNDS_OUTBOX_TIGERBEETLE_LANES: "4"
   FUNDS_OUTBOX_TIGERBEETLE_BATCH_MIN: "64"
   FUNDS_OUTBOX_TIGERBEETLE_BATCH_MAX: "256"

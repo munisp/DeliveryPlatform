@@ -1382,7 +1382,7 @@ func main() {
 		if workerID == "" {
 			workerID = "mojaloop-outbox-" + time.Now().UTC().Format("20060102T150405.000000000Z")
 		}
-		if _, err := requiredFundsOutboxDestinations(); err != nil {
+		if err := validateFundsOutboxConfiguration(); err != nil {
 			log.Fatalf("Failed to configure funds outbox worker: %v", err)
 		}
 		mux := http.NewServeMux()

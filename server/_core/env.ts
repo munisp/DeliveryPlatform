@@ -129,6 +129,38 @@ function getRequiredServiceCredential(name: string) {
   return value;
 }
 
+// The Medusa merchant gateway is an optional dependency: merchant commerce
+// endpoints already fail closed with a domain error when it is unconfigured,
+// so boot must degrade explicitly (loud warning + health signal) instead of
+// crashing the whole app. A partially configured gateway is a misconfiguration
+// and fails fast naming every missing variable.
+function getMedusaMerchantConfig() {
+  const url = normalizeOptionalUrl("MEDUSA_MERCHANT_API_URL");
+  const token = process.env.MEDUSA_MERCHANT_API_TOKEN?.trim() ?? "";
+  const missing = [
+    ...(url ? [] : ["MEDUSA_MERCHANT_API_URL"]),
+    ...(token ? [] : ["MEDUSA_MERCHANT_API_TOKEN"]),
+  ];
+  if (missing.length === 0) {
+    return { url, token, configured: true };
+  }
+  if (url || token) {
+    throw new Error(
+      `Incomplete Medusa merchant gateway configuration; missing environment variables: ${missing.join(", ")}`,
+    );
+  }
+  if (process.env.NODE_ENV === "production") {
+    console.error(
+      "[SwitchOS] MEDUSA_MERCHANT_API_URL and MEDUSA_MERCHANT_API_TOKEN are not set; " +
+        "merchant commerce gateway is disabled (degraded mode). " +
+        "Merchant commerce endpoints will return medusa_merchant_gateway_unconfigured.",
+    );
+  }
+  return { url: "", token: "", configured: false };
+}
+
+const medusaMerchantConfig = getMedusaMerchantConfig();
+
 function parseBoolean(value: string | undefined, fallback: boolean) {
   if (value == null || value.trim() === "") return fallback;
   return value.trim().toLowerCase() === "true";
@@ -374,10 +406,9 @@ export const ENV = {
   ),
   developerWebhookSecretRefsJson:
     process.env.DEVELOPER_WEBHOOK_SECRET_REFS_JSON?.trim() ?? "",
-  medusaMerchantApiUrl: getRequiredOptionalUrl("MEDUSA_MERCHANT_API_URL"),
-  medusaMerchantApiToken: getRequiredServiceCredential(
-    "MEDUSA_MERCHANT_API_TOKEN",
-  ),
+  medusaMerchantApiUrl: medusaMerchantConfig.url,
+  medusaMerchantApiToken: medusaMerchantConfig.token,
+  medusaMerchantConfigured: medusaMerchantConfig.configured,
   externalCommerceIngressEnabled,
   externalCommerceWebhookSecretsJson,
   medusaEventIngressEnabled: parseBoolean(
