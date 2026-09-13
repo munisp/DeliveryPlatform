@@ -4,11 +4,7 @@ target/
 **/target/
 main
 services/go/mojaloop/mojaloop
-services/go/notification-dispatcher/switchos-notification-dispatcher
-services/go/vertical-provisioning/switchos-vertical-provisioning
-services/go/local-commerce-gateway/switchos-local-commerce-gateway
-services/go/ride-matching-worker/switchos-ride-matching-worker
-services/go/voice-gateway/switchos-longcat-voice-gateway
+services/go/*/switchos-*
 *.test
 .env
 .env.*
