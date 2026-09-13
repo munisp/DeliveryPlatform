@@ -248,7 +248,7 @@ function SettlementsTab() {
     return <ErrorState message={settlements.error.message} />;
 
   const rows = (settlements.data ?? []) as Array<Record<string, unknown>>;
-  const totals = rows.reduce(
+  const totals = rows.reduce<{ total: number; paid: number }>(
     (acc, row) => {
       acc.total += Number(row.total_amount ?? 0);
       if (row.status === "completed") acc.paid += Number(row.total_amount ?? 0);

@@ -31,14 +31,27 @@ describe("courier self-serve portal", () => {
     expect(router).not.toContain("publicProcedure");
     expect(router).not.toContain("workspaceReadProcedure");
     expect(router).not.toContain("protectedProcedure");
-    const procedureCount = (
-      router.match(/authenticatedProcedure/g) ?? []
-    ).length;
     // myDriverProfile, myIncentives, mySettlements, myPerformance,
     // myMarketplaceProfile, myVehicleOffers, myVehicleContracts,
     // myRentalAddOns, myRentalCharges, requestRental,
     // transitionRentalContract, myFairnessOffers, declineOffer
-    expect(procedureCount).toBe(13);
+    for (const name of [
+      "myDriverProfile",
+      "myIncentives",
+      "mySettlements",
+      "myPerformance",
+      "myMarketplaceProfile",
+      "myVehicleOffers",
+      "myVehicleContracts",
+      "myRentalAddOns",
+      "myRentalCharges",
+      "requestRental",
+      "transitionRentalContract",
+      "myFairnessOffers",
+      "declineOffer",
+    ]) {
+      expect(router).toContain(`${name}: authenticatedProcedure`);
+    }
     // every wrapper passes the caller's identity through
     expect(router).toContain("actorUserId: ctx.user.id");
     expect(router).toContain("workerUserId: ctx.user.id");
