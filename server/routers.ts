@@ -10,6 +10,9 @@ import {
   workspaceReadProcedure,
 } from "./_core/trpc";
 import { systemRouter } from "./_core/systemRouter";
+import { mobilityRouter } from "./_core/mobilityRouter";
+import { consolesRouter } from "./_core/consolesRouter";
+import { compliancePacksRouter } from "./_core/compliancePacksRouter";
 import {
   getDriverMobilityWorkspace,
   getMerchantChannelWorkspace,
@@ -136,6 +139,7 @@ import {
   rotateMerchantApiCredential,
   revokeMerchantApiCredential,
 } from "./_core/merchantCommerce";
+import { selfserveRouter } from "./_core/selfserveRouter";
 
 const listInput = z
   .object({ limit: z.number().min(1).max(25).optional() })
@@ -173,6 +177,10 @@ async function requireWorkspaceData<T>(
 
 export const appRouter = router({
   system: systemRouter,
+  compliancePacks: compliancePacksRouter,
+
+  mobility: mobilityRouter,
+  consoles: consolesRouter,
 
   auth: router({
     me: publicProcedure.query(({ ctx }) => ctx.user),
@@ -1877,6 +1885,8 @@ export const appRouter = router({
         }),
       ),
   }),
+
+  selfserve: selfserveRouter,
 });
 
 export type AppRouter = typeof appRouter;

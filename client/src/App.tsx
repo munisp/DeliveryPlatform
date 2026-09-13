@@ -6,6 +6,7 @@ import DashboardLayout from "@/components/DashboardLayout";
 import Analytics from "@/pages/Analytics";
 import DriverMobility from "@/pages/DriverMobility";
 import DriverOfferFairness from "@/pages/DriverOfferFairness";
+import CourierPortal from "@/pages/CourierPortal";
 import FieldServiceOperations from "@/pages/FieldServiceOperations";
 import DeveloperPlatform from "@/pages/DeveloperPlatform";
 import CommerceFulfillment from "@/pages/CommerceFulfillment";
@@ -14,12 +15,24 @@ import StakeholderVerification from "@/pages/StakeholderVerification";
 import LogisticsControlTower from "@/pages/LogisticsControlTower";
 import LogisticsOperations from "@/pages/LogisticsOperations";
 import ComplianceReview from "@/pages/ComplianceReview";
+import VerticalCompliance from "@/pages/VerticalCompliance";
 import PartnerIntegrations from "@/pages/PartnerIntegrations";
 import FinancialOperations from "@/pages/FinancialOperations";
 import TablesideCommerce from "@/pages/TablesideCommerce";
 import WhiteLabelApps from "@/pages/WhiteLabelApps";
 import MerchantChannels from "@/pages/MerchantChannels";
 import ServiceRecovery from "@/pages/ServiceRecovery";
+import MobilityOverview from "@/pages/MobilityOverview";
+import RiderApp from "@/pages/RiderApp";
+import BusinessTravel from "@/pages/BusinessTravel";
+import FreightOperations from "@/pages/FreightOperations";
+import HealthcareTransport from "@/pages/HealthcareTransport";
+import MerchantHub from "@/pages/MerchantHub";
+import CheckoutInsights from "@/pages/CheckoutInsights";
+import CourierTripRadar from "@/pages/CourierTripRadar";
+import TrustConsole from "@/pages/TrustConsole";
+import ExperimentConsole from "@/pages/ExperimentConsole";
+import MerchantAdsStudio from "@/pages/MerchantAdsStudio";
 import PhoneOrderingStudio from "@/pages/PhoneOrderingStudio";
 import TenantAdminActions from "@/pages/TenantAdminActions";
 import SecurityProfilePage, {
@@ -549,6 +562,7 @@ export default function App() {
       <Route path="/analytics" component={Analytics} />
       <Route path="/driver-mobility" component={DriverMobility} />
       <Route path="/driver-offers" component={DriverOfferFairness} />
+      <Route path="/courier-portal" component={CourierPortal} />
       <Route path="/field-service" component={FieldServiceOperations} />
       <Route path="/vehicle-access" component={VehicleAccessOperations} />
       <Route path="/verification" component={StakeholderVerification} />
@@ -560,13 +574,25 @@ export default function App() {
       />
       <Route path="/logistics-operations" component={LogisticsOperations} />
       <Route path="/compliance-review" component={ComplianceReview} />
+      <Route path="/compliance/vertical-packs" component={VerticalCompliance} />
       <Route path="/partner-integrations" component={PartnerIntegrations} />
       <Route path="/financial-operations" component={FinancialOperations} />
       <Route path="/tableside-commerce" component={TablesideCommerce} />
       <Route path="/white-label-apps" component={WhiteLabelApps} />
       <Route path="/merchant-channels" component={MerchantChannels} />
       <Route path="/service-recovery" component={ServiceRecovery} />
+      <Route path="/consoles/merchant-hub" component={MerchantHub} />
+      <Route path="/consoles/checkout" component={CheckoutInsights} />
+      <Route path="/consoles/courier-radar" component={CourierTripRadar} />
+      <Route path="/consoles/trust" component={TrustConsole} />
+      <Route path="/consoles/experiments" component={ExperimentConsole} />
+      <Route path="/consoles/merchant-ads" component={MerchantAdsStudio} />
       <Route path="/phone-ordering-studio" component={PhoneOrderingStudio} />
+      <Route path="/mobility" component={MobilityOverview} />
+      <Route path="/mobility/rider" component={RiderApp} />
+      <Route path="/mobility/business" component={BusinessTravel} />
+      <Route path="/mobility/freight" component={FreightOperations} />
+      <Route path="/mobility/healthcare" component={HealthcareTransport} />
       <Route component={NotFoundPage} />
     </Switch>
   );

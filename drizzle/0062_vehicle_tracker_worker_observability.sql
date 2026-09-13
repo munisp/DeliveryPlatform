@@ -2,6 +2,16 @@
 -- This migration deliberately exposes no credentials, external event IDs, cursor text, device IDs,
 -- user information, payment data, or raw telemetry payloads to the metrics process.
 
+-- The service role is created by the deployment environment; on fresh
+-- databases (rehearsals, CI, local dev) it does not exist yet, so create a
+-- NOLOGIN placeholder to keep REVOKE/GRANT statements below idempotent.
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'vehicle_access_service') THEN
+    CREATE ROLE vehicle_access_service NOLOGIN;
+  END IF;
+END $$;
+
 CREATE OR REPLACE FUNCTION vehicle_access.list_tracker_provider_ingest_observability(
   p_now timestamptz DEFAULT clock_timestamp()
 ) RETURNS TABLE(

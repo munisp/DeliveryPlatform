@@ -3,6 +3,16 @@
 -- DeliveryPlatform receives authenticated, hydrated snapshots and projects them
 -- deterministically into the Go inventory-control position table.
 
+-- The service role is created by the deployment environment; on fresh
+-- databases (rehearsals, CI, local dev) it does not exist yet, so create a
+-- NOLOGIN placeholder to keep REVOKE/GRANT statements below idempotent.
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'commerce_gateway_service') THEN
+    CREATE ROLE commerce_gateway_service NOLOGIN;
+  END IF;
+END $$;
+
 CREATE TABLE IF NOT EXISTS public.inventory_positions (
   warehouse_id bigint NOT NULL,
   sku text NOT NULL CHECK (length(sku) BETWEEN 1 AND 160),
