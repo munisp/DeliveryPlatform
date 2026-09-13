@@ -1,0 +1,26 @@
+# Reviewed candidate paths only. Do not stage validation/** or a path not listed here.
+drizzle/0064_merchant_commerce_portal.sql
+drizzle/0065_multiplatform_commerce_driver_handoff.sql
+drizzle/0066_realtime_tracking_offline_sync_tenant_api.sql
+drizzle/0067_merchant_api_credential_lifecycle.sql
+server/_core/merchantCommerce.ts
+server/_core/commerceFulfillment.ts
+server/_core/realtimeTracking.ts
+server/_core/index.ts
+server/_core/developerWebhookDispatcher.ts
+server/routers.ts
+client/src/lib/offlineSync.ts
+client/src/pages/MerchantCommercePortal.tsx
+client/src/pages/CommerceFulfillment.tsx
+public/sw.js
+mobile/switchos-native/package.json
+pnpm-lock.yaml
+mobile/switchos-native/lib/mobile/offline-sync-sqlite.ts
+mobile/switchos-native/tests/offline-sync-sqlite.test.ts
+mobile/switchos-native/vitest.config.ts
+tests/merchant-commerce-and-ray-governance.config.test.ts
+tests/multiplatform-commerce-driver-handoff.config.test.ts
+tests/env.security.test.ts
+tests/gig-vehicle-rental-operations.config.test.ts
+scripts/testing/selective-stage-offline-sync-and-merchant.txt
+scripts/testing/validate-merchant-api-credential-lifecycle.sh

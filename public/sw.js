@@ -43,7 +43,7 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  if (!isSameOrigin) {
+  if (!isSameOrigin || url.pathname.startsWith("/api/")) {
     return;
   }
 
