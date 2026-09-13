@@ -10,6 +10,7 @@ import {
   workspaceReadProcedure,
 } from "./_core/trpc";
 import { systemRouter } from "./_core/systemRouter";
+import { compliancePacksRouter } from "./_core/compliancePacksRouter";
 import {
   getDriverMobilityWorkspace,
   getMerchantChannelWorkspace,
@@ -173,6 +174,7 @@ async function requireWorkspaceData<T>(
 
 export const appRouter = router({
   system: systemRouter,
+  compliancePacks: compliancePacksRouter,
 
   auth: router({
     me: publicProcedure.query(({ ctx }) => ctx.user),

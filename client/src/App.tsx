@@ -14,6 +14,7 @@ import StakeholderVerification from "@/pages/StakeholderVerification";
 import LogisticsControlTower from "@/pages/LogisticsControlTower";
 import LogisticsOperations from "@/pages/LogisticsOperations";
 import ComplianceReview from "@/pages/ComplianceReview";
+import VerticalCompliance from "@/pages/VerticalCompliance";
 import PartnerIntegrations from "@/pages/PartnerIntegrations";
 import FinancialOperations from "@/pages/FinancialOperations";
 import TablesideCommerce from "@/pages/TablesideCommerce";
@@ -560,6 +561,7 @@ export default function App() {
       />
       <Route path="/logistics-operations" component={LogisticsOperations} />
       <Route path="/compliance-review" component={ComplianceReview} />
+      <Route path="/compliance/vertical-packs" component={VerticalCompliance} />
       <Route path="/partner-integrations" component={PartnerIntegrations} />
       <Route path="/financial-operations" component={FinancialOperations} />
       <Route path="/tableside-commerce" component={TablesideCommerce} />
