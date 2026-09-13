@@ -25,6 +25,12 @@ import RiderApp from "@/pages/RiderApp";
 import BusinessTravel from "@/pages/BusinessTravel";
 import FreightOperations from "@/pages/FreightOperations";
 import HealthcareTransport from "@/pages/HealthcareTransport";
+import MerchantHub from "@/pages/MerchantHub";
+import CheckoutInsights from "@/pages/CheckoutInsights";
+import CourierTripRadar from "@/pages/CourierTripRadar";
+import TrustConsole from "@/pages/TrustConsole";
+import ExperimentConsole from "@/pages/ExperimentConsole";
+import MerchantAdsStudio from "@/pages/MerchantAdsStudio";
 import PhoneOrderingStudio from "@/pages/PhoneOrderingStudio";
 import TenantAdminActions from "@/pages/TenantAdminActions";
 import SecurityProfilePage, {
@@ -571,6 +577,12 @@ export default function App() {
       <Route path="/white-label-apps" component={WhiteLabelApps} />
       <Route path="/merchant-channels" component={MerchantChannels} />
       <Route path="/service-recovery" component={ServiceRecovery} />
+      <Route path="/consoles/merchant-hub" component={MerchantHub} />
+      <Route path="/consoles/checkout" component={CheckoutInsights} />
+      <Route path="/consoles/courier-radar" component={CourierTripRadar} />
+      <Route path="/consoles/trust" component={TrustConsole} />
+      <Route path="/consoles/experiments" component={ExperimentConsole} />
+      <Route path="/consoles/merchant-ads" component={MerchantAdsStudio} />
       <Route path="/phone-ordering-studio" component={PhoneOrderingStudio} />
       <Route path="/mobility" component={MobilityOverview} />
       <Route path="/mobility/rider" component={RiderApp} />
