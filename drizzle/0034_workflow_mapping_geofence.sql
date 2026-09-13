@@ -1,10 +1,42 @@
 -- Independently designed logistics workflow authoring, map controls, and geofence events.
 -- All entities remain tenant scoped; geographic data is durable in PostgreSQL/PostGIS.
 
-CREATE TYPE operations.workflow_definition_state AS ENUM ('draft', 'published', 'archived');
-CREATE TYPE operations.geofence_event_type AS ENUM ('entered', 'exited', 'dwelled');
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace
+                 WHERE n.nspname = 'operations' AND t.typname = 'workflow_definition_state') THEN
+    CREATE TYPE operations.workflow_definition_state AS ENUM ('draft', 'published', 'archived');
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace
+                 WHERE n.nspname = 'operations' AND t.typname = 'geofence_event_type') THEN
+    CREATE TYPE operations.geofence_event_type AS ENUM ('entered', 'exited', 'dwelled');
+  END IF;
+END $$;
 
-CREATE TABLE operations.workflow_definition (
+-- 0028_logistics_operations.sql may have already created an older
+-- operations.workflow_definition shape (code/transitions/active columns).
+-- Upgrade it in place to this migration's shape, or create fresh.
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.tables
+             WHERE table_schema = 'operations' AND table_name = 'workflow_definition')
+     AND NOT EXISTS (SELECT 1 FROM information_schema.columns
+                     WHERE table_schema = 'operations' AND table_name = 'workflow_definition'
+                       AND column_name = 'workflow_code') THEN
+    ALTER TABLE operations.workflow_definition RENAME COLUMN code TO workflow_code;
+    ALTER TABLE operations.workflow_definition RENAME COLUMN transitions TO work_state_transitions;
+    ALTER TABLE operations.workflow_definition
+      ADD COLUMN IF NOT EXISTS state operations.workflow_definition_state NOT NULL DEFAULT 'draft',
+      ADD COLUMN IF NOT EXISTS required_stop_kinds TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
+      ADD COLUMN IF NOT EXISTS input_schema JSONB NOT NULL DEFAULT '{}'::jsonb,
+      ADD COLUMN IF NOT EXISTS policy_version TEXT NOT NULL DEFAULT '1.0.0',
+      ADD COLUMN IF NOT EXISTS published_by INTEGER NULL,
+      ADD COLUMN IF NOT EXISTS published_at TIMESTAMPTZ NULL,
+      ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ NULL;
+    ALTER TABLE operations.workflow_definition DROP COLUMN IF EXISTS active;
+  ELSIF NOT EXISTS (SELECT 1 FROM information_schema.tables
+                    WHERE table_schema = 'operations' AND table_name = 'workflow_definition') THEN
+    CREATE TABLE operations.workflow_definition (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   tenant_id TEXT NOT NULL CHECK (length(tenant_id) BETWEEN 1 AND 128),
   workflow_code TEXT NOT NULL CHECK (workflow_code ~ '^[A-Z0-9][A-Z0-9_-]{1,62}$'),
@@ -25,11 +57,14 @@ CREATE TABLE operations.workflow_definition (
   CHECK ((state = 'published') = (published_at IS NOT NULL AND published_by IS NOT NULL)),
   CHECK (jsonb_typeof(work_state_transitions) = 'object'),
   CHECK (jsonb_typeof(input_schema) = 'object')
-);
-CREATE UNIQUE INDEX workflow_definition_one_published_idx
+  );
+  END IF;
+END $$;
+
+CREATE UNIQUE INDEX IF NOT EXISTS workflow_definition_one_published_idx
   ON operations.workflow_definition (tenant_id, workflow_code)
   WHERE state = 'published';
-CREATE INDEX workflow_definition_tenant_state_idx
+CREATE INDEX IF NOT EXISTS workflow_definition_tenant_state_idx
   ON operations.workflow_definition (tenant_id, state, updated_at DESC);
 
 ALTER TABLE operations.work_order
