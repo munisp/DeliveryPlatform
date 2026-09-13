@@ -14,8 +14,10 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	_ "github.com/lib/pq"
@@ -272,5 +274,31 @@ func main() {
 	if address == "" {
 		address = "127.0.0.1:8121"
 	}
-	log.Fatal(http.ListenAndServe(address, mux))
+	server := &http.Server{Addr: address, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	serverErrors := make(chan error, 1)
+	go func() {
+		log.Printf("verification orchestrator listening on %s", address)
+		serverErrors <- server.ListenAndServe()
+	}()
+
+	select {
+	case err := <-serverErrors:
+		if err != nil && err != http.ErrServerClosed {
+			log.Fatal(err)
+		}
+	case <-ctx.Done():
+		log.Printf("shutdown signal received; draining in-flight requests")
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			log.Printf("graceful shutdown failed: %v", err)
+		}
+		if err := <-serverErrors; err != nil && err != http.ErrServerClosed {
+			log.Fatal(err)
+		}
+	}
 }

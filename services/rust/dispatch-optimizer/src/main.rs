@@ -27,8 +27,9 @@ const REQUEST_ID_HEADER: &str = "x-request-id";
 
 #[derive(Clone)]
 struct DatabasePool {
-    clients: Arc<Vec<Arc<Client>>>,
+    slots: Arc<Vec<tokio::sync::RwLock<Arc<Client>>>>,
     next: Arc<AtomicUsize>,
+    database_url: Arc<String>,
 }
 
 #[derive(Clone)]
@@ -392,7 +393,30 @@ async fn main() {
 
     info!("dispatch optimizer listening on {}", addr);
     let listener = tokio::net::TcpListener::bind(addr).await.expect("bind listener");
-    axum::serve(listener, app).await.expect("serve application");
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await
+        .expect("serve application");
+}
+
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c().await.expect("install Ctrl+C handler");
+    };
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("install SIGTERM handler")
+            .recv()
+            .await;
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = terminate => {},
+    }
+    info!("shutdown signal received; draining in-flight requests");
 }
 
 async fn correlation_middleware(
@@ -1274,36 +1298,71 @@ fn canonical_uuid(value: &str) -> bool {
         })
 }
 
+async fn connect_client(database_url: &str) -> Result<Client, String> {
+    let (client, connection) = tokio_postgres::connect(database_url, NoTls)
+        .await
+        .map_err(|error| format!("connect postgres: {error}"))?;
+    tokio::spawn(async move {
+        if let Err(error) = connection.await {
+            tracing::error!("dispatch optimizer pooled postgres connection error: {}", error);
+        }
+    });
+    Ok(client)
+}
+
 async fn create_pool(database_url: &str) -> Result<DatabasePool, String> {
     let max_size = env::var("DATABASE_POOL_MAX_SIZE")
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(24)
         .clamp(4, 48);
-    let mut clients = Vec::with_capacity(max_size);
+    let mut slots = Vec::with_capacity(max_size);
     for slot in 0..max_size {
-        let (client, connection) = tokio_postgres::connect(database_url, NoTls)
+        let client = connect_client(database_url)
             .await
             .map_err(|error| format!("open dispatch database connection {slot}: {error}"))?;
-        tokio::spawn(async move {
-            if let Err(error) = connection.await {
-                tracing::error!("dispatch optimizer pooled postgres connection error: {}", error);
-            }
-        });
-        clients.push(Arc::new(client));
+        slots.push(tokio::sync::RwLock::new(Arc::new(client)));
     }
     Ok(DatabasePool {
-        clients: Arc::new(clients),
+        slots: Arc::new(slots),
         next: Arc::new(AtomicUsize::new(0)),
+        database_url: Arc::new(database_url.to_string()),
     })
 }
 
 async fn acquire_client(pool: &DatabasePool) -> Result<Arc<Client>, (StatusCode, String)> {
-    if pool.clients.is_empty() {
+    if pool.slots.is_empty() {
         return Err(internal_error("database pool unavailable"));
     }
-    let index = pool.next.fetch_add(1, AtomicOrdering::Relaxed) % pool.clients.len();
-    Ok(Arc::clone(&pool.clients[index]))
+    let len = pool.slots.len();
+    let start = pool.next.fetch_add(1, AtomicOrdering::Relaxed) % len;
+    for offset in 0..len {
+        let slot = &pool.slots[(start + offset) % len];
+        {
+            let guard = slot.read().await;
+            if !guard.is_closed() {
+                return Ok(Arc::clone(&guard));
+            }
+        }
+        // The cached connection is dead (e.g. after a Postgres restart):
+        // replace it with a fresh one so the pool heals itself.
+        let mut guard = slot.write().await;
+        if !guard.is_closed() {
+            return Ok(Arc::clone(&guard));
+        }
+        match connect_client(&pool.database_url).await {
+            Ok(client) => {
+                let client = Arc::new(client);
+                *guard = Arc::clone(&client);
+                tracing::info!("dispatch optimizer re-established a postgres pool connection");
+                return Ok(client);
+            }
+            Err(error) => {
+                tracing::warn!("dispatch optimizer postgres reconnect failed: {}", error);
+            }
+        }
+    }
+    Err(internal_error("database pool unavailable"))
 }
 
 async fn ensure_schema(pool: &DatabasePool) -> Result<(), String> {

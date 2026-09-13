@@ -1391,7 +1391,7 @@ func main() {
 		mux.HandleFunc("/journeys/start", service.handleJourneyStartHTTP)
 		addr := bindHost + ":" + httpPort
 		log.Printf("Mojaloop Temporal workflow bridge listening on %s (namespace=%s, fundsTaskQueue=%s, journeyTaskQueue=%s)", addr, effectiveTemporalNamespace(), effectiveTemporalTaskQueue(), effectiveJourneyTaskQueue())
-		if err := http.ListenAndServe(addr, mux); err != nil {
+		if err := serveWithGracefulShutdown(addr, mux); err != nil {
 			log.Fatalf("Failed to serve Temporal workflow bridge: %v", err)
 		}
 		return
@@ -1413,7 +1413,44 @@ func main() {
 	mux.HandleFunc("/refunds/", service.handleGetRefundHTTP)
 	addr := bindHost + ":" + httpPort
 	log.Printf("Mojaloop HTTP server listening on %s", addr)
-	if err := http.ListenAndServe(addr, mux); err != nil {
+	if err := serveWithGracefulShutdown(addr, mux); err != nil {
 		log.Fatalf("Failed to serve HTTP: %v", err)
+	}
+}
+
+// serveWithGracefulShutdown starts an HTTP server and drains in-flight
+// requests on SIGINT/SIGTERM before returning.
+func serveWithGracefulShutdown(addr string, handler http.Handler) error {
+	server := &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	serverErrors := make(chan error, 1)
+	go func() {
+		serverErrors <- server.ListenAndServe()
+	}()
+
+	select {
+	case err := <-serverErrors:
+		if err == http.ErrServerClosed {
+			return nil
+		}
+		return err
+	case <-ctx.Done():
+		log.Printf("shutdown signal received; draining in-flight requests on %s", addr)
+		shutdownContext, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if err := server.Shutdown(shutdownContext); err != nil {
+			log.Printf("graceful shutdown failed: %v", err)
+		}
+		if err := <-serverErrors; err != nil && err != http.ErrServerClosed {
+			return err
+		}
+		return nil
 	}
 }
