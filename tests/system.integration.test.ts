@@ -3,11 +3,13 @@ import { IncomingMessage, ServerResponse } from "http";
 
 import { systemRouter } from "../server/_core/systemRouter";
 
-function createContext() {
+function createContext(authenticated = true) {
   return {
     req: new IncomingMessage(null as never),
     res: new ServerResponse({} as never),
-    user: null,
+    user: authenticated
+      ? { id: 7, name: "Ops", role: "admin", openId: "operator:7" }
+      : null,
   };
 }
 
@@ -15,6 +17,13 @@ describe("SwitchOS system integration status", () => {
   it("reports health for the operator edge", async () => {
     const caller = systemRouter.createCaller(createContext());
     await expect(caller.health()).resolves.toMatchObject({ ok: true, service: "switchos-operator-dashboard" });
+  });
+
+  it("rejects integration status for unauthenticated callers", async () => {
+    const caller = systemRouter.createCaller(createContext(false));
+    await expect(caller.integrationStatus()).rejects.toMatchObject({
+      code: "UNAUTHORIZED",
+    });
   });
 
   it("reports integration posture for edge, identity, messaging, and services", async () => {
@@ -43,5 +52,15 @@ describe("SwitchOS system integration status", () => {
         lakehouseServiceUrl: expect.any(String),
       },
     });
+
+    // No connection strings or credential-bearing URLs may leak: the
+    // payload carries configured/not-configured booleans only.
+    const serialized = JSON.stringify(status);
+    expect(serialized).not.toContain("redisUrl");
+    expect(serialized).not.toContain("redis://");
+    expect(status.messaging).not.toHaveProperty("redisUrl");
+    expect(status.messaging).not.toHaveProperty("kafkaBrokers");
+    expect(status.messaging).not.toHaveProperty("openSearchUrl");
+    expect(status.messaging).not.toHaveProperty("temporalAddress");
   });
 });

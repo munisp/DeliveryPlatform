@@ -8,7 +8,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strings"
 	"time"
@@ -17,6 +19,147 @@ import (
 // errDigestMismatch is returned when retrieved evidence bytes do not match the
 // SHA-256 digest recorded on the verification.evidence row.
 var errDigestMismatch = errors.New("evidence digest mismatch")
+
+// errBlockedFetchTarget is returned when an evidence URL targets a loopback,
+// private, link-local, or otherwise reserved address (SSRF guard).
+var errBlockedFetchTarget = errors.New("evidence fetch target is not allowed (SSRF guard)")
+
+// blockedFetchPrefixes lists IPv4/IPv6 ranges that evidence URLs must never
+// reach: loopback, RFC1918/ULA private space, link-local, CGNAT, benchmarking,
+// documentation, protocol-assignment, and reserved ranges.
+var blockedFetchPrefixes = []netip.Prefix{
+	netip.MustParsePrefix("0.0.0.0/8"),          // "this" network
+	netip.MustParsePrefix("10.0.0.0/8"),         // RFC1918
+	netip.MustParsePrefix("100.64.0.0/10"),      // CGNAT shared address space
+	netip.MustParsePrefix("127.0.0.0/8"),        // loopback
+	netip.MustParsePrefix("169.254.0.0/16"),     // link-local
+	netip.MustParsePrefix("172.16.0.0/12"),      // RFC1918
+	netip.MustParsePrefix("192.0.0.0/24"),       // IETF protocol assignments
+	netip.MustParsePrefix("192.0.2.0/24"),       // TEST-NET-1 documentation
+	netip.MustParsePrefix("192.168.0.0/16"),     // RFC1918
+	netip.MustParsePrefix("198.18.0.0/15"),      // benchmarking
+	netip.MustParsePrefix("198.51.100.0/24"),    // TEST-NET-2 documentation
+	netip.MustParsePrefix("203.0.113.0/24"),     // TEST-NET-3 documentation
+	netip.MustParsePrefix("224.0.0.0/4"),        // multicast
+	netip.MustParsePrefix("240.0.0.0/4"),        // reserved
+	netip.MustParsePrefix("::1/128"),            // IPv6 loopback
+	netip.MustParsePrefix("fc00::/7"),           // ULA private
+	netip.MustParsePrefix("fe80::/10"),          // IPv6 link-local
+	netip.MustParsePrefix("ff00::/8"),           // IPv6 multicast
+}
+
+// isBlockedFetchAddr reports whether addr falls in any blocked range. IPv4
+// addresses embedded in IPv6 forms are unmapped first so "::ffff:127.0.0.1"
+// cannot smuggle a loopback past the guard.
+func isBlockedFetchAddr(addr netip.Addr) bool {
+	addr = addr.Unmap()
+	if addr.IsLoopback() || addr.IsPrivate() || addr.IsLinkLocalUnicast() ||
+		addr.IsLinkLocalMulticast() || addr.IsMulticast() || addr.IsUnspecified() {
+		return true
+	}
+	for _, prefix := range blockedFetchPrefixes {
+		if prefix.Contains(addr) {
+			return true
+		}
+	}
+	return false
+}
+
+// hostExplicitlyAllowed reports whether host is on the RETRIEVAL_ALLOWED_HOSTS
+// allowlist (operator-configured, case-insensitive, port stripped).
+func hostExplicitlyAllowed(host string, allowedHosts map[string]bool) bool {
+	if len(allowedHosts) == 0 {
+		return false
+	}
+	return allowedHosts[strings.ToLower(strings.TrimSpace(host))]
+}
+
+// validateFetchTarget enforces the SSRF guard for a user-supplied evidence
+// URL: only http/https schemes are allowed, the host must resolve, and every
+// resolved address must be public unless the host is explicitly allowlisted.
+func validateFetchTarget(ctx context.Context, rawURL string, allowedHosts map[string]bool) error {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("invalid evidence URL: %w", err)
+	}
+	if parsed.Scheme != "https" && parsed.Scheme != "http" {
+		return fmt.Errorf("%w: scheme %q is not http/https", errBlockedFetchTarget, parsed.Scheme)
+	}
+	host := parsed.Hostname()
+	if host == "" {
+		return fmt.Errorf("%w: empty host", errBlockedFetchTarget)
+	}
+	if hostExplicitlyAllowed(host, allowedHosts) {
+		return nil
+	}
+	// IP literals never reach DNS; validate them directly.
+	if addr, err := netip.ParseAddr(host); err == nil {
+		if isBlockedFetchAddr(addr) {
+			return fmt.Errorf("%w: %s is a non-public address", errBlockedFetchTarget, host)
+		}
+		return nil
+	}
+	addrs, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		return fmt.Errorf("evidence host resolution failed for %q: %w", host, err)
+	}
+	if len(addrs) == 0 {
+		return fmt.Errorf("%w: %s resolved to no addresses", errBlockedFetchTarget, host)
+	}
+	for _, resolved := range addrs {
+		addr, ok := netip.AddrFromSlice(resolved.IP)
+		if !ok {
+			return fmt.Errorf("%w: unparseable resolved address for %s", errBlockedFetchTarget, host)
+		}
+		if isBlockedFetchAddr(addr) {
+			return fmt.Errorf("%w: %s resolves to non-public address %s", errBlockedFetchTarget, host, addr)
+		}
+	}
+	return nil
+}
+
+// ssrfGuardedTransport clones the client's transport and installs a
+// DialContext that re-validates the dialed host, so DNS answers are checked
+// at connection time for every request (including redirects) even if the
+// URL-level check was bypassed.
+func ssrfGuardedTransport(base http.RoundTripper, allowedHosts map[string]bool) http.RoundTripper {
+	transport, ok := base.(*http.Transport)
+	if !ok || transport == nil {
+		transport = http.DefaultTransport.(*http.Transport).Clone()
+	} else {
+		transport = transport.Clone()
+	}
+	dialer := &net.Dialer{Timeout: 15 * time.Second, KeepAlive: 30 * time.Second}
+	transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+		host, _, err := net.SplitHostPort(address)
+		if err != nil {
+			return nil, err
+		}
+		if !hostExplicitlyAllowed(host, allowedHosts) {
+			if addr, err := netip.ParseAddr(host); err == nil {
+				if isBlockedFetchAddr(addr) {
+					return nil, fmt.Errorf("%w: %s is a non-public address", errBlockedFetchTarget, host)
+				}
+			} else {
+				resolved, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+				if err != nil {
+					return nil, fmt.Errorf("evidence host resolution failed for %q: %w", host, err)
+				}
+				if len(resolved) == 0 {
+					return nil, fmt.Errorf("%w: %s resolved to no addresses", errBlockedFetchTarget, host)
+				}
+				for _, ip := range resolved {
+					addr, ok := netip.AddrFromSlice(ip.IP)
+					if !ok || isBlockedFetchAddr(addr) {
+						return nil, fmt.Errorf("%w: %s resolves to a non-public address", errBlockedFetchTarget, host)
+					}
+				}
+			}
+		}
+		return dialer.DialContext(ctx, network, address)
+	}
+	return transport
+}
 
 const emptyPayloadSHA256Hex = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
@@ -95,17 +238,31 @@ func fetchEvidenceObject(ctx context.Context, cfg config, client *http.Client, r
 		return nil, err
 	}
 	if location.scheme == "https" || location.scheme == "http" {
-		return fetchHTTPObject(ctx, client, location.url, cfg.maxObjectBytes)
+		return fetchHTTPObject(ctx, cfg, client, location.url, cfg.maxObjectBytes)
 	}
 	return fetchS3Object(ctx, cfg, client, location)
 }
 
-func fetchHTTPObject(ctx context.Context, client *http.Client, objectURL string, maxBytes int64) ([]byte, error) {
+func fetchHTTPObject(ctx context.Context, cfg config, client *http.Client, objectURL string, maxBytes int64) ([]byte, error) {
+	// SSRF guard: scheme/host/IP validation before the first request...
+	if err := validateFetchTarget(ctx, objectURL, cfg.retrievalAllowedHosts); err != nil {
+		return nil, err
+	}
+	// ...a dial-time guard on the transport, and a redirect re-check so a
+	// 30x to an internal address is rejected too.
+	guarded := *client
+	guarded.Transport = ssrfGuardedTransport(client.Transport, cfg.retrievalAllowedHosts)
+	guarded.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 10 {
+			return errors.New("evidence http fetch: too many redirects")
+		}
+		return validateFetchTarget(req.Context(), req.URL.String(), cfg.retrievalAllowedHosts)
+	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, objectURL, nil)
 	if err != nil {
 		return nil, err
 	}
-	response, err := client.Do(request)
+	response, err := guarded.Do(request)
 	if err != nil {
 		return nil, fmt.Errorf("evidence http fetch: %w", err)
 	}

@@ -1,4 +1,4 @@
-import { publicProcedure, router } from "./trpc";
+import { authenticatedProcedure, publicProcedure, router } from "./trpc";
 import { ENV } from "./env";
 import { getLiveIntegrationStatus } from "./integrationProbes";
 import { getPolicyIntegrationStatus } from "./policy";
@@ -8,14 +8,6 @@ function configured(value: string | null | undefined) {
   return typeof value === "string" && value.trim().length > 0;
 }
 
-function splitAndTrim(value: string | null | undefined) {
-  if (!value) return [];
-  return value
-    .split(",")
-    .map((part) => part.trim())
-    .filter(Boolean);
-}
-
 export const systemRouter = router({
   health: publicProcedure.query(() => ({
     ok: true,
@@ -23,7 +15,11 @@ export const systemRouter = router({
     timestamp: new Date().toISOString(),
   })),
 
-  integrationStatus: publicProcedure.query(async () => ({
+  // Authenticated only: this payload describes internal infrastructure
+  // topology. Raw connection strings (redisUrl, broker lists, search URLs)
+  // can embed credentials and are never returned — only configured/not
+  // configured booleans and non-secret settings are exposed.
+  integrationStatus: authenticatedProcedure.query(async () => ({
     timestamp: new Date().toISOString(),
     edge: {
       apisixAdminUrl: ENV.apisixAdminUrl,
@@ -43,18 +39,12 @@ export const systemRouter = router({
       policy: getPolicyIntegrationStatus(),
     },
     messaging: {
-      kafkaBrokers: splitAndTrim(ENV.kafkaBrokers),
       kafkaConfigured: configured(ENV.kafkaBrokers),
       kafkaOperationalEventsTopic: ENV.kafkaOperationalEventsTopic || null,
-      fluvioServiceUrl: ENV.fluvioServiceUrl || null,
       fluvioConfigured: configured(ENV.fluvioServiceUrl),
-      daprHttpPort: ENV.daprHttpPort || null,
       daprConfigured: configured(ENV.daprHttpPort),
-      temporalAddress: process.env.TEMPORAL_ADDRESS || null,
       temporalConfigured: configured(process.env.TEMPORAL_ADDRESS),
-      redisUrl: ENV.redisUrl || null,
       redisConfigured: configured(ENV.redisUrl),
-      openSearchUrl: ENV.opensearchUrl || null,
       openSearchConfigured: configured(ENV.opensearchUrl),
     },
     services: {

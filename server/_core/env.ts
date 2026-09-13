@@ -170,6 +170,18 @@ function getDatabaseSslCa() {
   return configured ? configured.replace(/\\n/g, "\n") : "";
 }
 
+// Explicit development-only escape hatch for local databases with
+// self-signed certificates. Refused outright in production.
+function getDatabaseTlsSkipVerify() {
+  const enabled = parseBoolean(process.env.DATABASE_TLS_SKIP_VERIFY, false);
+  if (enabled && process.env.NODE_ENV === "production") {
+    throw new Error(
+      "DATABASE_TLS_SKIP_VERIFY disables TLS certificate verification and must never be enabled in production",
+    );
+  }
+  return enabled;
+}
+
 function normalizeRequiredPublicOrigin() {
   const configured = normalizeOptionalUrl("PUBLIC_APP_ORIGIN");
   if (process.env.NODE_ENV === "production" && configured === "") {
@@ -222,6 +234,7 @@ export const ENV = {
     "postgresql://ubuntu:ubuntu@127.0.0.1:5432/switchos",
   ),
   databaseSslCa: getDatabaseSslCa(),
+  databaseTlsSkipVerify: getDatabaseTlsSkipVerify(),
   vehicleTrackerDatabasePoolMax: parseBoundedInteger(
     "VEHICLE_TRACKER_DATABASE_POOL_MAX",
     4,
