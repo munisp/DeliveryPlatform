@@ -1,6 +1,7 @@
 import { Clock, MapPin, Ticket, UserRound } from "lucide-react";
 
 import DashboardLayout from "@/components/DashboardLayout";
+import { QueryErrorState } from "@/components/QueryState";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { trpc } from "@/lib/trpc";
 
@@ -35,10 +36,13 @@ export default function RiderApp() {
         {rider.isLoading ? (
           <p className="text-sm text-slate-400">Loading rider activity…</p>
         ) : null}
-        {rider.error ? (
-          <p className="border border-red-500/40 bg-red-500/10 p-4 text-sm text-red-100">
-            {rider.error.message}
-          </p>
+        {rider.isError ? (
+          <QueryErrorState
+            resource="rider app activity"
+            message={rider.error.message}
+            onRetry={() => void rider.refetch()}
+            retrying={rider.isRefetching}
+          />
         ) : null}
 
         {data ? (

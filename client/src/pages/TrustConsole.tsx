@@ -1,4 +1,5 @@
 import DashboardLayout from "@/components/DashboardLayout";
+import { QueryErrorState } from "@/components/QueryState";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { trpc } from "@/lib/trpc";
@@ -12,6 +13,21 @@ const dateLabel = (value: string | Date | null | undefined) =>
 export default function TrustConsole() {
   const query = trpc.consoles.trustConsole.useQuery();
   const data = query.data;
+
+  if (query.isError) {
+    return (
+      <DashboardLayout>
+        <div className="space-y-6">
+          <QueryErrorState
+            resource="trust console data"
+            message={query.error.message}
+            onRetry={() => void query.refetch()}
+            retrying={query.isRefetching}
+          />
+        </div>
+      </DashboardLayout>
+    );
+  }
 
   return (
     <DashboardLayout>

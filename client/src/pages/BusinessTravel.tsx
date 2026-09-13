@@ -1,6 +1,7 @@
 import { Briefcase, Receipt, ScrollText, Users } from "lucide-react";
 
 import DashboardLayout from "@/components/DashboardLayout";
+import { QueryErrorState } from "@/components/QueryState";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { trpc } from "@/lib/trpc";
 
@@ -35,10 +36,13 @@ export default function BusinessTravel() {
         {travel.isLoading ? (
           <p className="text-sm text-slate-400">Loading business travel…</p>
         ) : null}
-        {travel.error ? (
-          <p className="border border-red-500/40 bg-red-500/10 p-4 text-sm text-red-100">
-            {travel.error.message}
-          </p>
+        {travel.isError ? (
+          <QueryErrorState
+            resource="business travel data"
+            message={travel.error.message}
+            onRetry={() => void travel.refetch()}
+            retrying={travel.isRefetching}
+          />
         ) : null}
 
         {data ? (

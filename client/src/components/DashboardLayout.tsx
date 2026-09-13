@@ -3,22 +3,34 @@ import { useLocation } from "wouter";
 import {
   AppWindow,
   BarChart3,
+  Bike,
+  Briefcase,
   CarFront,
   ChevronRight,
+  ClipboardCheck,
   Code2,
+  FlaskConical,
+  Gauge,
+  HeartPulse,
   Landmark,
   LayoutDashboard,
+  Map,
+  Megaphone,
   Menu,
   PackageCheck,
   PhoneCall,
+  Radar,
   ShieldCheck,
+  ShoppingBag,
   Store,
   Truck,
+  UserRound,
   UsersRound,
   UtensilsCrossed,
   X,
 } from "lucide-react";
 
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { type OperatorRole, useSessionProfile } from "@/lib/sessionProfile";
 
 type NavigationItem = {
@@ -115,6 +127,82 @@ const navigationGroups: NavigationGroup[] = [
     ],
   },
   {
+    label: "Mobility",
+    items: [
+      {
+        icon: Map,
+        label: "Mobility Overview",
+        path: "/mobility",
+        allowedRoles: operationsRoles,
+      },
+      {
+        icon: Bike,
+        label: "Rider App",
+        path: "/mobility/rider",
+        allowedRoles: operationsRoles,
+      },
+      {
+        icon: Briefcase,
+        label: "Business Travel",
+        path: "/mobility/business",
+        allowedRoles: operationsRoles,
+      },
+      {
+        icon: Truck,
+        label: "Freight Operations",
+        path: "/mobility/freight",
+        allowedRoles: operationsRoles,
+      },
+      {
+        icon: HeartPulse,
+        label: "Healthcare Transport",
+        path: "/mobility/healthcare",
+        allowedRoles: operationsRoles,
+      },
+      {
+        icon: Radar,
+        label: "Courier Trip Radar",
+        path: "/consoles/courier-radar",
+        allowedRoles: operationsRoles,
+      },
+    ],
+  },
+  {
+    label: "Operator consoles",
+    items: [
+      {
+        icon: ShieldCheck,
+        label: "Trust Console",
+        path: "/consoles/trust",
+        allowedRoles: operationsRoles,
+      },
+      {
+        icon: FlaskConical,
+        label: "Experiment Console",
+        path: "/consoles/experiments",
+        allowedRoles: operationsRoles,
+      },
+      {
+        icon: ClipboardCheck,
+        label: "Vertical Compliance",
+        path: "/compliance/vertical-packs",
+        allowedRoles: operationsRoles,
+      },
+      {
+        icon: Gauge,
+        label: "Checkout Insights",
+        path: "/consoles/checkout",
+        allowedRoles: operationsRoles,
+      },
+      {
+        icon: Megaphone,
+        label: "Merchant Ads Studio",
+        path: "/consoles/merchant-ads",
+        allowedRoles: operationsRoles,
+      },
+    ],
+  },
+  {
     label: "Logistics control",
     items: [
       {
@@ -156,6 +244,18 @@ const navigationGroups: NavigationGroup[] = [
         icon: Store,
         label: "Merchant Channels",
         path: "/merchant-channels",
+        allowedRoles: operationsRoles,
+      },
+      {
+        icon: Store,
+        label: "Merchant Hub",
+        path: "/consoles/merchant-hub",
+        allowedRoles: operationsRoles,
+      },
+      {
+        icon: ShoppingBag,
+        label: "Merchant Portal",
+        path: "/merchant-commerce",
         allowedRoles: operationsRoles,
       },
       {
@@ -210,6 +310,17 @@ const navigationGroups: NavigationGroup[] = [
         icon: ShieldCheck,
         label: "Security Settings",
         path: "/profile/security",
+        allowedRoles: allOperatorRoles,
+      },
+    ],
+  },
+  {
+    label: "Self-serve",
+    items: [
+      {
+        icon: UserRound,
+        label: "Courier Portal",
+        path: "/courier-portal",
         allowedRoles: allOperatorRoles,
       },
     ],
@@ -412,7 +523,9 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
 
           <main className="flex-1 px-4 py-6 lg:px-8">
             {shouldRenderChildren ? (
-              children
+              <ErrorBoundary variant="section" section={activeItem.label}>
+                {children}
+              </ErrorBoundary>
             ) : (
               <section className="mx-auto max-w-2xl rounded-2xl border border-amber-500/30 bg-amber-950/20 p-6">
                 <div className="flex items-start gap-3">

@@ -1,6 +1,7 @@
 import { Car, Compass, Plane, Users } from "lucide-react";
 
 import DashboardLayout from "@/components/DashboardLayout";
+import { QueryErrorState } from "@/components/QueryState";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { trpc } from "@/lib/trpc";
 
@@ -36,10 +37,13 @@ export default function MobilityOverview() {
         {overview.isLoading ? (
           <p className="text-sm text-slate-400">Loading mobility overview…</p>
         ) : null}
-        {overview.error ? (
-          <p className="border border-red-500/40 bg-red-500/10 p-4 text-sm text-red-100">
-            {overview.error.message}
-          </p>
+        {overview.isError ? (
+          <QueryErrorState
+            resource="mobility overview"
+            message={overview.error.message}
+            onRetry={() => void overview.refetch()}
+            retrying={overview.isRefetching}
+          />
         ) : null}
 
         {data ? (

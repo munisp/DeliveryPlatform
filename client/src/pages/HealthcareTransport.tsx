@@ -1,6 +1,7 @@
 import { HeartPulse, ShieldCheck, Stethoscope } from "lucide-react";
 
 import DashboardLayout from "@/components/DashboardLayout";
+import { QueryErrorState } from "@/components/QueryState";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { trpc } from "@/lib/trpc";
 
@@ -29,10 +30,13 @@ export default function HealthcareTransport() {
             Loading healthcare transport…
           </p>
         ) : null}
-        {healthcare.error ? (
-          <p className="border border-red-500/40 bg-red-500/10 p-4 text-sm text-red-100">
-            {healthcare.error.message}
-          </p>
+        {healthcare.isError ? (
+          <QueryErrorState
+            resource="healthcare transport data"
+            message={healthcare.error.message}
+            onRetry={() => void healthcare.refetch()}
+            retrying={healthcare.isRefetching}
+          />
         ) : null}
 
         {data ? (

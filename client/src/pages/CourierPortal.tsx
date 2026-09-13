@@ -75,11 +75,28 @@ function EmptyState({ title, body }: { title: string; body: string }) {
   );
 }
 
-function ErrorState({ message }: { message?: string }) {
+function ErrorState({
+  message,
+  onRetry,
+}: {
+  message?: string;
+  onRetry?: () => void;
+}) {
   return (
     <div className="flex gap-3 border border-rose-500/30 bg-rose-500/5 p-4 text-sm text-rose-100">
       <CircleAlert className="mt-0.5 h-5 w-5 shrink-0 text-rose-300" />
-      <p>Live data could not be loaded: {message ?? "unknown error"}</p>
+      <div className="flex-1">
+        <p>Live data could not be loaded: {message ?? "unknown error"}</p>
+        {onRetry ? (
+          <button
+            type="button"
+            onClick={onRetry}
+            className="mt-2 inline-flex rounded-full border border-rose-400/40 bg-rose-500/10 px-3 py-1 text-xs font-medium text-rose-100 transition hover:bg-rose-500/20"
+          >
+            Retry
+          </button>
+        ) : null}
+      </div>
     </div>
   );
 }
@@ -103,7 +120,13 @@ function EarningsTab() {
       />
     );
   }
-  if (profile.error) return <ErrorState message={profile.error.message} />;
+  if (profile.error)
+    return (
+      <ErrorState
+        message={profile.error.message}
+        onRetry={() => void profile.refetch()}
+      />
+    );
 
   const row = profile.data as Record<string, unknown> | null;
   const perf = performance.data as Record<string, unknown> | null;
@@ -170,7 +193,10 @@ function EarningsTab() {
         </CardHeader>
         <CardContent className="space-y-3">
           {incentives.error ? (
-            <ErrorState message={incentives.error.message} />
+            <ErrorState
+              message={incentives.error.message}
+              onRetry={() => void incentives.refetch()}
+            />
           ) : incentiveRows.length === 0 ? (
             <p className="text-sm text-slate-400">
               No incentives earned yet. Incentives appear here as they are
@@ -245,7 +271,12 @@ function SettlementsTab() {
     );
   }
   if (settlements.error)
-    return <ErrorState message={settlements.error.message} />;
+    return (
+      <ErrorState
+        message={settlements.error.message}
+        onRetry={() => void settlements.refetch()}
+      />
+    );
 
   const rows = (settlements.data ?? []) as Array<Record<string, unknown>>;
   const totals = rows.reduce<{ total: number; paid: number }>(
@@ -527,7 +558,10 @@ function VehicleRentalTab() {
         </CardHeader>
         <CardContent className="space-y-4">
           {offers.error ? (
-            <ErrorState message={offers.error.message} />
+            <ErrorState
+              message={offers.error.message}
+              onRetry={() => void offers.refetch()}
+            />
           ) : (offers.data ?? []).length === 0 ? (
             <p className="text-sm text-slate-400">
               No vehicles are on offer right now. Offers appear here when fleet
@@ -587,7 +621,10 @@ function VehicleRentalTab() {
         </CardHeader>
         <CardContent className="space-y-4">
           {contracts.error ? (
-            <ErrorState message={contracts.error.message} />
+            <ErrorState
+              message={contracts.error.message}
+              onRetry={() => void contracts.refetch()}
+            />
           ) : contractRows.length === 0 ? (
             <p className="text-sm text-slate-400">
               You have no rental contracts yet. Request a vehicle from an open
@@ -675,7 +712,10 @@ function VehicleRentalTab() {
         </CardHeader>
         <CardContent>
           {charges.error ? (
-            <ErrorState message={charges.error.message} />
+            <ErrorState
+              message={charges.error.message}
+              onRetry={() => void charges.refetch()}
+            />
           ) : chargeRows.length === 0 ? (
             <p className="text-sm text-slate-400">
               No rental charges yet. A pending activation charge is written
@@ -791,7 +831,10 @@ function OffersTab() {
         </CardHeader>
         <CardContent className="space-y-4">
           {offers.error ? (
-            <ErrorState message={offers.error.message} />
+            <ErrorState
+              message={offers.error.message}
+              onRetry={() => void offers.refetch()}
+            />
           ) : offerRows.length === 0 ? (
             <p className="text-sm text-slate-400">
               No dispatch offers right now. When dispatch offers you a trip,
@@ -922,11 +965,22 @@ export default function CourierPortal() {
         ) : driverProfile.error ? (
           <div className="flex items-center gap-3 border border-amber-500/30 bg-amber-500/5 p-4 text-sm text-amber-100">
             <CircleAlert className="h-5 w-5 shrink-0 text-amber-300" />
-            <p>
-              {isUnlinkedError(driverProfile.error.message)
-                ? "Your sign-in is not linked to a courier record yet, so earnings and settlements stay empty until linking is completed by support."
-                : `Courier profile lookup failed: ${driverProfile.error.message}`}
-            </p>
+            <div className="flex-1">
+              <p>
+                {isUnlinkedError(driverProfile.error.message)
+                  ? "Your sign-in is not linked to a courier record yet, so earnings and settlements stay empty until linking is completed by support."
+                  : `Courier profile lookup failed: ${driverProfile.error.message}`}
+              </p>
+              {!isUnlinkedError(driverProfile.error.message) ? (
+                <button
+                  type="button"
+                  onClick={() => void driverProfile.refetch()}
+                  className="mt-2 inline-flex rounded-full border border-amber-400/40 bg-amber-500/10 px-3 py-1 text-xs font-medium text-amber-100 transition hover:bg-amber-500/20"
+                >
+                  Retry
+                </button>
+              ) : null}
+            </div>
           </div>
         ) : null}
 

@@ -3,6 +3,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link, Route, Switch } from "wouter";
 
 import DashboardLayout from "@/components/DashboardLayout";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import Analytics from "@/pages/Analytics";
 import DriverMobility from "@/pages/DriverMobility";
 import DriverOfferFairness from "@/pages/DriverOfferFairness";
@@ -33,6 +34,7 @@ import CourierTripRadar from "@/pages/CourierTripRadar";
 import TrustConsole from "@/pages/TrustConsole";
 import ExperimentConsole from "@/pages/ExperimentConsole";
 import MerchantAdsStudio from "@/pages/MerchantAdsStudio";
+import MerchantCommercePortal from "@/pages/MerchantCommercePortal";
 import PhoneOrderingStudio from "@/pages/PhoneOrderingStudio";
 import TenantAdminActions from "@/pages/TenantAdminActions";
 import SecurityProfilePage, {
@@ -539,7 +541,8 @@ function NotFoundPage() {
 
 export default function App() {
   return (
-    <Switch>
+    <ErrorBoundary variant="app" section="application">
+      <Switch>
       <Route path="/" component={HomePage} />
       <Route path="/portal" component={PortalPage} />
       <Route path="/signup" component={SignupPage} />
@@ -580,6 +583,7 @@ export default function App() {
       <Route path="/tableside-commerce" component={TablesideCommerce} />
       <Route path="/white-label-apps" component={WhiteLabelApps} />
       <Route path="/merchant-channels" component={MerchantChannels} />
+      <Route path="/merchant-commerce" component={MerchantCommercePortal} />
       <Route path="/service-recovery" component={ServiceRecovery} />
       <Route path="/consoles/merchant-hub" component={MerchantHub} />
       <Route path="/consoles/checkout" component={CheckoutInsights} />
@@ -593,7 +597,8 @@ export default function App() {
       <Route path="/mobility/business" component={BusinessTravel} />
       <Route path="/mobility/freight" component={FreightOperations} />
       <Route path="/mobility/healthcare" component={HealthcareTransport} />
-      <Route component={NotFoundPage} />
-    </Switch>
+        <Route component={NotFoundPage} />
+      </Switch>
+    </ErrorBoundary>
   );
 }

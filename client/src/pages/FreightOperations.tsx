@@ -1,6 +1,7 @@
 import { CircleAlert, Container, Truck } from "lucide-react";
 
 import DashboardLayout from "@/components/DashboardLayout";
+import { QueryErrorState } from "@/components/QueryState";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { trpc } from "@/lib/trpc";
 
@@ -35,10 +36,13 @@ export default function FreightOperations() {
         {freight.isLoading ? (
           <p className="text-sm text-slate-400">Loading freight operations…</p>
         ) : null}
-        {freight.error ? (
-          <p className="border border-red-500/40 bg-red-500/10 p-4 text-sm text-red-100">
-            {freight.error.message}
-          </p>
+        {freight.isError ? (
+          <QueryErrorState
+            resource="freight operations data"
+            message={freight.error.message}
+            onRetry={() => void freight.refetch()}
+            retrying={freight.isRefetching}
+          />
         ) : null}
 
         {data ? (
