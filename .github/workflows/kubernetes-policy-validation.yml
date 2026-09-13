@@ -1,0 +1,67 @@
+name: Kubernetes Policy Validation
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "deploy/kubernetes/**"
+      - "policy/**"
+      - "scripts/ci/**"
+      - ".github/workflows/kubernetes-policy-validation.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  kubernetes-policy:
+    name: Render and validate Kubernetes templates
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v4
+        with:
+          version: v1.30.0
+
+      - name: Set up Go for Conftest
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22.x"
+
+      - name: Install pinned Conftest
+        shell: bash
+        run: |
+          set -euo pipefail
+          export GOBIN="$RUNNER_TEMP/bin"
+          export GOTOOLCHAIN=go1.26.8
+          mkdir -p "$GOBIN"
+          go install github.com/open-policy-agent/conftest@v0.56.0
+          "$GOBIN/conftest" --version
+          echo "$GOBIN" >> "$GITHUB_PATH"
+
+      - name: Render source templates
+        shell: bash
+        run: |
+          set -euo pipefail
+          kubectl kustomize deploy/kubernetes > "$RUNNER_TEMP/workloads-template.yaml"
+
+      - name: Enforce source-template policy
+        shell: bash
+        run: |
+          set -euo pipefail
+          conftest test --output github \
+            --policy policy/kubernetes-template \
+            "$RUNNER_TEMP/workloads-template.yaml"
+          conftest test --combine --output github \
+            --policy policy/kubernetes-template \
+            "$RUNNER_TEMP/workloads-template.yaml"
+
+      - name: Verify hardening policy unit fixtures
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/ci/test-kubernetes-hardening-policy.sh
