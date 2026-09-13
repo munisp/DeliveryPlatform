@@ -6,6 +6,7 @@ import DashboardLayout from "@/components/DashboardLayout";
 import Analytics from "@/pages/Analytics";
 import DriverMobility from "@/pages/DriverMobility";
 import DriverOfferFairness from "@/pages/DriverOfferFairness";
+import CourierPortal from "@/pages/CourierPortal";
 import FieldServiceOperations from "@/pages/FieldServiceOperations";
 import DeveloperPlatform from "@/pages/DeveloperPlatform";
 import CommerceFulfillment from "@/pages/CommerceFulfillment";
@@ -560,6 +561,7 @@ export default function App() {
       <Route path="/analytics" component={Analytics} />
       <Route path="/driver-mobility" component={DriverMobility} />
       <Route path="/driver-offers" component={DriverOfferFairness} />
+      <Route path="/courier-portal" component={CourierPortal} />
       <Route path="/field-service" component={FieldServiceOperations} />
       <Route path="/vehicle-access" component={VehicleAccessOperations} />
       <Route path="/verification" component={StakeholderVerification} />
