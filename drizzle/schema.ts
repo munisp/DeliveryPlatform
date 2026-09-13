@@ -10,6 +10,7 @@ import {
   serial,
   text,
   timestamp,
+  uniqueIndex,
   varchar,
 } from "drizzle-orm/pg-core";
 
@@ -238,8 +239,12 @@ export const loyaltyTransactions = pgTable("loyalty_transactions", {
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
-// Driver payout settlements. No in-repo DDL; columns mirror the raw SQL in
-// server/db.ts (generateMonthlySettlement / approveSettlement / processSettlement).
+// Driver payout settlements. Base table has no in-repo DDL; columns mirror the
+// raw SQL in server/db.ts (generateMonthlySettlement / approveSettlement /
+// processSettlement). The unique index comes from
+// drizzle/0077_settlement_payout_uniqueness.sql and guarantees one settlement
+// per driver + period window (generateMonthlySettlement inserts with
+// ON CONFLICT DO NOTHING).
 export const payoutSettlements = pgTable("payout_settlements", {
   id: serial("id").primaryKey(),
   driverId: integer("driver_id").notNull(),
@@ -256,7 +261,9 @@ export const payoutSettlements = pgTable("payout_settlements", {
   paymentReference: varchar("payment_reference", { length: 160 }),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
-});
+}, (table) => [
+  uniqueIndex("payout_settlements_driver_period_unique").on(table.driverId, table.periodStart, table.periodEnd),
+]);
 
 // Consumer-side idempotency ledger for at-least-once broker event processing.
 // Columns mirror drizzle/0072_consumer_processed_events.sql.

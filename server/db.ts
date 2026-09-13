@@ -2386,9 +2386,28 @@ async function awardPointsTransactional(
   return account;
 }
 
+// Settlement windows are UTC half-open intervals [periodStart, periodEnd):
+// periodStart is the first instant of the month (UTC) and periodEnd is the
+// first instant of the following month (UTC, exclusive). Computed with
+// Date.UTC so results are independent of the server-local timezone.
+export function computeSettlementPeriodUtc(month: number, year: number): { periodStart: Date; periodEnd: Date } {
+  if (!Number.isInteger(month) || month < 1 || month > 12) {
+    throw new Error(`Invalid settlement month: ${month}`);
+  }
+  if (!Number.isInteger(year)) {
+    throw new Error(`Invalid settlement year: ${year}`);
+  }
+  return {
+    periodStart: new Date(Date.UTC(year, month - 1, 1)),
+    periodEnd: new Date(Date.UTC(year, month, 1)),
+  };
+}
+
 export async function generateMonthlySettlement(driverId: number, month: number, year: number, idempotencyKey?: string) {
   await getDb();
   if (!_pool) return null;
+
+  const { periodStart, periodEnd } = computeSettlementPeriodUtc(month, year);
 
   const client = await _pool.connect();
   let idempotencyClaimed = false;
@@ -2407,8 +2426,15 @@ export async function generateMonthlySettlement(driverId: number, month: number,
       return idempotency.response;
     }
 
-    const periodStart = new Date(year, month - 1, 1);
-    const periodEnd = new Date(year, month, 0);
+    // Defense in depth against concurrent settlement workers/retries: a
+    // transaction-scoped advisory lock keyed on driver + period serializes
+    // settle operations for the same window. The unique index on
+    // (driver_id, period_start, period_end) plus ON CONFLICT DO NOTHING below
+    // remains the hard guarantee if the lock is ever bypassed.
+    await client.query(
+      `SELECT pg_advisory_xact_lock(hashtext($1))`,
+      [`settlement:${driverId}:${periodStart.toISOString()}:${periodEnd.toISOString()}`],
+    );
 
     const existingSettlement = await client.query<any>(
       `SELECT * FROM payout_settlements
@@ -2430,10 +2456,14 @@ export async function generateMonthlySettlement(driverId: number, month: number,
        WHERE driver_id = $1
          AND status = 'delivered'
          AND actual_delivery_time >= $2
-         AND actual_delivery_time <= $3`,
+         AND actual_delivery_time < $3`,
       [driverId, periodStart, periodEnd]
     );
 
+    // Aggregate over GROUPed/filtered rows: FOR UPDATE is invalid (and
+    // ignored/rejected by PostgreSQL) here. Concurrency safety comes from the
+    // advisory lock above and the unique index below; the incentive rows are
+    // claimed by the UPDATE ... settlement_id IS NULL that follows.
     const bonusResult = await client.query<any>(
       `SELECT COALESCE(SUM(amount), 0) as bonus_amount
        FROM driver_incentives
@@ -2441,8 +2471,7 @@ export async function generateMonthlySettlement(driverId: number, month: number,
          AND status = 'approved'
          AND settlement_id IS NULL
          AND earned_at >= $2
-         AND earned_at <= $3
-       FOR UPDATE`,
+         AND earned_at < $3`,
       [driverId, periodStart, periodEnd]
     );
 
@@ -2454,9 +2483,26 @@ export async function generateMonthlySettlement(driverId: number, month: number,
       `INSERT INTO payout_settlements
        (driver_id, period_start, period_end, base_earnings, bonus_amount, total_amount, status)
        VALUES ($1, $2, $3, $4, $5, $6, $7)
+       ON CONFLICT (driver_id, period_start, period_end) DO NOTHING
        RETURNING *`,
       [driverId, periodStart, periodEnd, baseEarnings, bonusAmount, totalAmount, 'pending']
     );
+
+    if (result.rows.length === 0) {
+      // A concurrent settle operation already inserted this window: treat as
+      // already-settled and skip the payout leg entirely (idempotent retry).
+      const settled = await client.query<any>(
+        `SELECT * FROM payout_settlements
+         WHERE driver_id = $1
+           AND period_start = $2
+           AND period_end = $3`,
+        [driverId, periodStart, periodEnd]
+      );
+      const settledRow = settled.rows[0] ?? null;
+      await finalizeFinanceIdempotentOperation(client, 'settlement.generate_monthly', idempotencyKey, 'completed', settledRow);
+      await client.query('COMMIT');
+      return settledRow;
+    }
 
     await client.query<any>(
       `UPDATE driver_incentives
@@ -2465,7 +2511,7 @@ export async function generateMonthlySettlement(driverId: number, month: number,
          AND status = 'approved'
          AND settlement_id IS NULL
          AND earned_at >= $3
-         AND earned_at <= $4`,
+         AND earned_at < $4`,
       [result.rows[0].id, driverId, periodStart, periodEnd]
     );
 
@@ -2683,6 +2729,146 @@ export async function processSettlement(
         client,
         'settlement.process',
         idempotencyKey,
+        'failed',
+        { error: error instanceof Error ? error.message : String(error) },
+      ).catch(() => undefined);
+    }
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+// Deterministic refund idempotency key derived from order + amount + reason,
+// used when the caller does not supply one. transactions.transaction_id is
+// UNIQUE, so this key doubles as the insert guard against double-crediting.
+export function deriveRefundIdempotencyKey(orderId: number, amount: string, reason: string): string {
+  return `refund:${createHash('sha256').update(`order:${orderId}|amount:${amount}|reason:${reason}`).digest('hex')}`;
+}
+
+// Refund an order payment exactly once. Retries (client or worker) with the
+// same idempotency key — client-supplied or derived from order+amount+reason —
+// replay the original refund instead of double-crediting the customer.
+// The customer notification is NOT sent inline: a notification event is
+// written to the funds outbox in the SAME transaction as the refund ledger
+// row and the order state change, so a notification-dispatch failure can
+// never leave committed state without its notification (or vice versa).
+export async function refundOrderPayment(
+  orderId: number,
+  amount: number | string,
+  reason: string,
+  idempotencyKey?: string,
+) {
+  await getDb();
+  if (!_pool) return null;
+
+  const parsedAmount = typeof amount === 'number' ? amount : parseFloat(String(amount));
+  if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) {
+    throw new Error('Refund amount must be a positive number');
+  }
+  const amountText = parsedAmount.toFixed(2);
+  const trimmedReason = String(reason ?? '').trim();
+  if (!trimmedReason) {
+    throw new Error('Refund reason is required');
+  }
+
+  const refundKey = idempotencyKey?.trim() || deriveRefundIdempotencyKey(orderId, amountText, trimmedReason);
+
+  const client = await _pool.connect();
+  let idempotencyClaimed = false;
+  try {
+    await client.query('BEGIN');
+
+    const idempotency = await beginFinanceIdempotentOperation(
+      client,
+      'refund.order',
+      refundKey,
+      { orderId, amount: amountText, reason: trimmedReason },
+    );
+    idempotencyClaimed = Boolean(idempotency.normalizedKey) && !idempotency.replay;
+    if (idempotency.replay) {
+      await client.query('COMMIT');
+      return idempotency.response;
+    }
+
+    // Serialize refund attempts for this order+key across workers.
+    await client.query(
+      `SELECT pg_advisory_xact_lock(hashtext($1))`,
+      [`refund:${orderId}:${refundKey}`],
+    );
+
+    const orderResult = await client.query<any>(
+      `SELECT id, customer_id, status FROM orders WHERE id = $1 FOR UPDATE`,
+      [orderId],
+    );
+    const order = orderResult.rows[0];
+    if (!order) {
+      throw new Error(`Order ${orderId} not found`);
+    }
+
+    const insertResult = await client.query<any>(
+      `INSERT INTO transactions
+       (transaction_id, order_id, type, amount, currency, status, recipient_type, recipient_id, metadata)
+       VALUES ($1, $2, 'refund', $3, 'EUR', 'completed', 'customer', $4, $5)
+       ON CONFLICT (transaction_id) DO NOTHING
+       RETURNING *`,
+      [refundKey, orderId, amountText, order.customer_id ?? null, JSON.stringify({ reason: trimmedReason })],
+    );
+
+    let refundRow = insertResult.rows[0];
+    if (!refundRow) {
+      // transaction_id conflict: this refund was already applied by an
+      // earlier attempt — replay it instead of crediting twice.
+      const existingRefund = await client.query<any>(
+        `SELECT * FROM transactions WHERE transaction_id = $1`,
+        [refundKey],
+      );
+      refundRow = existingRefund.rows[0] ?? null;
+    } else {
+      await client.query<any>(
+        `UPDATE orders
+         SET status = 'refunded', updated_at = NOW()
+         WHERE id = $1 AND status <> 'refunded'`,
+        [orderId],
+      );
+
+      // Transactional outbox: notification dispatched asynchronously by the
+      // outbox worker; ON CONFLICT guards against duplicate dispatch on retry.
+      await client.query<any>(
+        `INSERT INTO mojaloop_funds_outbox
+         (event_id, destination, idempotency_key, workflow_id, workflow_type, resource_id, step, workflow_status, payload)
+         VALUES ($1, 'notification', $2, $3, 'refund', $4, 'notify_customer', 'completed', $5::jsonb)
+         ON CONFLICT (destination, idempotency_key) DO NOTHING`,
+        [
+          `refund-notify:${refundKey}`,
+          `refund-notify:${refundKey}`,
+          `refund-order:${orderId}`,
+          String(orderId),
+          JSON.stringify({
+            orderId,
+            transactionId: refundRow.id ?? null,
+            customerId: order.customer_id ?? null,
+            amount: amountText,
+            currency: 'EUR',
+            reason: trimmedReason,
+            notificationType: 'refund_completed',
+          }),
+        ],
+      );
+    }
+
+    await finalizeFinanceIdempotentOperation(client, 'refund.order', refundKey, 'completed', refundRow);
+    await client.query('COMMIT');
+    return refundRow;
+  } catch (error) {
+    try {
+      await client.query('ROLLBACK');
+    } catch {}
+    if (idempotencyClaimed) {
+      await finalizeFinanceIdempotentOperation(
+        client,
+        'refund.order',
+        refundKey,
         'failed',
         { error: error instanceof Error ? error.message : String(error) },
       ).catch(() => undefined);
@@ -6876,6 +7062,8 @@ export async function getServiceRecoverySummary(limit = 8) {
   };
 }
 
+// Fail-fast: any failed aggregate query rejects the whole snapshot instead of
+// returning fabricated zero balances for financial totals.
 export async function getFundsReconciliationSnapshot() {
   await getDb();
   if (!_pool) return null;
@@ -6926,14 +7114,14 @@ export async function getFundsReconciliationSnapshot() {
         COUNT(*) FILTER (WHERE balance::numeric < 0) AS negative_wallets,
         MAX(updated_at) AS last_wallet_event
       FROM wallets
-    `).catch(() => ({ rows: [{ wallet_count: 0, total_wallet_balance: 0, negative_wallets: 0, last_wallet_event: null }] })),
+    `),
     _pool.query<any>(`
       SELECT
         COUNT(*) FILTER (WHERE type IN ('refund', 'claim') AND status IN ('open', 'in_progress')) AS open_dispute_like_tickets,
         COUNT(*) FILTER (WHERE priority IN ('urgent', 'critical') AND status IN ('open', 'in_progress')) AS critical_dispute_tickets,
         MAX(COALESCE(resolved_at, updated_at, created_at)) AS last_dispute_event
       FROM support_tickets
-    `).catch(() => ({ rows: [{ open_dispute_like_tickets: 0, critical_dispute_tickets: 0, last_dispute_event: null }] })),
+    `),
     _pool.query<any>(`
       SELECT
         COALESCE(SUM(CASE WHEN source = 'merchant' THEN amount ELSE 0 END), 0) AS merchant_reserves_held,
@@ -6950,7 +7138,7 @@ export async function getFundsReconciliationSnapshot() {
         FROM treasury_reserves
         WHERE status IN ('held', 'active')
       ) reserves
-    `).catch(() => ({ rows: [{ merchant_reserves_held: 0, treasury_reserves_held: 0, merchant_reserve_entries: 0, treasury_reserve_entries: 0, last_reserve_event: null }] })),
+    `),
     _pool.query<any>(`
       SELECT
         (SELECT COUNT(*) FROM mojaloop_transfers) AS transfer_count,
@@ -6968,7 +7156,7 @@ export async function getFundsReconciliationSnapshot() {
           COALESCE((SELECT MAX(updated_at) FROM mojaloop_refunds), 'epoch'::timestamptz),
           COALESCE((SELECT MAX(created_at) FROM mojaloop_reconciliation_audits), 'epoch'::timestamptz)
         ) AS last_mojaloop_event
-    `).catch(() => ({ rows: [{ transfer_count: 0, gross_transfer_amount: 0, settled_transfer_count: 0, refund_count: 0, refunded_amount: 0, inconsistent_audits: 0, ledger_balance_cents: 0, ledger_transfer_entries: 0, ledger_refund_entries: 0, open_workflows: 0, last_mojaloop_event: null }] })),
+    `),
   ]);
 
   const transactions = transactionResult.rows[0] || {};
