@@ -1,0 +1,7 @@
+=== live Kafka rehearsal 2026-09-13T03:03:21Z ===
+broker: 127.0.0.1:19092 (Apache Kafka 3.9.1 KRaft single node)
+=== RUN   TestFundsWorkflowEventLiveKafkaRehearsal
+    funds_kafka_live_rehearsal_test.go:112: live broker round-trip verified: topic=switchos.funds.rehearsal partition=0 offset=1 key=live-kafka-rehearsal-20260913030325
+--- PASS: TestFundsWorkflowEventLiveKafkaRehearsal (2.31s)
+PASS
+ok  	mojaloop	2.356s

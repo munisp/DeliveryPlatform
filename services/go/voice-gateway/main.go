@@ -15,8 +15,10 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	_ "github.com/lib/pq"
@@ -167,8 +169,11 @@ func main() {
 		log.Fatalf("initialize voice gateway persistence: %v", err)
 	}
 
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	if strings.Contains(strings.ToLower(service.telephonyMode), "audiosocket") {
-		go service.runAudioSocketListener()
+		go service.runAudioSocketListener(ctx)
 	}
 
 	mux := http.NewServeMux()
@@ -183,9 +188,27 @@ func main() {
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
-	log.Printf("Starting LongCat voice gateway on %s:%s", bindHost, port)
-	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		log.Fatal(err)
+	serverErrors := make(chan error, 1)
+	go func() {
+		log.Printf("Starting LongCat voice gateway on %s:%s", bindHost, port)
+		serverErrors <- server.ListenAndServe()
+	}()
+
+	select {
+	case err := <-serverErrors:
+		if err != nil && err != http.ErrServerClosed {
+			log.Fatal(err)
+		}
+	case <-ctx.Done():
+		log.Printf("shutdown signal received; draining in-flight requests")
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+		defer cancel()
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			log.Printf("graceful shutdown failed: %v", err)
+		}
+		if err := <-serverErrors; err != nil && err != http.ErrServerClosed {
+			log.Fatal(err)
+		}
 	}
 }
 
@@ -303,16 +326,24 @@ func (s *GatewayService) streamEventHandler(w http.ResponseWriter, r *http.Reque
 	})
 }
 
-func (s *GatewayService) runAudioSocketListener() {
+func (s *GatewayService) runAudioSocketListener(ctx context.Context) {
 	listener, err := net.Listen("tcp", s.audioSocketAddr)
 	if err != nil {
 		log.Printf("[LongCat Voice Gateway] AudioSocket listener disabled: %v", err)
 		return
 	}
+	go func() {
+		<-ctx.Done()
+		_ = listener.Close()
+	}()
 	log.Printf("[LongCat Voice Gateway] AudioSocket-style listener active on %s", s.audioSocketAddr)
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
+			if ctx.Err() != nil {
+				log.Printf("[LongCat Voice Gateway] AudioSocket listener shutting down")
+				return
+			}
 			log.Printf("[LongCat Voice Gateway] Accept failed: %v", err)
 			continue
 		}

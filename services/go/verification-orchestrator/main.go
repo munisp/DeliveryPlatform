@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"crypto/subtle"
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
@@ -13,9 +14,13 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
+	"syscall"
 	"time"
 
 	_ "github.com/lib/pq"
@@ -30,6 +35,13 @@ type config struct {
 	allowSynthetic   bool
 	providerSecrets  map[string]string
 	providerActorID  int
+	s3Endpoint       string
+	s3Bucket         string
+	s3Region         string
+	s3AccessKey      string
+	s3SecretKey      string
+	s3SessionToken   string
+	maxObjectBytes   int64
 }
 
 type claimedJob struct {
@@ -65,6 +77,51 @@ func required(name string) string {
 	return value
 }
 
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}
+
+// validateS3Endpoint enforces TLS for object-store endpoints: http:// is only
+// permitted for explicitly local endpoints (localhost / 127.0.0.1 / ::1) used
+// with a development MinIO.
+func validateS3Endpoint(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	endpoint, err := url.Parse(raw)
+	if err != nil || endpoint.Scheme == "" || endpoint.Host == "" {
+		log.Fatalf("S3_ENDPOINT must be a valid URL, got %q", raw)
+	}
+	switch endpoint.Scheme {
+	case "https":
+	case "http":
+		if host := endpoint.Hostname(); host != "localhost" && host != "127.0.0.1" && host != "::1" {
+			log.Fatalf("S3_ENDPOINT must use https unless it targets localhost/127.0.0.1, got %q", raw)
+		}
+	default:
+		log.Fatalf("S3_ENDPOINT must use http or https scheme, got %q", raw)
+	}
+	return raw
+}
+
+func loadMaxObjectBytes() int64 {
+	raw := strings.TrimSpace(os.Getenv("VERIFICATION_MAX_OBJECT_BYTES"))
+	if raw == "" {
+		return 64 << 20
+	}
+	parsed, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || parsed <= 0 {
+		log.Fatal("VERIFICATION_MAX_OBJECT_BYTES must be a positive integer")
+	}
+	return parsed
+}
+
 func loadConfig() config {
 	raw := os.Getenv("VERIFICATION_SYNTHETIC_OBJECTS_JSON")
 	objects := map[string]string{}
@@ -76,11 +133,28 @@ func loadConfig() config {
 		log.Fatal("VERIFICATION_PROVIDER_WEBHOOK_SECRETS_JSON must be an object map")
 	}
 	providerActorID, _ := strconv.Atoi(os.Getenv("VERIFICATION_PROVIDER_ACTOR_ID"))
-	return config{databaseURL: required("DATABASE_URL"), internalToken: required("INTERNAL_SERVICE_TOKEN"), intelligenceURL: required("VERIFICATION_INTELLIGENCE_URL"), policyURL: required("VERIFICATION_POLICY_URL"), syntheticObjects: objects, allowSynthetic: os.Getenv("VERIFICATION_ALLOW_SYNTHETIC_OBJECTS") == "true", providerSecrets: providerSecrets, providerActorID: providerActorID}
+	return config{
+		databaseURL:      required("DATABASE_URL"),
+		internalToken:    required("INTERNAL_SERVICE_TOKEN"),
+		intelligenceURL:  required("VERIFICATION_INTELLIGENCE_URL"),
+		policyURL:        required("VERIFICATION_POLICY_URL"),
+		syntheticObjects: objects,
+		allowSynthetic:   os.Getenv("VERIFICATION_ALLOW_SYNTHETIC_OBJECTS") == "true",
+		providerSecrets:  providerSecrets,
+		providerActorID:  providerActorID,
+		s3Endpoint:       validateS3Endpoint(os.Getenv("S3_ENDPOINT")),
+		s3Bucket:         strings.TrimSpace(os.Getenv("S3_BUCKET")),
+		s3Region:         firstNonEmpty(os.Getenv("S3_REGION"), os.Getenv("AWS_REGION"), os.Getenv("AWS_DEFAULT_REGION"), "us-east-1"),
+		s3AccessKey:      strings.TrimSpace(os.Getenv("AWS_ACCESS_KEY_ID")),
+		s3SecretKey:      strings.TrimSpace(os.Getenv("AWS_SECRET_ACCESS_KEY")),
+		s3SessionToken:   strings.TrimSpace(os.Getenv("AWS_SESSION_TOKEN")),
+		maxObjectBytes:   loadMaxObjectBytes(),
+	}
 }
 
 func requireInternal(r *http.Request, token string) bool {
-	return r.Header.Get("X-Internal-Service-Token") == token
+	provided := strings.TrimSpace(r.Header.Get("X-Internal-Service-Token"))
+	return len(provided) == len(token) && subtle.ConstantTimeCompare([]byte(provided), []byte(token)) == 1
 }
 
 func postJSON(ctx context.Context, client *http.Client, url, token string, in any, out any) error {
@@ -116,7 +190,55 @@ func syntheticObject(cfg config, objectKey string) ([]byte, error) {
 	return base64.StdEncoding.DecodeString(encoded)
 }
 
-func runOnce(ctx context.Context, db *sql.DB, cfg config, client *http.Client) (int, error) {
+// orchestratorMetrics exposes Prometheus-style counters on /metrics.
+type orchestratorMetrics struct {
+	mu                  sync.Mutex
+	syntheticRetrievals uint64
+}
+
+func (m *orchestratorMetrics) incSynthetic() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.syntheticRetrievals++
+}
+
+func (m *orchestratorMetrics) serveHTTP(w http.ResponseWriter, _ *http.Request) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+	_, _ = io.WriteString(w, "# HELP verification_synthetic_retrievals_total Evidence retrievals served from the explicitly opted-in synthetic object store (tests/dev only).\n")
+	_, _ = io.WriteString(w, "# TYPE verification_synthetic_retrievals_total counter\n")
+	_, _ = fmt.Fprintf(w, "verification_synthetic_retrievals_total %d\n", m.syntheticRetrievals)
+}
+
+// retrieveEvidence fetches the evidence bytes for a claimed job and enforces
+// the SHA-256 digest recorded on the evidence row. Synthetic objects are used
+// only when the mode is explicitly enabled and the key is allowlisted; every
+// synthetic retrieval is logged with a distinct marker and counted.
+func retrieveEvidence(ctx context.Context, cfg config, client *http.Client, metrics *orchestratorMetrics, job claimedJob) ([]byte, error) {
+	var body []byte
+	if _, synthetic := cfg.syntheticObjects[job.ObjectKey]; synthetic && cfg.allowSynthetic {
+		metrics.incSynthetic()
+		log.Printf(`{"service":"verification-orchestrator","event":"synthetic_retrieval","job_id":"%s","evidence_id":"%s","object_key":"%s"}`, job.JobID, job.EvidenceID, job.ObjectKey)
+		syntheticBody, err := syntheticObject(cfg, job.ObjectKey)
+		if err != nil {
+			return nil, err
+		}
+		body = syntheticBody
+	} else {
+		fetched, err := fetchEvidenceObject(ctx, cfg, client, job.ObjectKey)
+		if err != nil {
+			return nil, err
+		}
+		body = fetched
+	}
+	if err := verifyDigest(body, job.SHA256Hex); err != nil {
+		return nil, err
+	}
+	return body, nil
+}
+
+func runOnce(ctx context.Context, db *sql.DB, cfg config, client *http.Client, metrics *orchestratorMetrics) (int, error) {
 	rows, err := db.QueryContext(ctx, `SELECT job_id,case_id,evidence_id,processor,evidence_kind,object_key,content_type,sha256_hex,capture_metadata,attempt_count,claim_token FROM verification.claim_processing_jobs($1)`, 20)
 	if err != nil {
 		return 0, err
@@ -134,9 +256,14 @@ func runOnce(ctx context.Context, db *sql.DB, cfg config, client *http.Client) (
 		return 0, err
 	}
 	for _, job := range jobs {
-		body, retrievalErr := syntheticObject(cfg, job.ObjectKey)
-		state, outcome, outputDigest, detail := "failed", "object_retrieval_unavailable", (*string)(nil), "synthetic object retrieval disabled"
-		if retrievalErr == nil {
+		body, retrievalErr := retrieveEvidence(ctx, cfg, client, metrics, job)
+		state, outcome, outputDigest, detail := "failed", "object_retrieval_unavailable", (*string)(nil), ""
+		if retrievalErr != nil {
+			detail = retrievalErr.Error()
+			if errors.Is(retrievalErr, errDigestMismatch) {
+				outcome = "digest_mismatch"
+			}
+		} else {
 			request := map[string]any{"processor": job.Processor, "evidence_kind": job.EvidenceKind, "content_type": job.ContentType, "sha256_hex": job.SHA256Hex, "object_body_base64": base64.StdEncoding.EncodeToString(body), "capture_metadata": job.CaptureMetadata}
 			if job.Processor == "liveness" {
 				request = map[string]any{"processor": "liveness", "challenge_id": "local-challenge-0001", "challenge_nonce": "synthetic-liveness-nonce-value", "expected_nonce_sha256": "", "capture_sha256": job.SHA256Hex, "frame_sha256": []string{job.SHA256Hex, job.SHA256Hex, job.SHA256Hex}, "captured_at_ms": 0, "expires_at_ms": 1, "device_attestation_ref": "synthetic-attestation-0001"}
@@ -220,7 +347,9 @@ func main() {
 	}
 	defer db.Close()
 	client := &http.Client{Timeout: 25 * time.Second}
+	metrics := &orchestratorMetrics{}
 	mux := http.NewServeMux()
+	mux.HandleFunc("/metrics", metrics.serveHTTP)
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.NotFound(w, r)
@@ -259,7 +388,7 @@ func main() {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		count, err := runOnce(r.Context(), db, cfg, client)
+		count, err := runOnce(r.Context(), db, cfg, client, metrics)
 		if err != nil {
 			log.Printf("verification run error: %v", err)
 			http.Error(w, "verification processing unavailable", http.StatusServiceUnavailable)
@@ -272,5 +401,31 @@ func main() {
 	if address == "" {
 		address = "127.0.0.1:8121"
 	}
-	log.Fatal(http.ListenAndServe(address, mux))
+	server := &http.Server{Addr: address, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	serverErrors := make(chan error, 1)
+	go func() {
+		log.Printf("verification orchestrator listening on %s", address)
+		serverErrors <- server.ListenAndServe()
+	}()
+
+	select {
+	case err := <-serverErrors:
+		if err != nil && err != http.ErrServerClosed {
+			log.Fatal(err)
+		}
+	case <-ctx.Done():
+		log.Printf("shutdown signal received; draining in-flight requests")
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			log.Printf("graceful shutdown failed: %v", err)
+		}
+		if err := <-serverErrors; err != nil && err != http.ErrServerClosed {
+			log.Fatal(err)
+		}
+	}
 }

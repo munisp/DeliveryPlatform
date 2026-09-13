@@ -1,0 +1,39 @@
+=== commit under test ===
+179b6e9 merge fix/w2-shutdown: resolve import conflict (keep sync + syscall)
+0
+0 broken
+
+=== GO: build/vet/test per module ===
+GO mojaloop: PASS
+GO verification-orchestrator: PASS
+GO inventory-control: PASS
+GO notification-dispatcher: PASS
+GO local-commerce-gateway: PASS
+GO ride-matching-worker: PASS
+GO voice-gateway: PASS
+GO vertical-provisioning: PASS
+GO resilience-circuit-breaker-alert-receiver: PASS
+
+=== RUST: cargo check + test (3 crates) ===
+RUST dispatch-optimizer: PASS
+RUST pricing-engine: PASS
+RUST verification-policy: PASS
+
+=== PYTHON: compile all ===
+PY: PASS
+
+=== TS: pnpm install (frozen) ===
+PNPM: PASS
+=== TS: tsc --noEmit ===
+TSC: PASS
+=== TS: vitest (non-e2e) ===
+      Tests  330 passed | 38 skipped (368)
+   Start at  11:10:15
+   Duration  25.92s (transform 2.00s, setup 0ms, collect 4.85s, tests 4.59s, environment 39ms, prepare 6.06s)
+
+=== TS: vite build ===
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
+✓ built in 37.95s
+VITE: PASS
+
+=== DONE 2026-09-13T03:11:21Z ===

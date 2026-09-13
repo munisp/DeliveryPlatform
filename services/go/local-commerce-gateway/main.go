@@ -3,13 +3,16 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	_ "github.com/lib/pq"
@@ -32,6 +35,10 @@ type planRequest struct {
 	Allocation        map[string]any `json:"allocation"`
 	Forecast          map[string]any `json:"forecast"`
 	PayloadMetrics    map[string]any `json:"payload_metrics"`
+	// IdempotencyKey is the partition-agnostic broker event id supplied by
+	// event-driven callers; when present the plan is recorded and published
+	// at most once per key.
+	IdempotencyKey string `json:"idempotency_key,omitempty"`
 }
 
 type planStep struct {
@@ -48,6 +55,7 @@ type planResponse struct {
 	ActionPlan []planStep     `json:"action_plan"`
 	Middleware map[string]any `json:"middleware"`
 	Metrics    map[string]any `json:"metrics"`
+	Idempotent bool           `json:"idempotent,omitempty"`
 }
 
 type logisticsControlTowerResponse struct {
@@ -96,8 +104,33 @@ func main() {
 	mux.HandleFunc("/logistics-control-tower", service.logisticsControlTowerHandler)
 
 	addr := fmt.Sprintf("%s:%s", getenv("BIND_HOST", "127.0.0.1"), getenv("PORT", "8114"))
-	log.Printf("local commerce gateway listening on %s", addr)
-	log.Fatal(http.ListenAndServe(addr, mux))
+	server := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	serverErrors := make(chan error, 1)
+	go func() {
+		log.Printf("local commerce gateway listening on %s", addr)
+		serverErrors <- server.ListenAndServe()
+	}()
+
+	select {
+	case err := <-serverErrors:
+		if err != nil && err != http.ErrServerClosed {
+			log.Fatalf("local commerce gateway server failed: %v", err)
+		}
+	case <-ctx.Done():
+		log.Printf("shutdown signal received; draining in-flight requests")
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			log.Printf("graceful shutdown failed: %v", err)
+		}
+		if err := <-serverErrors; err != nil && err != http.ErrServerClosed {
+			log.Fatalf("local commerce gateway server failed: %v", err)
+		}
+	}
 }
 
 func openDB(databaseURL string) *sql.DB {
@@ -198,7 +231,23 @@ func (s *gatewayService) planHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Consumer-side idempotency for at-least-once broker/event delivery: when
+	// the caller supplies an idempotency key (payload field or header), the
+	// event id becomes a deterministic digest of that key and the event row
+	// insert doubles as the processed-event claim. A redelivered key replays
+	// the stored plan and is not re-published to downstream middleware.
+	idempotencyKey := strings.TrimSpace(request.IdempotencyKey)
+	if idempotencyKey == "" {
+		idempotencyKey = strings.TrimSpace(r.Header.Get("X-Idempotency-Key"))
+	}
 	eventID := fmt.Sprintf("lcg-%d", time.Now().UnixNano())
+	if idempotencyKey != "" {
+		if len(idempotencyKey) > 160 {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "idempotency_key is too long", "trace_id": traceID})
+			return
+		}
+		eventID = idempotentEventID(idempotencyKey)
+	}
 	plan := buildPlan(request)
 	payloadMetrics := summarizeRequestPayload(request)
 	payload := map[string]any{
@@ -215,11 +264,39 @@ func (s *gatewayService) planHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	storeStartedAt := time.Now()
-	if err := s.storeEvent(eventID, "local_commerce_plan_created", request, payload); err != nil {
+	stored, err := s.storeEvent(eventID, "local_commerce_plan_created", request, payload)
+	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error(), "trace_id": traceID})
 		return
 	}
 	storeDuration := time.Since(storeStartedAt)
+	if !stored {
+		// Duplicate delivery of an idempotency-keyed event: replay the stored
+		// plan without re-publishing downstream.
+		storedPayload, loadErr := s.loadEventPayload(eventID)
+		if loadErr != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": loadErr.Error(), "trace_id": traceID})
+			return
+		}
+		storedPlan := decodeStoredPlan(storedPayload["action_plan"])
+		storedStrategy := "cross_category_concierge"
+		if request.Forecast != nil || request.Allocation != nil {
+			storedStrategy = "cross_category_concierge_with_retail_ops"
+		}
+		writeJSON(w, http.StatusOK, planResponse{
+			Service:    s.serviceName,
+			Strategy:   storedStrategy,
+			EventID:    eventID,
+			ActionPlan: storedPlan,
+			Middleware: s.middlewareStatus(),
+			Metrics: map[string]any{
+				"trace_id":   traceID,
+				"timings_ms": map[string]any{"store_event": roundDurationMs(storeDuration), "total": roundDurationMs(time.Since(startedAt))},
+			},
+			Idempotent: true,
+		})
+		return
+	}
 	publishMetrics := s.publishEnvelope(envelope{
 		Source:    s.serviceName,
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
@@ -276,14 +353,57 @@ func buildPlan(request planRequest) []planStep {
 	return steps
 }
 
-func (s *gatewayService) storeEvent(eventID string, eventType string, request planRequest, payload map[string]any) error {
+// storeEvent inserts the event row as the processed-event claim. It returns
+// stored=false (without error) when the event id was already recorded by an
+// earlier delivery of the same idempotency key.
+func (s *gatewayService) storeEvent(eventID string, eventType string, request planRequest, payload map[string]any) (bool, error) {
 	categories, _ := json.Marshal(request.Categories)
 	body, _ := json.Marshal(payload)
-	_, err := s.db.Exec(`
+	var storedID string
+	err := s.db.QueryRow(`
 		INSERT INTO local_commerce_gateway_events (event_id, event_type, customer_segment, city, categories, request_text, payload)
 		VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7::jsonb)
-	`, eventID, eventType, nullable(request.CustomerSegment), nullable(request.City), string(categories), request.Request, string(body))
-	return err
+		ON CONFLICT (event_id) DO NOTHING
+		RETURNING event_id
+	`, eventID, eventType, nullable(request.CustomerSegment), nullable(request.City), string(categories), request.Request, string(body)).Scan(&storedID)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (s *gatewayService) loadEventPayload(eventID string) (map[string]any, error) {
+	var raw string
+	if err := s.db.QueryRow(`SELECT payload::text FROM local_commerce_gateway_events WHERE event_id = $1`, eventID).Scan(&raw); err != nil {
+		return nil, err
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return nil, err
+	}
+	return payload, nil
+}
+
+// idempotentEventID maps a caller-supplied idempotency key to a deterministic,
+// bounded event id so redeliveries collide on the event-row primary key.
+func idempotentEventID(idempotencyKey string) string {
+	digest := sha256.Sum256([]byte("local-commerce-plan:" + idempotencyKey))
+	return fmt.Sprintf("lcg-idem-%x", digest[:16])
+}
+
+func decodeStoredPlan(raw any) []planStep {
+	encoded, err := json.Marshal(raw)
+	if err != nil {
+		return nil
+	}
+	var steps []planStep
+	if err := json.Unmarshal(encoded, &steps); err != nil {
+		return nil
+	}
+	return steps
 }
 
 func (s *gatewayService) countRecentPlans(window time.Duration) (int, error) {
