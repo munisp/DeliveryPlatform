@@ -12,6 +12,7 @@ import {
 import { systemRouter } from "./_core/systemRouter";
 import { mobilityRouter } from "./_core/mobilityRouter";
 import { consolesRouter } from "./_core/consolesRouter";
+import { compliancePacksRouter } from "./_core/compliancePacksRouter";
 import {
   getDriverMobilityWorkspace,
   getMerchantChannelWorkspace,
@@ -176,6 +177,7 @@ async function requireWorkspaceData<T>(
 
 export const appRouter = router({
   system: systemRouter,
+  compliancePacks: compliancePacksRouter,
 
   mobility: mobilityRouter,
   consoles: consolesRouter,
