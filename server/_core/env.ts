@@ -150,7 +150,9 @@ function parseBoundedInteger(
   if (!raw) return fallback;
   const parsed = Number.parseInt(raw, 10);
   if (!Number.isInteger(parsed) || parsed < minimum || parsed > maximum) {
-    throw new Error(`${name} must be an integer between ${minimum} and ${maximum}`);
+    throw new Error(
+      `${name} must be an integer between ${minimum} and ${maximum}`,
+    );
   }
   return parsed;
 }

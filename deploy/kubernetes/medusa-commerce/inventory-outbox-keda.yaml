@@ -1,0 +1,182 @@
+# Dedicated Medusa inventory-dispatcher monitoring and queue-driven scaling.
+# The metrics have no store, order, cart, SKU, reservation, or customer labels.
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: medusa-inventory-outbox
+  namespace: switchos
+  labels:
+    app.kubernetes.io/name: medusa-inventory-outbox
+    app.kubernetes.io/component: commerce-inventory-dispatch
+    app.kubernetes.io/part-of: deliveryplatform
+    release: prometheus
+spec:
+  namespaceSelector:
+    matchNames: [switchos]
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: medusa-inventory-outbox
+      app.kubernetes.io/component: commerce-inventory-dispatch
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: 15s
+      scrapeTimeout: 5s
+      authorization:
+        type: Bearer
+        credentials:
+          name: medusa-outbox-metrics
+          key: MEDUSA_OUTBOX_METRICS_TOKEN
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: medusa-inventory-outbox-autoscaling
+  namespace: switchos
+  labels:
+    app.kubernetes.io/name: medusa-inventory-outbox
+    app.kubernetes.io/component: commerce-inventory-dispatch
+    app.kubernetes.io/part-of: deliveryplatform
+    release: prometheus
+spec:
+  groups:
+    - name: deliveryplatform.medusa-inventory-outbox.autoscaling
+      interval: 15s
+      rules:
+        - record: deliveryplatform_medusa_inventory_outbox_ready_units_global
+          expr: max(deliveryplatform_medusa_inventory_outbox_ready_units)
+        - record: deliveryplatform_medusa_inventory_outbox_oldest_ready_seconds_global
+          expr: max(deliveryplatform_medusa_inventory_outbox_oldest_ready_seconds)
+        - alert: DeliveryPlatformMedusaInventoryMetricsUnavailable
+          expr: absent(deliveryplatform_medusa_inventory_outbox_ready_units_global)
+          for: 2m
+          labels:
+            severity: critical
+            component: commerce-inventory-dispatch
+          annotations:
+            summary: Medusa inventory outbox readiness metrics are unavailable
+            description: Do not increase inventory-dispatch capacity until the dispatcher, PostgreSQL, and metrics scrape path are restored.
+        - alert: DeliveryPlatformMedusaInventoryLeaseExpired
+          expr: max(deliveryplatform_medusa_inventory_outbox_expired_lease_units) > 0
+          for: 1m
+          labels:
+            severity: warning
+            component: commerce-inventory-dispatch
+          annotations:
+            summary: Medusa inventory dispatch lease expired
+            description: A prior dispatcher may have crashed or exceeded its bounded delivery lease; claim-token fencing prevents stale completion.
+        - alert: DeliveryPlatformMedusaInventoryOldestReadyHigh
+          expr: deliveryplatform_medusa_inventory_outbox_oldest_ready_seconds_global > 300
+          for: 5m
+          labels:
+            severity: warning
+            component: commerce-inventory-dispatch
+          annotations:
+            summary: Eligible Medusa inventory delivery has aged beyond five minutes
+            description: Check DeliveryPlatform ingress health, PostgreSQL headroom, and the dispatcher before raising capacity.
+        - alert: DeliveryPlatformMedusaInventoryStaleFenceElevated
+          expr: sum(rate(deliveryplatform_medusa_inventory_outbox_delivery_attempts_total{outcome="stale_fence"}[5m])) > 0
+          for: 5m
+          labels:
+            severity: warning
+            component: commerce-inventory-dispatch
+          annotations:
+            summary: Inventory dispatcher claim fences are rejecting stale completions
+            description: Investigate worker crashes, lease expiry, PostgreSQL pauses, or downstream latency. Do not disable token fencing.
+        - alert: DeliveryPlatformMedusaInventoryDeliveryFailureRateHigh
+          expr: sum(rate(deliveryplatform_medusa_inventory_outbox_delivery_attempts_total{outcome="failed"}[5m])) / clamp_min(sum(rate(deliveryplatform_medusa_inventory_outbox_delivery_attempts_total[5m])), 1) > 0.10
+          for: 5m
+          labels:
+            severity: critical
+            component: commerce-inventory-dispatch
+          annotations:
+            summary: More than ten percent of inventory deliveries are failing
+            description: Restore the authenticated inventory ingress or dependent network path; KEDA replica growth cannot correct downstream rejection.
+        - alert: DeliveryPlatformMedusaInventoryDispatcherCycleStalled
+          expr: time() - max(deliveryplatform_medusa_inventory_outbox_delivery_cycle_completed_timestamp_seconds) > 90
+          for: 2m
+          labels:
+            severity: critical
+            component: commerce-inventory-dispatch
+          annotations:
+            summary: Inventory dispatcher cycle has not completed within ninety seconds
+            description: Check the dispatcher process, database connection pool, blocked delivery call, and termination state.
+        - alert: DeliveryPlatformMedusaInventoryDatabasePoolWaiting
+          expr: max(deliveryplatform_medusa_inventory_outbox_pool_connections{state="waiting"}) > 0
+          for: 1m
+          labels:
+            severity: warning
+            component: commerce-inventory-dispatch
+          annotations:
+            summary: Inventory dispatcher is waiting for a PostgreSQL pool connection
+            description: Reduce claim concurrency or investigate PostgreSQL/PgBouncer contention before increasing dispatcher replicas.
+---
+apiVersion: keda.sh/v1alpha1
+kind: TriggerAuthentication
+metadata:
+  name: medusa-inventory-prometheus-query
+  namespace: switchos
+  labels:
+    app.kubernetes.io/name: medusa-inventory-outbox
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  secretTargetRef:
+    - parameter: username
+      name: prometheus-query-credentials
+      key: username
+    - parameter: password
+      name: prometheus-query-credentials
+      key: password
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: medusa-inventory-outbox
+  namespace: switchos
+  labels:
+    app.kubernetes.io/name: medusa-inventory-outbox
+    app.kubernetes.io/component: commerce-inventory-dispatch
+    app.kubernetes.io/part-of: deliveryplatform
+  annotations:
+    scaledobject.keda.sh/transfer-hpa-ownership: "false"
+spec:
+  scaleTargetRef:
+    name: medusa-inventory-outbox
+  pollingInterval: 30
+  cooldownPeriod: 600
+  initialCooldownPeriod: 120
+  idleReplicaCount: 1
+  minReplicaCount: 1
+  maxReplicaCount: 4
+  fallback:
+    failureThreshold: 3
+    replicas: 1
+    behavior: currentReplicasIfHigher
+  advanced:
+    restoreToOriginalReplicaCount: false
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleUp:
+          stabilizationWindowSeconds: 60
+          selectPolicy: Min
+          policies:
+            - { type: Pods, value: 1, periodSeconds: 60 }
+            - { type: Percent, value: 25, periodSeconds: 60 }
+        scaleDown:
+          stabilizationWindowSeconds: 600
+          selectPolicy: Min
+          policies:
+            - { type: Pods, value: 1, periodSeconds: 60 }
+            - { type: Percent, value: 25, periodSeconds: 60 }
+  triggers:
+    - type: prometheus
+      metricType: AverageValue
+      metadata:
+        serverAddress: https://prometheus-operated.monitoring.svc:9090
+        query: deliveryplatform_medusa_inventory_outbox_ready_units_global
+        threshold: "10"
+        activationThreshold: "1"
+        authModes: tls,basic
+      authenticationRef:
+        name: medusa-inventory-prometheus-query

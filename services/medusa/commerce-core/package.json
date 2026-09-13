@@ -7,6 +7,10 @@
     "build": "medusa build",
     "develop": "medusa develop",
     "start": "medusa start",
+    "start:server": "MEDUSA_WORKER_MODE=server MEDUSA_ADMIN_DISABLED=false medusa start",
+    "start:worker": "MEDUSA_WORKER_MODE=worker MEDUSA_ADMIN_DISABLED=true medusa start",
+    "start:worker-supervisor": "node --require ts-node/register/transpile-only src/standalone/medusa-worker-supervisor.ts",
+    "start:inventory-dispatcher": "MEDUSA_PROCESS_ROLE=inventory-dispatcher node --require ts-node/register/transpile-only src/standalone/inventory-outbox-dispatcher.ts",
     "migrate": "medusa db:migrate"
   },
   "dependencies": {

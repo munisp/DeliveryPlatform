@@ -1344,9 +1344,29 @@ func main() {
 		if _, err := requiredFundsOutboxDestinations(); err != nil {
 			log.Fatalf("Failed to configure funds outbox worker: %v", err)
 		}
-		log.Printf("Mojaloop durable funds outbox worker started as %s", workerID)
-		if err := service.RunFundsOutboxDispatcher(ctx, workerID); err != nil {
-			log.Fatalf("Failed to run funds outbox worker: %v", err)
+		mux := http.NewServeMux()
+		mux.HandleFunc("/health", service.handleHealthHTTP)
+		mux.HandleFunc("/metrics/funds-outbox", service.handleFundsOutboxMetricsHTTP)
+		server := &http.Server{
+			Addr:              bindHost + ":" + httpPort,
+			Handler:           mux,
+			ReadHeaderTimeout: 5 * time.Second,
+		}
+		serverErrors := make(chan error, 1)
+		go func() {
+			log.Printf("Mojaloop durable funds outbox worker started as %s (health port %s)", workerID, server.Addr)
+			serverErrors <- server.ListenAndServe()
+		}()
+		workerError := service.RunFundsOutboxDispatcher(ctx, workerID)
+		shutdownContext, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		_ = server.Shutdown(shutdownContext)
+		serverError := <-serverErrors
+		if workerError != nil && workerError != context.Canceled {
+			log.Fatalf("Failed to run funds outbox worker: %v", workerError)
+		}
+		if serverError != nil && serverError != http.ErrServerClosed {
+			log.Fatalf("Funds outbox worker health server failed: %v", serverError)
 		}
 		return
 	}
@@ -1366,6 +1386,7 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", service.handleHealthHTTP)
+	mux.HandleFunc("/metrics/funds-outbox", service.handleFundsOutboxMetricsHTTP)
 	mux.HandleFunc("/callbacks/transfers", service.handleTransferCallback)
 	mux.HandleFunc("/callbacks/quotes", service.handleQuoteCallback)
 	mux.HandleFunc("/callbacks/refunds", service.handleRefundCallback)
