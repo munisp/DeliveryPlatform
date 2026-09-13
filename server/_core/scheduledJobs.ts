@@ -1,22 +1,27 @@
+import type { Pool } from "pg";
 import {
   closeLeaderboardPeriod,
   createEmailDigest,
   generateWeeklyDigest,
-  getDb,
+  getPool,
   markDigestAsSent,
   selectWinningVariant,
 } from "../db";
 
+async function getPoolOrNull(): Promise<Pool | null> {
+  return getPool().catch(() => null);
+}
+
 async function getNumericSystemConfig(key: string, fallback: number) {
-  const db = await getDb();
-  if (!db) {
+  const pool = await getPoolOrNull();
+  if (!pool) {
     return fallback;
   }
 
-  const result = await (db as any).query(
+  const result = await pool.query(
     `SELECT value FROM system_config WHERE key = $1 LIMIT 1`,
     [key],
-  ).catch(() => ({ rows: [] }));
+  ).catch(() => ({ rows: [] as Array<{ value: unknown }> }));
 
   const raw = result.rows?.[0]?.value;
   const numeric = Number(raw);
@@ -24,15 +29,15 @@ async function getNumericSystemConfig(key: string, fallback: number) {
 }
 
 export async function closeLeaderboardJob() {
-  const db = await getDb();
-  if (!db) {
+  const pool = await getPoolOrNull();
+  if (!pool) {
     return {
       success: false,
       message: "Database unavailable; leaderboard close job was not executed.",
     };
   }
 
-  const activeResult = await (db as any).query(
+  const activeResult = await pool.query(
     `SELECT id
      FROM referral_leaderboard_periods
      WHERE is_active = true
@@ -59,8 +64,8 @@ export async function closeLeaderboardJob() {
 }
 
 export async function expirePointsJob() {
-  const db = await getDb();
-  if (!db) {
+  const pool = await getPoolOrNull();
+  if (!pool) {
     return {
       success: false,
       message: "Database unavailable; loyalty point expiration was not executed.",
@@ -68,7 +73,7 @@ export async function expirePointsJob() {
   }
 
   const expirationDays = await getNumericSystemConfig("loyalty_points_expiration_days", 365);
-  const candidateResult = await (db as any).query(
+  const candidateResult = await pool.query(
     `SELECT
        lp.user_id,
        lp.points_balance,
@@ -90,9 +95,10 @@ export async function expirePointsJob() {
       continue;
     }
 
-    await (db as any).query("BEGIN");
+    const client = await pool.connect();
     try {
-      const updateResult = await (db as any).query(
+      await client.query("BEGIN");
+      const updateResult = await client.query(
         `UPDATE loyalty_points
          SET points_balance = points_balance - $1,
              updated_at = NOW()
@@ -103,11 +109,11 @@ export async function expirePointsJob() {
       );
 
       if ((updateResult.rows ?? []).length === 0) {
-        await (db as any).query("ROLLBACK");
+        await client.query("ROLLBACK");
         continue;
       }
 
-      await (db as any).query(
+      await client.query(
         `INSERT INTO loyalty_transactions (user_id, transaction_type, points, description)
          VALUES ($1, 'expiration', $2, $3)`,
         [
@@ -117,12 +123,14 @@ export async function expirePointsJob() {
         ],
       );
 
-      await (db as any).query("COMMIT");
+      await client.query("COMMIT");
       expiredAccounts += 1;
       expiredPoints += pointsBalance;
     } catch (error) {
-      await (db as any).query("ROLLBACK").catch(() => undefined);
+      await client.query("ROLLBACK").catch(() => undefined);
       throw error;
+    } finally {
+      client.release();
     }
   }
 
@@ -138,15 +146,15 @@ export async function expirePointsJob() {
 }
 
 export async function abTestWinnerJob() {
-  const db = await getDb();
-  if (!db) {
+  const pool = await getPoolOrNull();
+  if (!pool) {
     return {
       success: false,
       message: "Database unavailable; A/B winner selection was not executed.",
     };
   }
 
-  const campaignResult = await (db as any).query(
+  const campaignResult = await pool.query(
     `SELECT mc.id
      FROM marketing_campaigns mc
      WHERE mc.status = 'active'
