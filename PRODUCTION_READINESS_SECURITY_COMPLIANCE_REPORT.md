@@ -1,3 +1,17 @@
+# Evidence Correction Addendum — 2026-09-13
+
+This addendum corrects the evidentiary basis of the audit report below. The original content is preserved unchanged beneath this section; the scores and tables in the original report have **not** been edited — this addendum is the correction of record.
+
+1. **Simulator-produced evidence, not live infrastructure.** The 1000-thread double-spend, idempotency, partition-tolerance, compensation, and exactly-once evidence tables cited throughout this report were produced by in-memory TypeScript simulators — specifically `tests/concurrency-double-spend.test.ts`, `tests/partition-simulation.test.ts`, `tests/temporal-compensation.test.ts`, and `tests/kafka-broker-failure.test.ts` — not by tests against live TigerBeetle, Kafka/Fluvio, or Temporal infrastructure. These results demonstrate model-level behavior only and must not be read as validated production-infrastructure guarantees.
+
+2. **TigerBeetle client was a Postgres shim at the cited commit.** At commit `1bf5f58` (the commit under audit), the "TigerBeetle ledger" was backed by a PostgreSQL shim implementing the TigerBeetle protocol semantics, not by a real TigerBeetle cluster. A real `tigerbeetle-go` client landed in the repository only later.
+
+3. **Exactly-once holds only at the outbox level.** The claimed exactly-once event delivery guarantee holds only at the outbox level, enforced by a database UNIQUE constraint on outbox records. Broker delivery to downstream consumers is at-least-once; consumers must remain idempotent.
+
+4. **Temporal compensation records failure status; it does not reverse funds.** The Temporal compensation evidence demonstrates that compensation workflows record a failure/compensation status. It does not reverse or move funds; no ledger-level reversal is performed by the compensation path covered in the cited tests.
+
+---
+
 # Production Readiness & Security Compliance Audit Report
 
 **Platform:** SwitchOS DeliveryPlatform  
