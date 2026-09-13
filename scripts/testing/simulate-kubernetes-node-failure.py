@@ -38,8 +38,20 @@ def main() -> None:
     deployments = {item["metadata"]["name"]: item for item in resources if item.get("kind") == "Deployment"}
     hpas = {item["metadata"]["name"]: item for item in resources if item.get("kind") == "HorizontalPodAutoscaler"}
     pdbs = {item["metadata"]["name"]: item for item in resources if item.get("kind") == "PodDisruptionBudget"}
-    if len(deployments) != 14 or set(deployments) != set(hpas) or set(deployments) != set(pdbs):
-        raise SystemExit("manifest inventory is incomplete; run the Kubernetes validator first")
+    # The deployment inventory is derived from the manifests at runtime; never
+    # hardcode a count here, it drifts every time a workload is added.
+    if not deployments:
+        raise SystemExit("no application Deployments found in the scanned packages")
+    missing_hpas = sorted(set(deployments) - set(hpas))
+    missing_pdbs = sorted(set(deployments) - set(pdbs))
+    orphaned_hpas = sorted(set(hpas) - set(deployments))
+    orphaned_pdbs = sorted(set(pdbs) - set(deployments))
+    if missing_hpas or missing_pdbs or orphaned_hpas or orphaned_pdbs:
+        raise SystemExit(
+            "manifest inventory is incomplete; run the Kubernetes validator first "
+            f"(deployments without HPA: {missing_hpas}, deployments without PDB: {missing_pdbs}, "
+            f"HPAs without deployment: {orphaned_hpas}, PDBs without deployment: {orphaned_pdbs})"
+        )
 
     results: list[dict[str, Any]] = []
     for failed_node in NODES:

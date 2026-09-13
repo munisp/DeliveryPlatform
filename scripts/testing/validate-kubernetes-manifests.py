@@ -45,8 +45,11 @@ deployments = {
 hpas = [resource for resource in resources if resource["kind"] == "HorizontalPodAutoscaler"]
 pdbs = [resource for resource in resources if resource["kind"] == "PodDisruptionBudget"]
 
-if len(deployments) != 17:
-    raise SystemExit(f"expected 17 application Deployments, found {len(deployments)}")
+# The expected Deployment count is derived from the manifests themselves;
+# never hardcode it here, it drifts every time a workload is added. The real
+# invariant is that every Deployment pairs with exactly one HPA and one PDB.
+if not deployments:
+    raise SystemExit("no application Deployments found in the scanned packages")
 if len(hpas) != len(deployments) or len(pdbs) != len(deployments):
     raise SystemExit("every application Deployment must have exactly one HPA and one PDB")
 

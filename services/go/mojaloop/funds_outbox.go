@@ -212,6 +212,41 @@ func validateFundsOutboxDestinationConfiguration(destination string) error {
 	return nil
 }
 
+// fundsOutboxDestinationEnvVars lists the environment variables each funds
+// outbox destination requires before the dispatcher can deliver to it.
+var fundsOutboxDestinationEnvVars = map[string][]string{
+	"tigerbeetle": {},
+	"switch":      {},
+	"dapr":        {"DAPR_HTTP_PORT", "DAPR_PUBSUB_NAME", "DAPR_FUNDS_TOPIC"},
+	"kafka":       {"KAFKA_BROKERS", "KAFKA_FUNDS_TOPIC"},
+	"fluvio":      {"FLUVIO_KAFKA_BROKERS", "FLUVIO_FUNDS_TOPIC"},
+	"temporal":    {"TEMPORAL_BRIDGE_URL", "TEMPORAL_TASK_QUEUE"},
+}
+
+// validateFundsOutboxConfiguration is the boot-time validation entrypoint for
+// the outbox worker: it verifies the destination list and every per-destination
+// dependency, and the returned error names every missing environment variable
+// so a misconfigured worker fails fast with an actionable message instead of
+// crash-looping on the first dispatch attempt.
+func validateFundsOutboxConfiguration() error {
+	destinations, err := requiredFundsOutboxDestinations()
+	if err != nil {
+		return err
+	}
+	missing := []string{}
+	for _, destination := range destinations {
+		for _, name := range fundsOutboxDestinationEnvVars[destination] {
+			if strings.TrimSpace(os.Getenv(name)) == "" {
+				missing = append(missing, fmt.Sprintf("%s (required by the %s outbox destination)", name, destination))
+			}
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("funds outbox worker configuration incomplete; missing environment variables: %s", strings.Join(missing, ", "))
+	}
+	return nil
+}
+
 func eventIDFor(event FundsWorkflowEvent) string {
 	return strings.Join([]string{event.WorkflowType, event.WorkflowID, event.Step, event.Status}, ":")
 }

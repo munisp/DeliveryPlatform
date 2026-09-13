@@ -27,6 +27,7 @@
     "client/src/**/*.tsx",
     "server/_core/**/*.ts",
     "server/lib/**/*.ts",
+    "server/workers/**/*.ts",
     "server/routers.ts",
     "shared/**/*.ts",
     "vite.config.ts"

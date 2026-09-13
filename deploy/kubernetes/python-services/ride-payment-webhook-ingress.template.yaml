@@ -1,5 +1,14 @@
 # Template only. Validate hostname, TLS certificate, ingress class, and provider callback allowlist
 # with the selected CBN-licensed payment provider before applying this resource.
+#
+# Gateway-bypass exception (documented, intentional): this route reaches the
+# ride-payment-webhook service directly instead of passing through the APISIX
+# gateway. The gateway owns session/OIDC authn for operator and consumer
+# traffic, which cannot authenticate third-party payment provider callbacks.
+# This endpoint authenticates requests itself via provider HMAC signatures
+# (invalid signatures are rejected with 401) and must additionally be
+# restricted to the provider's callback source ranges at the edge
+# (ingress allowlist or cloud load-balancer firewall rule) before applying.
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:

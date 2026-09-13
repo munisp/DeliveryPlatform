@@ -560,6 +560,7 @@ app.get("/api/health", async (req, res) => {
     payload: {
       externalOidcEnabled: ENV.enableExternalOidc,
       rateLimiterMode: rateLimiter.mode,
+      medusaMerchantConfigured: ENV.medusaMerchantConfigured,
     },
   });
   res.json({
@@ -569,6 +570,7 @@ app.get("/api/health", async (req, res) => {
     externalOidcEnabled: ENV.enableExternalOidc,
     oidcIssuer: (discovery?.issuer ?? ENV.oidcIssuerUrl) || null,
     rateLimiter,
+    medusaMerchantConfigured: ENV.medusaMerchantConfigured,
   });
 });
 
