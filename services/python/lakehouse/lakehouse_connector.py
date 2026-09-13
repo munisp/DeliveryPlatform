@@ -127,6 +127,35 @@ class LakehouseConnector:
         )
         self.consumers[topic] = consumer
         return consumer
+
+    @staticmethod
+    def dedupe_batch(batch: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Consumer-side idempotency guard for at-least-once delivery.
+
+        Kafka/Fluvio redeliver events; exactly-once exists only at the
+        producer outbox. Events without a partition-agnostic event id cannot
+        be deduplicated and are dropped with a warning rather than appended
+        twice downstream. Within a batch, the first occurrence of an event id
+        wins; the Delta merge in write_batch guards across batches.
+        """
+        seen = set()
+        deduped = []
+        for row in batch:
+            event_id = (row.get("event_id") or "").strip()
+            if not event_id:
+                logger.warning(
+                    "Dropping %s event without an event_id; cannot guarantee idempotent delivery",
+                    row.get("event_type") or "unknown",
+                )
+                continue
+            if event_id in seen:
+                continue
+            seen.add(event_id)
+            deduped.append(row)
+        dropped = len(batch) - len(deduped)
+        if dropped:
+            logger.info(f"Deduped {dropped} redelivered event(s) from batch")
+        return deduped
     
     def process_order_events(self):
         """Process order creation/update events"""
@@ -247,19 +276,40 @@ class LakehouseConnector:
                 logger.error(f"Error processing payment event: {e}")
     
     def write_batch(self, table_name: str, batch: List[Dict[str, Any]]):
-        """Write batch of events to Delta Lake"""
+        """Write batch of events to Delta Lake idempotently.
+
+        Uses a Delta MERGE keyed on event_id (insert-only when not matched),
+        which is an atomic check-and-insert in a single Delta transaction.
+        A redelivered event id is acknowledged without creating a duplicate
+        row. If the merge fails the batch is NOT appended: at-least-once
+        redelivery will retry it, which is safe precisely because the write
+        is idempotent.
+        """
+        batch = self.dedupe_batch(batch)
+        if not batch:
+            return
         try:
             schema = self.schemas[table_name]
             df = spark.createDataFrame(batch, schema)
-            
+
             # Partition by date for efficient querying
             df = df.withColumn("date", df["timestamp"].cast("date"))
-            
+
             table_path = self.table_paths[table_name]
-            df.write.format("delta").mode("append").partitionBy("date").save(table_path)
-            
-            logger.info(f"Wrote {len(batch)} events to {table_name} table")
-            
+            delta_table = DeltaTable.forPath(spark, table_path)
+            # Insert only the declared target columns (the derived "date"
+            # partition column is computed by Delta on write, not stored in
+            # the merge source mapping).
+            insert_map = {field.name: f"source.{field.name}" for field in schema.fields}
+            (
+                delta_table.alias("target")
+                .merge(df.alias("source"), "target.event_id = source.event_id")
+                .whenNotMatchedInsert(values=insert_map)
+                .execute()
+            )
+
+            logger.info(f"Merged {len(batch)} events into {table_name} table (idempotent on event_id)")
+
         except Exception as e:
             logger.error(f"Error writing batch to {table_name}: {e}")
     

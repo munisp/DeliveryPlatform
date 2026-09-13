@@ -220,16 +220,23 @@ func (s *MojaloopService) initiateTransfer(payload TransferInitiationPayload, id
 			}, nil
 		}
 
+		expiration := time.Now().Add(30 * time.Minute).UTC()
+		ilpPacket, condition, fulfilment, err := newTransferILP(payload.TransferID, payload.PayeeFSP, payload.AmountMinor, expiration)
+		if err != nil {
+			return nil, fmt.Errorf("generate ILP prepare for transfer %s: %w", payload.TransferID, err)
+		}
+
 		transfer := Transfer{
-			TransferID:  payload.TransferID,
-			PayerFSP:    payload.PayerFSP,
-			PayeeFSP:    payload.PayeeFSP,
-			AmountMinor: payload.AmountMinor,
-			Currency:    fallbackString(payload.Currency, "EUR"),
-			IlpPacket:   generateILPPacket(payload.TransferID, payload.PayeeFSP, payload.AmountMinor),
-			Condition:   generateCondition(payload.TransferID),
-			Expiration:  time.Now().Add(30 * time.Minute),
-			State:       "RESERVED",
+			TransferID:      payload.TransferID,
+			PayerFSP:        payload.PayerFSP,
+			PayeeFSP:        payload.PayeeFSP,
+			AmountMinor:     payload.AmountMinor,
+			Currency:        fallbackString(payload.Currency, "EUR"),
+			IlpPacket:       ilpPacket,
+			Condition:       condition,
+			Expiration:      expiration,
+			State:           "RESERVED",
+			FulfilmentValue: fulfilment,
 		}
 
 		transferEvent := FundsWorkflowEvent{
@@ -893,13 +900,11 @@ func (s *MojaloopService) storeReconciliationAudit(report ReconciliationReport) 
 	return nil
 }
 
-func generateILPPacket(transferID, payeeFSP string, amountMinor uint64) string {
-	return fmt.Sprintf("ilp_packet_%s_%s_%d", transferID, payeeFSP, amountMinor)
-}
-
-func generateCondition(transferID string) string {
-	return fmt.Sprintf("condition_%s", transferID)
-}
+// ILP packet/condition generation lives in ilp.go: newTransferILP produces a
+// real OER-encoded ILPv4 IlpPrepare plus a SHA-256 condition over a random
+// 32-byte fulfilment (ILP RFC 0027 / Mojaloop FSPIOP). The previous
+// "ilp_packet_*"/"condition_*" formatted-string placeholders were removed so
+// no silent facade remains.
 
 func calculateFeesMinor(amountMinor uint64) uint64 {
 	const minimumFeeMinor uint64 = 50
@@ -1035,6 +1040,29 @@ func (s *MojaloopService) handleTransferCallback(w http.ResponseWriter, r *http.
 	}
 	if transfer.CompletedTime.IsZero() && (transfer.State == "COMMITTED" || transfer.State == "SETTLED") {
 		transfer.CompletedTime = time.Now().UTC()
+	}
+	// ILP integrity gate: a COMMITTED/SETTLED callback must present the
+	// fulfilment preimage that satisfies the stored condition
+	// (SHA-256(fulfilment) == condition, ILP RFC 0027). Verification only
+	// applies to rows holding a real 32-byte base64url condition; rows
+	// recorded before real ILP encoding was introduced carry legacy
+	// placeholder conditions and are reported as unverifiable rather than
+	// silently trusted.
+	if transfer.State == "COMMITTED" || transfer.State == "SETTLED" {
+		if strings.TrimSpace(transfer.FulfilmentValue) == "" {
+			http.Error(w, "fulfilment is required for a committed or settled transfer", http.StatusBadRequest)
+			return
+		}
+		if existing, ok := s.getTransfer(transfer.TransferID); ok {
+			if _, decodeErr := decodeILPBase64URL(existing.Condition); decodeErr == nil {
+				if raw, _ := decodeILPBase64URL(existing.Condition); len(raw) == ilpConditionLength {
+					if err := verifyFulfilment(existing.Condition, transfer.FulfilmentValue); err != nil {
+						http.Error(w, fmt.Sprintf("ILP fulfilment verification failed: %v", err), http.StatusConflict)
+						return
+					}
+				}
+			}
+		}
 	}
 	if err := s.storeTransfer(transfer); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)

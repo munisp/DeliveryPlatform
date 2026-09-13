@@ -41,6 +41,11 @@ type inventoryAdjustmentRequest struct {
 	Reason             string   `json:"reason"`
 	OrderID            *int64   `json:"order_id,omitempty"`
 	TraceID            string   `json:"trace_id,omitempty"`
+	// IdempotencyKey is the partition-agnostic broker event id supplied by
+	// event-driven callers. When present, the adjustment is applied at most
+	// once: the key is claimed in the same transaction as the stock mutation
+	// and a redelivery replays the stored response without re-applying deltas.
+	IdempotencyKey string `json:"idempotency_key,omitempty"`
 }
 
 type replenishmentSku struct {
@@ -108,6 +113,7 @@ type inventoryResponse struct {
 	Workflow   map[string]any    `json:"workflow"`
 	Middleware map[string]any    `json:"middleware"`
 	Metrics    map[string]any    `json:"metrics"`
+	Idempotent bool              `json:"idempotent,omitempty"`
 }
 
 type replenishmentResponse struct {
@@ -236,6 +242,12 @@ func (s *inventoryService) ensureSchema() error {
 			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_inventory_workflow_orchestration_workflow ON inventory_workflow_orchestration (workflow_id, created_at DESC)`,
+		`CREATE TABLE IF NOT EXISTS inventory_processed_events (
+			event_key TEXT PRIMARY KEY,
+			workflow_id TEXT NOT NULL,
+			response_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		)`,
 	}
 	for _, statement := range statements {
 		if _, err := s.db.Exec(statement); err != nil {
@@ -282,6 +294,21 @@ func (s *inventoryService) adjustmentHandler(w http.ResponseWriter, r *http.Requ
 	workflowID := fmt.Sprintf("inv-%d", time.Now().UnixNano())
 	resourceID := fmt.Sprintf("warehouse:%d:sku:%s", request.WarehouseID, request.SKU)
 
+	// Consumer-side idempotency: broker-driven callers (Kafka/Fluvio/Dapr
+	// bridges) deliver at-least-once and carry a partition-agnostic event id.
+	// When an idempotency key is present, the key claim, the stock mutation,
+	// and the workflow record commit in one transaction; a redelivery replays
+	// the stored snapshot without re-applying deltas or re-publishing.
+	idempotencyKey := firstNonEmpty(strings.TrimSpace(request.IdempotencyKey), strings.TrimSpace(r.Header.Get("X-Idempotency-Key")))
+	if idempotencyKey != "" {
+		if len(idempotencyKey) > 160 {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "idempotency_key is too long", "trace_id": traceID})
+			return
+		}
+		s.positionWithIdempotency(w, request, idempotencyKey, resourceID, traceID, startedAt)
+		return
+	}
+
 	position, err := s.applyInventoryAdjustment(request)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error(), "trace_id": traceID})
@@ -320,6 +347,139 @@ func (s *inventoryService) adjustmentHandler(w http.ResponseWriter, r *http.Requ
 		Workflow:   map[string]any{"type": "inventory_adjustment", "step": "inventory_adjusted", "status": "completed"},
 		Middleware: s.middlewareStatus(),
 		Metrics:    responseMetrics,
+	})
+}
+
+// positionWithIdempotency applies an inventory adjustment at most once per
+// idempotency key. The key claim, the stock mutation, and the workflow record
+// commit in a single transaction; a redelivered key replays the stored
+// snapshot and is not re-published to downstream middleware.
+func (s *inventoryService) positionWithIdempotency(w http.ResponseWriter, request inventoryAdjustmentRequest, idempotencyKey, resourceID, traceID string, startedAt time.Time) {
+	workflowID := fmt.Sprintf("inv-%d", time.Now().UnixNano())
+	tx, err := s.db.Begin()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error(), "trace_id": traceID})
+		return
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var claimedKey string
+	err = tx.QueryRow(`
+		INSERT INTO inventory_processed_events (event_key, workflow_id, created_at)
+		VALUES ($1, $2, NOW())
+		ON CONFLICT (event_key) DO NOTHING
+		RETURNING event_key
+	`, idempotencyKey, workflowID).Scan(&claimedKey)
+	if err == sql.ErrNoRows {
+		var snapshotRaw string
+		if loadErr := tx.QueryRow(`SELECT response_json::text FROM inventory_processed_events WHERE event_key = $1`, idempotencyKey).Scan(&snapshotRaw); loadErr != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": loadErr.Error(), "trace_id": traceID})
+			return
+		}
+		var snapshot struct {
+			WorkflowID string            `json:"workflow_id"`
+			Position   inventoryPosition `json:"position"`
+		}
+		if unmarshalErr := json.Unmarshal([]byte(snapshotRaw), &snapshot); unmarshalErr != nil || snapshot.WorkflowID == "" {
+			writeJSON(w, http.StatusConflict, map[string]any{"error": "event processing is incomplete; retry after the in-flight delivery resolves", "trace_id": traceID})
+			return
+		}
+		if commitErr := tx.Commit(); commitErr != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": commitErr.Error(), "trace_id": traceID})
+			return
+		}
+		writeJSON(w, http.StatusOK, inventoryResponse{
+			Service:    s.serviceName,
+			WorkflowID: snapshot.WorkflowID,
+			ResourceID: resourceID,
+			Inventory:  snapshot.Position,
+			Workflow:   map[string]any{"type": "inventory_adjustment", "step": "inventory_adjusted", "status": "completed"},
+			Middleware: s.middlewareStatus(),
+			Metrics: map[string]any{
+				"trace_id":   traceID,
+				"timings_ms": map[string]any{"total": roundDurationMs(time.Since(startedAt))},
+			},
+			Idempotent: true,
+		})
+		return
+	}
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error(), "trace_id": traceID})
+		return
+	}
+
+	position, err := s.applyInventoryAdjustmentOn(tx, request)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error(), "trace_id": traceID})
+		return
+	}
+	payload := map[string]any{
+		"inventory":       position,
+		"reason":          request.Reason,
+		"source":          request.Source,
+		"trace_id":        traceID,
+		"idempotency_key": idempotencyKey,
+	}
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error(), "trace_id": traceID})
+		return
+	}
+	if _, err = tx.Exec(`
+		INSERT INTO inventory_workflows (workflow_id, workflow_type, resource_id, current_step, status, created_at, updated_at)
+		VALUES ($1, 'inventory_adjustment', $2, 'inventory_adjusted', 'completed', NOW(), NOW())
+	`, workflowID, resourceID); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error(), "trace_id": traceID})
+		return
+	}
+	if _, err = tx.Exec(`
+		INSERT INTO inventory_workflow_events (workflow_id, workflow_type, resource_id, step, status, payload, created_at)
+		VALUES ($1, 'inventory_adjustment', $2, 'inventory_adjusted', 'completed', $3::jsonb, NOW())
+	`, workflowID, resourceID, string(payloadBytes)); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error(), "trace_id": traceID})
+		return
+	}
+	snapshotBytes, err := json.Marshal(map[string]any{"workflow_id": workflowID, "position": position})
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error(), "trace_id": traceID})
+		return
+	}
+	if _, err = tx.Exec(`UPDATE inventory_processed_events SET response_json = $2::jsonb WHERE event_key = $1`, idempotencyKey, string(snapshotBytes)); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error(), "trace_id": traceID})
+		return
+	}
+	if err = tx.Commit(); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error(), "trace_id": traceID})
+		return
+	}
+
+	// Publish only after the durable commit, mirroring recordWorkflowEvent.
+	event := inventoryWorkflowEvent{
+		WorkflowID:   workflowID,
+		WorkflowType: "inventory_adjustment",
+		ResourceID:   resourceID,
+		Step:         "inventory_adjusted",
+		Status:       "completed",
+		Payload:      payload,
+	}
+	publishMetrics, publishErr := s.publishWorkflowEvent(event)
+	if publishErr != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": publishErr.Error(), "trace_id": traceID})
+		return
+	}
+	publishMetrics["persist_ms"] = roundDurationMs(time.Since(startedAt))
+	writeJSON(w, http.StatusOK, inventoryResponse{
+		Service:    s.serviceName,
+		WorkflowID: workflowID,
+		ResourceID: resourceID,
+		Inventory:  position,
+		Workflow:   map[string]any{"type": "inventory_adjustment", "step": "inventory_adjusted", "status": "completed"},
+		Middleware: s.middlewareStatus(),
+		Metrics: map[string]any{
+			"trace_id":           traceID,
+			"timings_ms":         map[string]any{"total": roundDurationMs(time.Since(startedAt))},
+			"middleware_publish": publishMetrics,
+		},
 	})
 }
 
@@ -556,11 +716,21 @@ func (s *inventoryService) positionHandler(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, map[string]any{"service": s.serviceName, "inventory": position, "trace_id": traceID})
 }
 
+// queryRower is satisfied by both *sql.DB and *sql.Tx so the position
+// mutation can run inside the idempotency-claim transaction.
+type queryRower interface {
+	QueryRow(query string, args ...any) *sql.Row
+}
+
 func (s *inventoryService) applyInventoryAdjustment(request inventoryAdjustmentRequest) (inventoryPosition, error) {
+	return s.applyInventoryAdjustmentOn(s.db, request)
+}
+
+func (s *inventoryService) applyInventoryAdjustmentOn(q queryRower, request inventoryAdjustmentRequest) (inventoryPosition, error) {
 	var position inventoryPosition
 	freshness := nullableFloatPtr(request.FreshnessHours)
 	merchantID := nullableInt64(request.MerchantID)
-	row := s.db.QueryRow(`
+	row := q.QueryRow(`
 		INSERT INTO inventory_positions (
 			warehouse_id, sku, merchant_id, city, zone_key, on_hand_units, reserved_units, inbound_units,
 			stock_accuracy, freshness_hours, cold_chain_ready, last_source, last_reason, updated_at

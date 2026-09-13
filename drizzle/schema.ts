@@ -2,9 +2,11 @@ import {
   boolean,
   integer,
   json,
+  jsonb,
   numeric,
   pgEnum,
   pgTable,
+  primaryKey,
   serial,
   text,
   timestamp,
@@ -255,3 +257,21 @@ export const payoutSettlements = pgTable("payout_settlements", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
+
+// Consumer-side idempotency ledger for at-least-once broker event processing.
+// Columns mirror drizzle/0072_consumer_processed_events.sql.
+export const consumerProcessedEvents = pgTable(
+  "consumer_processed_events",
+  {
+    consumerName: text("consumer_name").notNull(),
+    topic: text("topic").notNull(),
+    eventId: text("event_id").notNull(),
+    resultJson: jsonb("result_json"),
+    processedAt: timestamp("processed_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.consumerName, table.topic, table.eventId] }),
+  ],
+);
