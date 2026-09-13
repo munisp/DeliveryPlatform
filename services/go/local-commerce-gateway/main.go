@@ -10,7 +10,9 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	_ "github.com/lib/pq"
@@ -102,8 +104,33 @@ func main() {
 	mux.HandleFunc("/logistics-control-tower", service.logisticsControlTowerHandler)
 
 	addr := fmt.Sprintf("%s:%s", getenv("BIND_HOST", "127.0.0.1"), getenv("PORT", "8114"))
-	log.Printf("local commerce gateway listening on %s", addr)
-	log.Fatal(http.ListenAndServe(addr, mux))
+	server := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	serverErrors := make(chan error, 1)
+	go func() {
+		log.Printf("local commerce gateway listening on %s", addr)
+		serverErrors <- server.ListenAndServe()
+	}()
+
+	select {
+	case err := <-serverErrors:
+		if err != nil && err != http.ErrServerClosed {
+			log.Fatalf("local commerce gateway server failed: %v", err)
+		}
+	case <-ctx.Done():
+		log.Printf("shutdown signal received; draining in-flight requests")
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			log.Printf("graceful shutdown failed: %v", err)
+		}
+		if err := <-serverErrors; err != nil && err != http.ErrServerClosed {
+			log.Fatalf("local commerce gateway server failed: %v", err)
+		}
+	}
 }
 
 func openDB(databaseURL string) *sql.DB {

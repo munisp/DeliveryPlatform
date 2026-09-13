@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/subtle"
 	"crypto/tls"
 	"crypto/x509"
@@ -12,9 +13,11 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -150,8 +153,31 @@ func main() {
 		IdleTimeout:       30 * time.Second,
 		TLSConfig:         &tls.Config{MinVersion: tls.VersionTLS12},
 	}
-	log.Printf("%s listening", serviceName)
-	log.Fatal(server.ListenAndServeTLS(cfg.certFile, cfg.keyFile))
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	serverErrors := make(chan error, 1)
+	go func() {
+		log.Printf("%s listening", serviceName)
+		serverErrors <- server.ListenAndServeTLS(cfg.certFile, cfg.keyFile)
+	}()
+
+	select {
+	case err := <-serverErrors:
+		if err != nil && err != http.ErrServerClosed {
+			log.Fatal(err)
+		}
+	case <-ctx.Done():
+		log.Printf("shutdown signal received; draining in-flight requests")
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			log.Printf("graceful shutdown failed: %v", err)
+		}
+		if err := <-serverErrors; err != nil && err != http.ErrServerClosed {
+			log.Fatal(err)
+		}
+	}
 }
 
 func newHandler(cfg config, client *http.Client, tokenReader func() ([]byte, error), metrics *receiverMetrics) http.Handler {

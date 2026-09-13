@@ -126,8 +126,24 @@ fn validate_td3_mrz(lines: &[String]) -> MrzResponse {
     MrzResponse { present: true, format: "td3_passport".into(), valid: failures.is_empty(), failures }
 }
 
+fn subtle_equal(a: &str, b: &str) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    a.as_bytes()
+        .iter()
+        .zip(b.as_bytes().iter())
+        .fold(0u8, |acc, (left, right)| acc | (left ^ right))
+        == 0
+}
+
 fn require_token(headers: &HeaderMap, state: &AppState) -> Result<(), StatusCode> {
-    headers.get("x-internal-service-token").and_then(|value| value.to_str().ok()).filter(|value| *value == state.internal_token).map(|_| ()).ok_or(StatusCode::UNAUTHORIZED)
+    headers
+        .get("x-internal-service-token")
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| subtle_equal(value, &state.internal_token))
+        .map(|_| ())
+        .ok_or(StatusCode::UNAUTHORIZED)
 }
 
 async fn health() -> Json<serde_json::Value> {
@@ -155,7 +171,30 @@ async fn main() {
     let addr: SocketAddr = env::var("BIND_ADDR").unwrap_or_else(|_| "127.0.0.1:8122".into()).parse().expect("valid BIND_ADDR");
     info!(%addr, "verification policy service starting");
     let listener = tokio::net::TcpListener::bind(addr).await.expect("bind verification policy service");
-    axum::serve(listener, app).await.expect("serve verification policy service");
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await
+        .expect("serve verification policy service");
+}
+
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c().await.expect("install Ctrl+C handler");
+    };
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("install SIGTERM handler")
+            .recv()
+            .await;
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = terminate => {},
+    }
+    info!("shutdown signal received; draining in-flight requests");
 }
 
 #[cfg(test)]
@@ -167,6 +206,13 @@ mod tests {
             "P<UTOERIKSSON<<ANNA<MARIA<<<<<<<<<<<<<<<<<<<".into(),
             "L898902C36UTO7408122F1204159ZE184226B<<<<<10".into(),
         ]
+    }
+
+    #[test]
+    fn subtle_equal_compares_tokens_constant_time() {
+        assert!(subtle_equal("32-character-internal-service-token", "32-character-internal-service-token"));
+        assert!(!subtle_equal("32-character-internal-service-token", "32-character-internal-service-t0ken"));
+        assert!(!subtle_equal("short", "longer"));
     }
 
     #[test]

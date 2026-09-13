@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/subtle"
 	"database/sql"
 	"encoding/json"
@@ -8,7 +9,9 @@ import (
 	"math"
 	"net/http"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	_ "github.com/lib/pq"
@@ -78,9 +81,36 @@ func main() {
 	mux.HandleFunc("/health", service.healthHandler)
 	mux.HandleFunc("/assess-launch", service.readinessHandler)
 
-	log.Printf("vertical provisioning service listening on %s:%s", bindHost, port)
-	if err := http.ListenAndServe(bindHost+":"+port, mux); err != nil {
-		log.Fatal(err)
+	server := &http.Server{
+		Addr:              bindHost + ":" + port,
+		Handler:           mux,
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	serverErrors := make(chan error, 1)
+	go func() {
+		log.Printf("vertical provisioning service listening on %s:%s", bindHost, port)
+		serverErrors <- server.ListenAndServe()
+	}()
+
+	select {
+	case err := <-serverErrors:
+		if err != nil && err != http.ErrServerClosed {
+			log.Fatal(err)
+		}
+	case <-ctx.Done():
+		log.Printf("shutdown signal received; draining in-flight requests")
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			log.Printf("graceful shutdown failed: %v", err)
+		}
+		if err := <-serverErrors; err != nil && err != http.ErrServerClosed {
+			log.Fatal(err)
+		}
 	}
 }
 

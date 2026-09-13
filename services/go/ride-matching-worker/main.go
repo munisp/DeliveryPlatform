@@ -15,9 +15,11 @@ import (
 	"math"
 	"net/http"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/lib/pq"
@@ -236,8 +238,15 @@ func main() {
 		log.Fatalf("ping redis: %v", err)
 	}
 
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	svc := &service{db: db, rdb: rdb, cfg: cfg}
-	go svc.reapExpiredOffers(context.Background())
+	reaperDone := make(chan struct{})
+	go func() {
+		defer close(reaperDone)
+		svc.reapExpiredOffers(ctx)
+	}()
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", svc.healthHandler)
@@ -259,8 +268,29 @@ func main() {
 		WriteTimeout:      15 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
-	log.Printf("%s listening on %s", serviceName, server.Addr)
-	log.Fatal(server.ListenAndServe())
+	serverErrors := make(chan error, 1)
+	go func() {
+		log.Printf("%s listening on %s", serviceName, server.Addr)
+		serverErrors <- server.ListenAndServe()
+	}()
+
+	select {
+	case err := <-serverErrors:
+		if err != nil && err != http.ErrServerClosed {
+			log.Fatal(err)
+		}
+	case <-ctx.Done():
+		log.Printf("shutdown signal received; stopping offer reaper and draining in-flight requests")
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			log.Printf("graceful shutdown failed: %v", err)
+		}
+		<-reaperDone
+		if err := <-serverErrors; err != nil && err != http.ErrServerClosed {
+			log.Fatal(err)
+		}
+	}
 }
 
 func loadConfig() (config, error) {
@@ -1355,9 +1385,14 @@ func (s *service) reconcileAvailableDrivers(ctx context.Context) (int, error) {
 func (s *service) reapExpiredOffers(ctx context.Context) {
 	ticker := time.NewTicker(s.cfg.ReaperInterval)
 	defer ticker.Stop()
-	for range ticker.C {
-		if err := s.expireOffers(ctx); err != nil {
-			log.Printf("expire offers: %v", err)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := s.expireOffers(ctx); err != nil && ctx.Err() == nil {
+				log.Printf("expire offers: %v", err)
+			}
 		}
 	}
 }
