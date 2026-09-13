@@ -55,3 +55,4 @@ export const mojaloopReconciliationAudits = createLooseTable("mojaloop_reconcili
 export const mojaloopWorkflows = createLooseTable("mojaloop_workflows");
 export const mojaloopWorkflowEvents = createLooseTable("mojaloop_workflow_events");
 export const mojaloopWorkflowOrchestration = createLooseTable("mojaloop_workflow_orchestration");
+export const consumerProcessedEvents = createLooseTable("consumer_processed_events");

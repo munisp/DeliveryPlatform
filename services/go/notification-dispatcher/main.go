@@ -331,10 +331,20 @@ func (s *Service) dispatchHandler(w http.ResponseWriter, r *http.Request) {
 		requestID = fmt.Sprintf("notif-%d", time.Now().UnixNano())
 	}
 
-	if cached, ok, err := s.getStoredDispatch(requestID); err != nil {
+	// Consumer-side idempotency for at-least-once broker/event delivery:
+	// atomically claim the request id BEFORE any provider side effect. The
+	// claim row and the final dispatch record share the same primary key, so a
+	// redelivered request id can never trigger a second provider dispatch.
+	claimed, cached, inProgress, err := s.claimDispatch(requestID, req)
+	if err != nil {
 		respondError(w, http.StatusInternalServerError, err.Error())
 		return
-	} else if ok {
+	}
+	if !claimed {
+		if inProgress {
+			respondError(w, http.StatusConflict, "dispatch for this request id is already in progress")
+			return
+		}
 		cached.Idempotent = true
 		respondJSON(w, http.StatusOK, cached)
 		return
@@ -366,25 +376,12 @@ func (s *Service) dispatchHandler(w http.ResponseWriter, r *http.Request) {
 		DegradedMode: fallbackUsed || !allSuccessful(results),
 	}
 
-	if err := s.storeDispatch(requestID, req, response); err != nil {
+	// Finalize the claimed row, its channel attempts, and any dead letters in
+	// a single transaction so the idempotency record and the outcome evidence
+	// can never diverge.
+	if err := s.finalizeDispatch(requestID, response, results, req, resolvedChannels); err != nil {
 		respondError(w, http.StatusInternalServerError, err.Error())
 		return
-	}
-	for _, result := range results {
-		if err := s.storeAttempt(requestID, result); err != nil {
-			respondError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		if !result.Success {
-			_ = s.storeDeadLetter(DeadLetterRecord{
-				RequestID: requestID,
-				Reason:    result.Error,
-				Type:      req.Type,
-				Channels:  resolvedChannels,
-				Metadata:  req.Metadata,
-				CreatedAt: time.Now().UTC().Format(time.RFC3339),
-			})
-		}
 	}
 
 	respondJSON(w, http.StatusOK, response)
@@ -597,15 +594,22 @@ func allSuccessful(results []DispatchResult) bool {
 	return true
 }
 
-func (s *Service) storeDispatch(requestID string, req DispatchRequest, response DispatchResponse) error {
+// claimDispatch atomically reserves the request id before any provider side
+// effect. It returns claimed=true when this caller won the idempotency claim.
+// When the id was already claimed it returns either the stored response
+// (duplicate delivery, replayed idempotently) or inProgress=true when the
+// original claim has not been finalized yet (crash/concurrent delivery).
+func (s *Service) claimDispatch(requestID string, req DispatchRequest) (bool, DispatchResponse, bool, error) {
 	payloadJSON, _ := json.Marshal(req.Payload)
 	metadataJSON, _ := json.Marshal(req.Metadata)
 	channelsJSON, _ := json.Marshal(req.Channels)
-	responseJSON, _ := json.Marshal(response)
-	_, err := s.db.Exec(
+	var claimedID string
+	err := s.db.QueryRow(
 		`INSERT INTO notification_dispatches (
 			request_id, dispatch_type, recipient_phone, recipient_email, recipient_name, recipient_token, payload_json, metadata_json, channels_json, response_json, accepted, fallback_used, degraded_mode, duration_ms, created_at, updated_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb,$9::jsonb,$10::jsonb,$11,$12,$13,$14,NOW(),NOW())`,
+		) VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb,$9::jsonb,NULL,FALSE,FALSE,FALSE,0,NOW(),NOW())
+		ON CONFLICT (request_id) DO NOTHING
+		RETURNING request_id`,
 		requestID,
 		req.Type,
 		nullIfEmpty(req.Recipient.Phone),
@@ -615,63 +619,84 @@ func (s *Service) storeDispatch(requestID string, req DispatchRequest, response 
 		string(payloadJSON),
 		string(metadataJSON),
 		string(channelsJSON),
+	).Scan(&claimedID)
+	if err == nil {
+		return true, DispatchResponse{}, false, nil
+	}
+	if err != sql.ErrNoRows {
+		return false, DispatchResponse{}, false, err
+	}
+	var raw sql.NullString
+	if err := s.db.QueryRow(`SELECT response_json::text FROM notification_dispatches WHERE request_id = $1`, requestID).Scan(&raw); err != nil {
+		return false, DispatchResponse{}, false, err
+	}
+	if !raw.Valid || raw.String == "" {
+		return false, DispatchResponse{}, true, nil
+	}
+	var response DispatchResponse
+	if err := json.Unmarshal([]byte(raw.String), &response); err != nil {
+		return false, DispatchResponse{}, false, err
+	}
+	return false, response, false, nil
+}
+
+// finalizeDispatch records the dispatch outcome on the claimed row plus all
+// channel attempts and dead letters in one transaction.
+func (s *Service) finalizeDispatch(requestID string, response DispatchResponse, results []DispatchResult, req DispatchRequest, resolvedChannels []Channel) error {
+	responseJSON, _ := json.Marshal(response)
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.Exec(
+		`UPDATE notification_dispatches
+		 SET response_json = $2::jsonb, accepted = $3, fallback_used = $4, degraded_mode = $5, duration_ms = $6, updated_at = NOW()
+		 WHERE request_id = $1`,
+		requestID,
 		string(responseJSON),
 		response.Accepted,
 		response.FallbackUsed,
 		response.DegradedMode,
 		response.DurationMS,
-	)
-	return err
-}
-
-func (s *Service) storeAttempt(requestID string, result DispatchResult) error {
-	_, err := s.db.Exec(
-		`INSERT INTO notification_attempts (
-			request_id, channel, provider, success, attempt_count, escalated_to, message_id, error_text, rendered_body, created_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NOW())`,
-		requestID,
-		string(result.Channel),
-		result.Provider,
-		result.Success,
-		result.AttemptCount,
-		nullIfEmpty(result.EscalatedTo),
-		nullIfEmpty(result.MessageID),
-		nullIfEmpty(result.Error),
-		nullIfEmpty(result.RenderedBody),
-	)
-	return err
-}
-
-func (s *Service) storeDeadLetter(record DeadLetterRecord) error {
-	channelsJSON, _ := json.Marshal(record.Channels)
-	metadataJSON, _ := json.Marshal(record.Metadata)
-	_, err := s.db.Exec(
-		`INSERT INTO notification_dead_letters (request_id, reason, dispatch_type, channels_json, metadata_json, created_at)
-		 VALUES ($1,$2,$3,$4::jsonb,$5::jsonb,$6::timestamptz)`,
-		record.RequestID,
-		record.Reason,
-		record.Type,
-		string(channelsJSON),
-		string(metadataJSON),
-		record.CreatedAt,
-	)
-	return err
-}
-
-func (s *Service) getStoredDispatch(requestID string) (DispatchResponse, bool, error) {
-	var raw string
-	err := s.db.QueryRow(`SELECT response_json::text FROM notification_dispatches WHERE request_id = $1`, requestID).Scan(&raw)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return DispatchResponse{}, false, nil
+	); err != nil {
+		return err
+	}
+	for _, result := range results {
+		if _, err := tx.Exec(
+			`INSERT INTO notification_attempts (
+				request_id, channel, provider, success, attempt_count, escalated_to, message_id, error_text, rendered_body, created_at
+			) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NOW())`,
+			requestID,
+			string(result.Channel),
+			result.Provider,
+			result.Success,
+			result.AttemptCount,
+			nullIfEmpty(result.EscalatedTo),
+			nullIfEmpty(result.MessageID),
+			nullIfEmpty(result.Error),
+			nullIfEmpty(result.RenderedBody),
+		); err != nil {
+			return err
 		}
-		return DispatchResponse{}, false, err
+		if !result.Success {
+			channelsJSON, _ := json.Marshal(resolvedChannels)
+			metadataJSON, _ := json.Marshal(req.Metadata)
+			if _, err := tx.Exec(
+				`INSERT INTO notification_dead_letters (request_id, reason, dispatch_type, channels_json, metadata_json, created_at)
+				 VALUES ($1,$2,$3,$4::jsonb,$5::jsonb,$6::timestamptz)`,
+				requestID,
+				result.Error,
+				req.Type,
+				string(channelsJSON),
+				string(metadataJSON),
+				time.Now().UTC().Format(time.RFC3339),
+			); err != nil {
+				return err
+			}
+		}
 	}
-	var response DispatchResponse
-	if err := json.Unmarshal([]byte(raw), &response); err != nil {
-		return DispatchResponse{}, false, err
-	}
-	return response, true, nil
+	return tx.Commit()
 }
 
 func (s *Service) loadMetrics() (DispatchMetrics, error) {
