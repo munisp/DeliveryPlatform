@@ -4,6 +4,7 @@ import pg from "pg";
 
 import { buildConsumerAssistant, buildDispatchIntelligence, buildMerchantConsultant } from "../_core/longcat";
 import { ENV } from "../_core/env";
+import { getRealTablesideWorkspace, getRealWhiteLabelAppsWorkspace } from "../_core/workspaceTruthfulness";
 
 const { Pool } = pg;
 const merchantBenchmarkSnapshotPath = path.resolve(process.cwd(), "validation", "longcat_merchant_benchmarks.json");
@@ -247,11 +248,19 @@ export async function getDriverMobilityWorkspace(limit = 8) {
 }
 
 export async function getTablesideWorkspace(): Promise<TablesideWorkspace> {
-  return unavailable("tableside_ordering", new Error("tableside operational tables are not configured"));
+  try {
+    return await getRealTablesideWorkspace();
+  } catch (error) {
+    return unavailable("tableside_ordering", error);
+  }
 }
 
 export async function getWhiteLabelAppsWorkspace(): Promise<WhiteLabelAppsWorkspace> {
-  return unavailable("white_label_apps", new Error("white-label application registry is not configured"));
+  try {
+    return await getRealWhiteLabelAppsWorkspace();
+  } catch (error) {
+    return unavailable("white_label_apps", error);
+  }
 }
 
 export async function getMerchantChannelWorkspace() {
