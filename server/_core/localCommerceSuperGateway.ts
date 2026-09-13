@@ -1,12 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { ENV } from "./env";
 import {
-  getBusinessTravelSummary,
   getCheckoutSummary,
   getConsumerMarketplaceSummary,
-  getMerchantChannelsSummary,
-  getRiderAppSummary,
 } from "../db";
+import {
+  getBusinessTravelSummary,
+  getRiderAppSummary,
+} from "./mobilityQueries";
+import { getMerchantChannelsSummary } from "./commerceSummaries";
 
 type ConciergeIntent = {
   city?: string | null;
