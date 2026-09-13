@@ -69,6 +69,9 @@ describe("SwitchOS finance integrity", () => {
       if (["BEGIN", "COMMIT"].includes(sql)) {
         return { rows: [] };
       }
+      if (sql.includes("pg_advisory_xact_lock")) {
+        return { rows: [] };
+      }
       if (sql.includes("INSERT INTO platform_idempotency_keys")) {
         if (!idempotencyInserted) {
           idempotencyInserted = true;
@@ -260,6 +263,23 @@ describe("SwitchOS finance integrity", () => {
             merchant_reserve_entries: 2,
             treasury_reserve_entries: 1,
             last_reserve_event: "2026-06-21T00:00:00.000Z",
+          }],
+        };
+      }
+      if (sql.includes("FROM mojaloop_transfers")) {
+        return {
+          rows: [{
+            transfer_count: 0,
+            gross_transfer_amount: "0",
+            settled_transfer_count: 0,
+            refund_count: 0,
+            refunded_amount: "0",
+            inconsistent_audits: 0,
+            ledger_balance_cents: "0",
+            ledger_transfer_entries: 0,
+            ledger_refund_entries: 0,
+            open_workflows: 0,
+            last_mojaloop_event: null,
           }],
         };
       }
