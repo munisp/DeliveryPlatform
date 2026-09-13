@@ -20,6 +20,11 @@ import TablesideCommerce from "@/pages/TablesideCommerce";
 import WhiteLabelApps from "@/pages/WhiteLabelApps";
 import MerchantChannels from "@/pages/MerchantChannels";
 import ServiceRecovery from "@/pages/ServiceRecovery";
+import MobilityOverview from "@/pages/MobilityOverview";
+import RiderApp from "@/pages/RiderApp";
+import BusinessTravel from "@/pages/BusinessTravel";
+import FreightOperations from "@/pages/FreightOperations";
+import HealthcareTransport from "@/pages/HealthcareTransport";
 import PhoneOrderingStudio from "@/pages/PhoneOrderingStudio";
 import TenantAdminActions from "@/pages/TenantAdminActions";
 import SecurityProfilePage, {
@@ -567,6 +572,11 @@ export default function App() {
       <Route path="/merchant-channels" component={MerchantChannels} />
       <Route path="/service-recovery" component={ServiceRecovery} />
       <Route path="/phone-ordering-studio" component={PhoneOrderingStudio} />
+      <Route path="/mobility" component={MobilityOverview} />
+      <Route path="/mobility/rider" component={RiderApp} />
+      <Route path="/mobility/business" component={BusinessTravel} />
+      <Route path="/mobility/freight" component={FreightOperations} />
+      <Route path="/mobility/healthcare" component={HealthcareTransport} />
       <Route component={NotFoundPage} />
     </Switch>
   );
