@@ -2,6 +2,8 @@ import cookieParser from "cookie-parser";
 import express from "express";
 import { createHTTPHandler } from "@trpc/server/adapters/standalone";
 import { randomUUID } from "crypto";
+import { fileURLToPath } from "url";
+import path from "path";
 
 import { appRouter } from "../routers";
 import {
@@ -262,7 +264,23 @@ function setSecurityHeaders(req: express.Request, res: express.Response) {
   );
 
   const acceptHeader = `${req.headers.accept ?? ""}`;
-  if (req.path === "/" || acceptHeader.includes("text/html")) {
+  const isHashedStaticAsset =
+    /^\/assets\/.+-[A-Za-z0-9_-]{8,}\.(?:css|js|mjs|woff2?|svg|png|webp)$/.test(
+      req.path,
+    );
+
+  if (req.path === "/sw.js") {
+    res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+    res.setHeader("Pragma", "no-cache");
+    res.setHeader("Expires", "0");
+    res.setHeader("Service-Worker-Allowed", "/");
+  } else if (isHashedStaticAsset) {
+    res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+  } else if (
+    req.path === "/" ||
+    req.path === "/index.html" ||
+    acceptHeader.includes("text/html")
+  ) {
     res.setHeader("Cache-Control", ENV.cacheControlIndexHtml);
     res.setHeader("Pragma", "no-cache");
     res.setHeader("Expires", "0");
@@ -4331,6 +4349,43 @@ process.once("SIGINT", () => {
   stopDeveloperWebhookDispatcher();
   stopVehicleTrackerProviderConsumers();
 });
+
+if (ENV.isProduction) {
+  const staticRoot = path.dirname(fileURLToPath(import.meta.url));
+
+  app.use(
+    express.static(staticRoot, {
+      etag: true,
+      cacheControl: false,
+      setHeaders(res, filePath) {
+        if (filePath.endsWith("/sw.js")) {
+          res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+          res.setHeader("Pragma", "no-cache");
+          res.setHeader("Expires", "0");
+          res.setHeader("Service-Worker-Allowed", "/");
+          return;
+        }
+        if (filePath.endsWith("/index.html")) {
+          res.setHeader("Cache-Control", ENV.cacheControlIndexHtml);
+          res.setHeader("Pragma", "no-cache");
+          res.setHeader("Expires", "0");
+          return;
+        }
+        if (/\/assets\/.+-[A-Za-z0-9_-]{8,}\.(?:css|js|mjs|woff2?|svg|png|webp)$/.test(filePath)) {
+          res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+        }
+      },
+    }),
+  );
+
+  app.get(/.*/, (req, res, next) => {
+    if (req.path.startsWith("/api/") || !req.accepts("html")) {
+      next();
+      return;
+    }
+    res.sendFile(path.join(staticRoot, "index.html"));
+  });
+}
 
 app.listen(ENV.port, ENV.bindHost, () => {
   console.log(

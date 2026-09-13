@@ -3,7 +3,10 @@ WORKDIR /app
 COPY package.json pnpm-lock.yaml ./
 RUN corepack enable && pnpm install --frozen-lockfile
 COPY . .
-RUN pnpm build
+ARG PWA_BUILD_VERSION
+ENV VITE_APP_BUILD_VERSION=${PWA_BUILD_VERSION}
+ENV SW_BUILD_VERSION=${PWA_BUILD_VERSION}
+RUN test -n "${PWA_BUILD_VERSION}" && pnpm build
 
 FROM node:22-bookworm-slim AS runtime
 WORKDIR /app

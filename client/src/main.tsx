@@ -11,12 +11,6 @@ import { reportClientError } from "./lib/logger";
 
 declare const __APP_BUILD_VERSION__: string;
 
-declare global {
-  interface Window {
-    __APP_BUILD_VERSION__?: string;
-  }
-}
-
 const rootElement = document.getElementById("root");
 
 if (!rootElement) {
@@ -24,9 +18,14 @@ if (!rootElement) {
 }
 
 const queryClient = new QueryClient();
-const buildVersion = window.__APP_BUILD_VERSION__ && window.__APP_BUILD_VERSION__ !== "__APP_BUILD_VERSION__"
-  ? window.__APP_BUILD_VERSION__
-  : __APP_BUILD_VERSION__;
+const metadataBuildVersion = document
+  .querySelector('meta[name="switchos-build-version"]')
+  ?.getAttribute("content")
+  ?.trim();
+const buildVersion =
+  metadataBuildVersion && /^[a-zA-Z0-9._-]{7,128}$/.test(metadataBuildVersion)
+    ? metadataBuildVersion
+    : __APP_BUILD_VERSION__;
 const PUBLIC_PATHS = new Set(["/", "/portal"]);
 
 const isPublicRoute = () => {
@@ -72,20 +71,52 @@ const trpcClient = trpc.createClient({
   ],
 });
 
-if (typeof window !== "undefined" && "serviceWorker" in navigator) {
+const hasImmutableBuildVersion =
+  /^[a-zA-Z0-9._-]{7,128}$/.test(buildVersion) &&
+  buildVersion !== "__APP_BUILD_VERSION__";
+
+if (
+  import.meta.env.PROD &&
+  hasImmutableBuildVersion &&
+  typeof window !== "undefined" &&
+  window.isSecureContext &&
+  "serviceWorker" in navigator
+) {
   window.addEventListener("load", async () => {
     try {
-      const registration = await navigator.serviceWorker.register(`/sw.js?v=${encodeURIComponent(buildVersion)}`);
-      if (registration.waiting) {
-        registration.waiting.postMessage({ type: "SKIP_WAITING" });
-      }
-      navigator.serviceWorker.addEventListener("message", (event) => {
-        if (event.data?.type === "SW_VERSION_ACTIVATED" && event.data.version !== buildVersion) {
-          window.location.reload();
-        }
+      const registration = await navigator.serviceWorker.register("/sw.js", {
+        scope: "/",
+      });
+
+      const announceUpdate = () => {
+        window.dispatchEvent(
+          new CustomEvent("switchos:pwa-update-ready", {
+            detail: { version: buildVersion },
+          }),
+        );
+      };
+
+      if (registration.waiting) announceUpdate();
+      registration.addEventListener("updatefound", () => {
+        const installing = registration.installing;
+        if (!installing) return;
+        installing.addEventListener("statechange", () => {
+          if (
+            installing.state === "installed" &&
+            navigator.serviceWorker.controller
+          ) {
+            announceUpdate();
+          }
+        });
+      });
+
+      window.addEventListener("focus", () => {
+        void registration.update();
       });
     } catch (error) {
-      reportClientError("pwa.service_worker_registration_failed", error, { buildVersion });
+      reportClientError("pwa.service_worker_registration_failed", error, {
+        buildVersion,
+      });
     }
   });
 }
