@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -130,6 +131,18 @@ func NewMojaloopService(tigerBeetle TigerBeetleLedger) (*MojaloopService, error)
 	if err := configureFinancialDatabasePool(db); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("configure Mojaloop database pool: %w", err)
+	}
+	// MOJALOOP_DATABASE_POOL_MAX is an explicit per-workload override (used by the
+	// dedicated outbox-worker manifest) applied on top of the FINANCIAL_DB_* pool
+	// defaults configured above.
+	if poolMaxRaw := strings.TrimSpace(os.Getenv("MOJALOOP_DATABASE_POOL_MAX")); poolMaxRaw != "" {
+		poolMax, err := strconv.Atoi(poolMaxRaw)
+		if err != nil || poolMax < 1 || poolMax > 48 {
+			_ = db.Close()
+			return nil, fmt.Errorf("MOJALOOP_DATABASE_POOL_MAX must be an integer between 1 and 48")
+		}
+		db.SetMaxOpenConns(poolMax)
+		db.SetMaxIdleConns(poolMax)
 	}
 	if err := db.Ping(); err != nil {
 		_ = db.Close()
