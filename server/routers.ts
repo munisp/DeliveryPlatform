@@ -10,6 +10,7 @@ import {
   workspaceReadProcedure,
 } from "./_core/trpc";
 import { systemRouter } from "./_core/systemRouter";
+import { consolesRouter } from "./_core/consolesRouter";
 import {
   getDriverMobilityWorkspace,
   getMerchantChannelWorkspace,
@@ -173,6 +174,8 @@ async function requireWorkspaceData<T>(
 
 export const appRouter = router({
   system: systemRouter,
+
+  consoles: consolesRouter,
 
   auth: router({
     me: publicProcedure.query(({ ctx }) => ctx.user),
