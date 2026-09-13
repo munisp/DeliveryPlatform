@@ -1,7 +1,7 @@
 import cookieParser from "cookie-parser";
 import express from "express";
 import { createHTTPHandler } from "@trpc/server/adapters/standalone";
-import { randomUUID } from "crypto";
+import { randomUUID, timingSafeEqual } from "crypto";
 import { fileURLToPath } from "url";
 import path from "path";
 
@@ -306,12 +306,25 @@ function applyCors(req: express.Request, res: express.Response) {
   }
 }
 
+// Constant-time token comparison. A length mismatch still burns a
+// timingSafeEqual against a same-length buffer so the early return does not
+// leak the expected token length.
+function tokensEqual(provided: string, expected: string): boolean {
+  const a = Buffer.from(provided, "utf8");
+  const b = Buffer.from(expected, "utf8");
+  if (a.length !== b.length) {
+    timingSafeEqual(a, a);
+    return false;
+  }
+  return timingSafeEqual(a, b);
+}
+
 function requireInternalServiceAccess(
   req: express.Request,
   res: express.Response,
 ) {
   const provided = `${req.header("X-Internal-Service-Token") ?? ""}`.trim();
-  if (!provided || provided !== ENV.internalServiceToken) {
+  if (!provided || !tokensEqual(provided, ENV.internalServiceToken)) {
     res.status(401).json({ error: "unauthorized" });
     return false;
   }
@@ -369,12 +382,21 @@ async function issueOperatorSession(
 ) {
   const sessionId = randomUUID();
   const mfaAuthenticated = Boolean(options.mfaAuthenticated);
+  // Derive the session identity from the authenticated credential itself.
+  // Every session previously shared the static ENV.ownerOpenId subject, which
+  // collapsed all operators into one identity for anything keyed on openId
+  // (public.users, drivers). The shared ownerOpenId is kept ONLY as the
+  // bootstrap-owner fallback when no credential identity exists.
+  const credentialOpenId =
+    Number.isFinite(operator.id) && operator.id > 0
+      ? `operator:${operator.id}`
+      : ENV.ownerOpenId;
   const token = await createSessionToken({
     sub: String(operator.id),
     name: operator.name,
     email: operator.email,
     role: operator.role,
-    openId: ENV.ownerOpenId,
+    openId: credentialOpenId,
     tenantId: operator.tenantId,
     scopes:
       operator.role === "viewer"
@@ -2716,10 +2738,9 @@ app.post(
   async (req, res) => {
     const expectedToken =
       `${process.env.FINANCE_ROUTING_RECEIPT_TOKEN ?? ""}`.trim();
-    if (
-      !expectedToken ||
-      req.header("X-Internal-Service-Token") !== expectedToken
-    ) {
+    const providedToken =
+      `${req.header("X-Internal-Service-Token") ?? ""}`.trim();
+    if (!expectedToken || !tokensEqual(providedToken, expectedToken)) {
       res.status(401).json({ error: "unauthorized_receipt_source" });
       return;
     }

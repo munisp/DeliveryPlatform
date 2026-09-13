@@ -27,11 +27,13 @@ import {
  * Courier / gig-worker self-serve router.
  *
  * Every procedure is an authenticatedProcedure and is scoped to the caller's
- * own identity: vehicle-rental and dispatch-fairness wrappers pass
- * ctx.user.id straight through to the underlying modules (their contracts and
- * offers are keyed by users.id), and the earnings/settlement/performance
- * wrappers first resolve the caller's row in the `drivers` table and only
- * ever query with that driver id.
+ * own identity. Sessions carry an `operator_credentials` identity, but the
+ * courier domain tables are keyed by `public.users.id`, so vehicle-rental and
+ * dispatch-fairness wrappers first resolve the caller's `public.users` row
+ * via resolvePublicUser (open_id, then email, provisioning the row on first
+ * use) and only ever pass THAT id to the underlying modules. The
+ * earnings/settlement/performance wrappers resolve the caller's row in the
+ * `drivers` table and only ever query with that driver id.
  *
  * Driver <-> user linkage: the `drivers` table has no user_id column. It does
  * carry a UNIQUE `open_id` (matching users.open_id for accounts provisioned
@@ -46,6 +48,89 @@ export type LinkedDriver = {
   status: string;
   link: "open_id" | "email";
 };
+
+export type LinkedPublicUser = {
+  id: number;
+  link: "open_id" | "email" | "created";
+};
+
+/**
+ * Resolve (or ensure) the caller's row in `public.users`.
+ *
+ * Sessions are issued against `operator_credentials.id`, but the courier
+ * domain tables (`vehicle_access.*`, `public.vehicle_rental_charges`,
+ * `mobility.*`) key on `public.users.id` — including the
+ * `vehicle_access.transition_contract` worker/operator authorization checks
+ * (drizzle/0058) and `vehicle_access.is_operator` (drizzle/0050), which both
+ * compare against `public.users.id`. Passing the operator-credential id
+ * straight through would be a cross-identity IDOR: credential ids and user
+ * ids collide numerically while referring to different people.
+ *
+ * Resolution mirrors resolveDriverForUser: match by open_id first (rank 0),
+ * then by case-insensitive email (rank 1). When no row exists yet, one is
+ * provisioned from the session identity so the caller always operates inside
+ * the public.users ID space.
+ */
+export async function resolvePublicUser(
+  user: Pick<SessionUser, "id" | "openId" | "email" | "name">,
+): Promise<LinkedPublicUser> {
+  const pool = await getPool();
+  const openId =
+    user.openId && user.openId.trim().length > 0
+      ? user.openId.trim()
+      : `operator:${user.id}`;
+  const email = user.email ?? null;
+
+  const found = await pool.query<{
+    id: number;
+    link: "open_id" | "email";
+  }>(
+    `SELECT id, link
+     FROM (
+       SELECT u.id, 'open_id'::text AS link, 0 AS rank
+       FROM public.users u
+       WHERE u.open_id = $1
+       UNION ALL
+       SELECT u.id, 'email'::text AS link, 1 AS rank
+       FROM public.users u
+       WHERE $2::text IS NOT NULL AND u.email IS NOT NULL
+         AND lower(u.email) = lower($2)
+     ) matches
+     ORDER BY rank, id
+     LIMIT 1`,
+    [openId, email],
+  );
+  const existing = found.rows[0];
+  if (existing) {
+    return { id: Number(existing.id), link: existing.link };
+  }
+
+  // Ensure a public.users row exists for this identity. ON CONFLICT absorbs
+  // the race where two concurrent first requests provision the same row.
+  const inserted = await pool.query<{ id: number }>(
+    `INSERT INTO public.users (open_id, name, email, login_method, last_signed_in)
+     VALUES ($1, $2, $3, 'operator_credential', now())
+     ON CONFLICT (open_id) DO NOTHING
+     RETURNING id`,
+    [openId, user.name ?? null, email],
+  );
+  const created = inserted.rows[0];
+  if (created) {
+    return { id: Number(created.id), link: "created" };
+  }
+  const raced = await pool.query<{ id: number }>(
+    `SELECT id FROM public.users WHERE open_id = $1`,
+    [openId],
+  );
+  const racedRow = raced.rows[0];
+  if (!racedRow) {
+    throw new TRPCError({
+      code: "INTERNAL_SERVER_ERROR",
+      message: "public_user_resolution_failed",
+    });
+  }
+  return { id: Number(racedRow.id), link: "open_id" };
+}
 
 export async function resolveDriverForUser(
   user: Pick<SessionUser, "openId" | "email">,
@@ -286,8 +371,9 @@ export const selfserveRouter = router({
   myVehicleContracts: authenticatedProcedure
     .input(limitInput)
     .query(async ({ ctx, input }) => {
+      const publicUser = await resolvePublicUser(ctx.user);
       return listVehicleAccessContracts({
-        actorUserId: ctx.user.id,
+        actorUserId: publicUser.id,
         limit: input?.limit ?? 25,
       });
     }),
@@ -309,13 +395,14 @@ export const selfserveRouter = router({
   myRentalCharges: authenticatedProcedure
     .input(limitInput)
     .query(async ({ ctx, input }) => {
+      const publicUser = await resolvePublicUser(ctx.user);
       const pool = await getPool();
       const result = await pool.query(
         `SELECT * FROM public.vehicle_rental_charges
          WHERE driver_user_id = $1
          ORDER BY created_at DESC
          LIMIT $2`,
-        [ctx.user.id, input?.limit ?? 25],
+        [publicUser.id, input?.limit ?? 25],
       );
       return result.rows.map((row) => toRentalCharge(row));
     }),
@@ -339,8 +426,9 @@ export const selfserveRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      const publicUser = await resolvePublicUser(ctx.user);
       const contractId = await requestVehicleAccessWithAddOns({
-        workerUserId: ctx.user.id,
+        workerUserId: publicUser.id,
         offerId: input.offerId,
         startsAt: input.startsAt,
         endsAt: input.endsAt,
@@ -360,8 +448,13 @@ export const selfserveRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      // Resolve into the public.users ID space first: the contract worker /
+      // operator authorization inside vehicle_access.transition_contract
+      // (drizzle/0058) compares against public.users.id, never against the
+      // operator_credential id carried by the session.
+      const publicUser = await resolvePublicUser(ctx.user);
       const state = await transitionVehicleAccessContract({
-        actorUserId: ctx.user.id,
+        actorUserId: publicUser.id,
         contractId: input.contractId,
         action: input.action as ContractAction,
         reason: input.reason ?? null,
@@ -371,7 +464,7 @@ export const selfserveRouter = router({
       if (state === "active") {
         activationCharge = await recordRentalCharge({
           contractId: input.contractId,
-          driverUserId: ctx.user.id,
+          driverUserId: publicUser.id,
           chargeType: "activation",
           idempotencyKey: `${input.idempotencyKey}:charge`,
         });
@@ -380,7 +473,8 @@ export const selfserveRouter = router({
     }),
 
   myFairnessOffers: authenticatedProcedure.query(async ({ ctx }) => {
-    return listTransparentDriverOffers(ctx.user.id);
+    const publicUser = await resolvePublicUser(ctx.user);
+    return listTransparentDriverOffers(publicUser.id);
   }),
 
   declineOffer: authenticatedProcedure
@@ -400,8 +494,9 @@ export const selfserveRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      const publicUser = await resolvePublicUser(ctx.user);
       return declineTransparentDriverOffer({
-        driverUserId: ctx.user.id,
+        driverUserId: publicUser.id,
         offerId: input.offerId,
         reason: input.reason,
         idempotencyKey: input.idempotencyKey,

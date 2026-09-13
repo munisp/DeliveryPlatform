@@ -52,12 +52,22 @@ describe("courier self-serve portal", () => {
     ]) {
       expect(router).toContain(`${name}: authenticatedProcedure`);
     }
-    // every wrapper passes the caller's identity through
-    expect(router).toContain("actorUserId: ctx.user.id");
-    expect(router).toContain("workerUserId: ctx.user.id");
-    expect(router).toContain("listTransparentDriverOffers(ctx.user.id)");
-    expect(router).toContain("driverUserId: ctx.user.id");
+    // every wrapper resolves the caller into the public.users ID space and
+    // passes THAT id through — never the operator_credential session id
+    expect(router).toContain("export async function resolvePublicUser");
+    expect(router).toContain("FROM public.users u");
+    expect(router).toContain("ON CONFLICT (open_id) DO NOTHING");
+    expect(router).toContain("const publicUser = await resolvePublicUser(ctx.user)");
+    expect(router).toContain("actorUserId: publicUser.id");
+    expect(router).toContain("workerUserId: publicUser.id");
+    expect(router).toContain("listTransparentDriverOffers(publicUser.id)");
+    expect(router).toContain("driverUserId: publicUser.id");
     expect(router).toContain("WHERE driver_user_id = $1");
+    // the session's operator_credential id must not reach domain queries
+    expect(router).not.toContain("actorUserId: ctx.user.id");
+    expect(router).not.toContain("workerUserId: ctx.user.id");
+    expect(router).not.toContain("driverUserId: ctx.user.id");
+    expect(router).not.toContain("listTransparentDriverOffers(ctx.user.id)");
   });
 
   it("resolves the caller's driver row via open_id with email fallback", () => {

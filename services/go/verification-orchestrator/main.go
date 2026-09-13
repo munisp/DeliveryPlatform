@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -42,6 +43,10 @@ type config struct {
 	s3SecretKey      string
 	s3SessionToken   string
 	maxObjectBytes   int64
+	// retrievalAllowedHosts lists hostnames (lowercase, no port) that may be
+	// fetched even when they resolve to non-public addresses. Operator-set via
+	// RETRIEVAL_ALLOWED_HOSTS; empty by default (fail closed).
+	retrievalAllowedHosts map[string]bool
 }
 
 type claimedJob struct {
@@ -149,7 +154,28 @@ func loadConfig() config {
 		s3SecretKey:      strings.TrimSpace(os.Getenv("AWS_SECRET_ACCESS_KEY")),
 		s3SessionToken:   strings.TrimSpace(os.Getenv("AWS_SESSION_TOKEN")),
 		maxObjectBytes:   loadMaxObjectBytes(),
+		retrievalAllowedHosts: parseAllowedHosts(os.Getenv("RETRIEVAL_ALLOWED_HOSTS")),
 	}
+}
+
+// parseAllowedHosts parses a comma-separated hostname allowlist. Entries are
+// lowercased and stripped of any port so they match URL.Hostname().
+func parseAllowedHosts(raw string) map[string]bool {
+	hosts := map[string]bool{}
+	for _, entry := range strings.Split(raw, ",") {
+		entry = strings.ToLower(strings.TrimSpace(entry))
+		if entry == "" {
+			continue
+		}
+		if host, _, err := net.SplitHostPort(entry); err == nil {
+			entry = host
+		}
+		entry = strings.Trim(entry, "[]")
+		if entry != "" {
+			hosts[entry] = true
+		}
+	}
+	return hosts
 }
 
 func requireInternal(r *http.Request, token string) bool {

@@ -95,7 +95,10 @@ func TestFetchHTTPObject(t *testing.T) {
 	}))
 	defer server.Close()
 
-	cfg := config{maxObjectBytes: 64}
+	// The httptest server listens on loopback, so the SSRF guard only permits
+	// the fetch when the host is explicitly allowlisted.
+	allowed := map[string]bool{"127.0.0.1": true}
+	cfg := config{maxObjectBytes: 64, retrievalAllowedHosts: allowed}
 	body, err := fetchEvidenceObject(context.Background(), cfg, server.Client(), server.URL+"/obj")
 	if err != nil || string(body) != "real-evidence" {
 		t.Fatalf("unexpected fetch body=%q err=%v", body, err)
@@ -103,8 +106,71 @@ func TestFetchHTTPObject(t *testing.T) {
 	if _, err := fetchEvidenceObject(context.Background(), cfg, server.Client(), server.URL+"/missing"); err == nil {
 		t.Fatal("expected non-200 status to fail")
 	}
-	if _, err := fetchEvidenceObject(context.Background(), config{maxObjectBytes: 4}, server.Client(), server.URL+"/obj"); err == nil {
+	if _, err := fetchEvidenceObject(context.Background(), config{maxObjectBytes: 4, retrievalAllowedHosts: allowed}, server.Client(), server.URL+"/obj"); err == nil {
 		t.Fatal("expected size bound to be enforced")
+	}
+}
+
+func TestFetchHTTPObjectRejectsPrivateIP(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("should-never-be-read"))
+	}))
+	defer server.Close()
+
+	// Loopback (httptest) target must be rejected without the allowlist.
+	if _, err := fetchEvidenceObject(context.Background(), config{maxObjectBytes: 64}, server.Client(), server.URL+"/obj"); err == nil {
+		t.Fatal("expected loopback evidence URL to be rejected by the SSRF guard")
+	} else if !errors.Is(err, errBlockedFetchTarget) {
+		t.Fatalf("expected errBlockedFetchTarget, got %v", err)
+	}
+}
+
+func TestValidateFetchTarget(t *testing.T) {
+	blocked := []string{
+		"http://127.0.0.1:9000/obj",
+		"http://10.0.0.5/obj",
+		"http://172.16.1.1/obj",
+		"http://192.168.1.1/obj",
+		"http://169.254.169.254/latest/meta-data",
+		"http://100.64.0.1/obj",
+		"http://0.0.0.0/obj",
+		"http://[::1]/obj",
+		"http://[fe80::1]/obj",
+		"http://[::ffff:127.0.0.1]/obj",
+		"file:///etc/passwd",
+		"ftp://example.com/obj",
+		"gopher://127.0.0.1:6379/_INFO",
+	}
+	for _, raw := range blocked {
+		if err := validateFetchTarget(context.Background(), raw, nil); err == nil {
+			t.Fatalf("expected %q to be rejected", raw)
+		}
+	}
+
+	// Allowlisted hosts bypass the non-public-address rejection.
+	if err := validateFetchTarget(context.Background(), "http://minio.internal:9000/obj", map[string]bool{"minio.internal": true}); err != nil {
+		t.Fatalf("allowlisted host should pass, got %v", err)
+	}
+	// Scheme is enforced even for allowlisted hosts.
+	if err := validateFetchTarget(context.Background(), "file:///etc/passwd", map[string]bool{"": true}); err == nil {
+		t.Fatal("non-http scheme must be rejected even with an allowlist")
+	}
+}
+
+func TestFetchHTTPObjectRechecksRedirects(t *testing.T) {
+	// The redirector runs on (allowlisted) loopback but 302s to a link-local
+	// metadata address. The redirect target must be re-validated and the
+	// fetch rejected before any connection to it is attempted.
+	redirector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "http://169.254.169.254/latest/meta-data", http.StatusFound)
+	}))
+	defer redirector.Close()
+
+	cfg := config{maxObjectBytes: 64, retrievalAllowedHosts: map[string]bool{"127.0.0.1": true}}
+	if _, err := fetchEvidenceObject(context.Background(), cfg, redirector.Client(), redirector.URL+"/go"); err == nil {
+		t.Fatal("expected redirect to link-local target to be rejected")
+	} else if !strings.Contains(err.Error(), errBlockedFetchTarget.Error()) {
+		t.Fatalf("expected SSRF guard error, got %v", err)
 	}
 }
 
