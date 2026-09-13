@@ -22,7 +22,10 @@ sudo -u postgres psql -X -d "$DB_NAME" -v ON_ERROR_STOP=1 -c 'CREATE EXTENSION p
 for migration in \
   "$ROOT_DIR/drizzle/0006_mojaloop_exact_money_and_outbox.sql" \
   "$ROOT_DIR/drizzle/0007_mojaloop_schema_contract.sql" \
-  "$ROOT_DIR/drizzle/0055_tigerbeetle_batch_outbox.sql"; do
+  "$ROOT_DIR/drizzle/0055_tigerbeetle_batch_outbox.sql" \
+  "$ROOT_DIR/drizzle/0056_financial_dead_letter_remediation.sql" \
+  "$ROOT_DIR/drizzle/0070_financial_partitioned_tigerbeetle_dispatch.sql" \
+  "$ROOT_DIR/drizzle/0071_financial_dead_letter_head_resolution.sql"; do
   PGPASSWORD="$ROLE_PASSWORD" psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 < "$migration" >/dev/null
 done
 

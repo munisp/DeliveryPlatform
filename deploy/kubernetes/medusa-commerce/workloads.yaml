@@ -1,0 +1,317 @@
+# Medusa commerce roles. Secrets are provisioned outside Git:
+# medusa-commerce-runtime contains MEDUSA_DATABASE_URL, MEDUSA_REDIS_URL,
+# CORS values, JWT/cookie secrets, store id, ingress URL, and webhook secret.
+# medusa-outbox-metrics contains MEDUSA_OUTBOX_METRICS_TOKEN.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: medusa-server
+  namespace: switchos
+  labels: &medusaServerLabels
+    app.kubernetes.io/name: medusa-server
+    app.kubernetes.io/component: commerce-api
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  replicas: 2
+  revisionHistoryLimit: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: medusa-server
+  template:
+    metadata:
+      labels: *medusaServerLabels
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 45
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: medusa-server
+          image: ghcr.io/munisp/deliveryplatform-medusa:REPLACE_WITH_IMMUTABLE_TAG
+          imagePullPolicy: IfNotPresent
+          command: ["npm", "run", "start:server"]
+          ports: [{ name: http, containerPort: 9000 }]
+          envFrom:
+            - secretRef: { name: medusa-commerce-runtime }
+          env:
+            - { name: MEDUSA_PROCESS_ROLE, value: server }
+            - { name: MEDUSA_FRAMEWORK_DB_POOL_MIN, value: "0" }
+            - { name: MEDUSA_FRAMEWORK_DB_POOL_MAX, value: "4" }
+            - { name: MEDUSA_INVENTORY_OUTBOX_POOL_MAX, value: "1" }
+            - { name: MEDUSA_INVENTORY_OUTBOX_CLAIM_LIMIT, value: "1" }
+          resources:
+            requests: { cpu: 500m, memory: 1Gi }
+            limits: { cpu: "2", memory: 2Gi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          startupProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 5
+            failureThreshold: 36
+          readinessProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet: { path: /health, port: http }
+            initialDelaySeconds: 20
+            periodSeconds: 20
+            timeoutSeconds: 3
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: medusa-server
+  namespace: switchos
+  labels:
+    app.kubernetes.io/name: medusa-server
+    app.kubernetes.io/component: commerce-api
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  selector: { app.kubernetes.io/name: medusa-server }
+  ports: [{ name: http, port: 9000, targetPort: http }]
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: medusa-server
+  namespace: switchos
+  labels:
+    app.kubernetes.io/name: medusa-server
+    app.kubernetes.io/component: commerce-api
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  minAvailable: 1
+  selector: { matchLabels: { app.kubernetes.io/name: medusa-server } }
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: medusa-server
+  namespace: switchos
+  labels:
+    app.kubernetes.io/name: medusa-server
+    app.kubernetes.io/component: commerce-api
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  scaleTargetRef: { apiVersion: apps/v1, kind: Deployment, name: medusa-server }
+  minReplicas: 2
+  maxReplicas: 6
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+        - { type: Percent, value: 50, periodSeconds: 60 }
+    scaleDown:
+      stabilizationWindowSeconds: 600
+      policies:
+        - { type: Percent, value: 25, periodSeconds: 60 }
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: { type: Utilization, averageUtilization: 65 }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: medusa-worker
+  namespace: switchos
+  labels: &medusaWorkerLabels
+    app.kubernetes.io/name: medusa-worker
+    app.kubernetes.io/component: commerce-background
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  replicas: 2
+  revisionHistoryLimit: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxSurge: 0, maxUnavailable: 1 }
+  selector:
+    matchLabels: { app.kubernetes.io/name: medusa-worker }
+  template:
+    metadata:
+      labels: *medusaWorkerLabels
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 45
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: medusa-worker
+          image: ghcr.io/munisp/deliveryplatform-medusa:REPLACE_WITH_IMMUTABLE_TAG
+          imagePullPolicy: IfNotPresent
+          command: ["npm", "run", "start:worker-supervisor"]
+          ports: [{ name: health, containerPort: 9002 }]
+          envFrom:
+            - secretRef: { name: medusa-commerce-runtime }
+          env:
+            - { name: MEDUSA_PROCESS_ROLE, value: worker }
+            - { name: MEDUSA_FRAMEWORK_DB_POOL_MIN, value: "0" }
+            - { name: MEDUSA_FRAMEWORK_DB_POOL_MAX, value: "3" }
+            - { name: MEDUSA_INVENTORY_OUTBOX_POOL_MAX, value: "1" }
+            - { name: MEDUSA_INVENTORY_OUTBOX_CLAIM_LIMIT, value: "1" }
+            - { name: MEDUSA_WORKER_HEALTH_PORT, value: "9002" }
+          resources:
+            requests: { cpu: 500m, memory: 1Gi }
+            limits: { cpu: "2", memory: 2Gi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          startupProbe:
+            httpGet: { path: /healthz, port: health }
+            periodSeconds: 5
+            failureThreshold: 36
+          readinessProbe:
+            httpGet: { path: /healthz, port: health }
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet: { path: /healthz, port: health }
+            initialDelaySeconds: 20
+            periodSeconds: 20
+            timeoutSeconds: 3
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: medusa-worker
+  namespace: switchos
+  labels:
+    app.kubernetes.io/name: medusa-worker
+    app.kubernetes.io/component: commerce-background
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  minAvailable: 1
+  selector: { matchLabels: { app.kubernetes.io/name: medusa-worker } }
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: medusa-worker
+  namespace: switchos
+  labels:
+    app.kubernetes.io/name: medusa-worker
+    app.kubernetes.io/component: commerce-background
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  scaleTargetRef: { apiVersion: apps/v1, kind: Deployment, name: medusa-worker }
+  minReplicas: 2
+  maxReplicas: 4
+  behavior:
+    scaleDown: { stabilizationWindowSeconds: 600 }
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: { type: Utilization, averageUtilization: 65 }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: medusa-inventory-outbox
+  namespace: switchos
+  labels: &medusaDispatcherLabels
+    app.kubernetes.io/name: medusa-inventory-outbox
+    app.kubernetes.io/component: commerce-inventory-dispatch
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxSurge: 0, maxUnavailable: 1 }
+  selector:
+    matchLabels: { app.kubernetes.io/name: medusa-inventory-outbox }
+  template:
+    metadata:
+      labels: *medusaDispatcherLabels
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 45
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: medusa-inventory-outbox
+          image: ghcr.io/munisp/deliveryplatform-medusa:REPLACE_WITH_IMMUTABLE_TAG
+          imagePullPolicy: IfNotPresent
+          command: ["npm", "run", "start:inventory-dispatcher"]
+          ports: [{ name: metrics, containerPort: 9001 }]
+          envFrom:
+            - secretRef: { name: medusa-commerce-runtime }
+            - secretRef: { name: medusa-outbox-metrics }
+          env:
+            - { name: MEDUSA_PROCESS_ROLE, value: inventory-dispatcher }
+            - { name: MEDUSA_INVENTORY_OUTBOX_POOL_MAX, value: "4" }
+            - { name: MEDUSA_INVENTORY_OUTBOX_CLAIM_LIMIT, value: "2" }
+            - { name: MEDUSA_INVENTORY_OUTBOX_LEASE_MS, value: "45000" }
+            - { name: MEDUSA_INVENTORY_OUTBOX_DELIVERY_TIMEOUT_MS, value: "10000" }
+            - { name: MEDUSA_INVENTORY_OUTBOX_INTERVAL_MS, value: "5000" }
+            - { name: MEDUSA_INVENTORY_OUTBOX_METRICS_PORT, value: "9001" }
+          resources:
+            requests: { cpu: 250m, memory: 384Mi }
+            limits: { cpu: "1", memory: 768Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          startupProbe:
+            httpGet: { path: /healthz, port: metrics }
+            periodSeconds: 5
+            failureThreshold: 36
+          readinessProbe:
+            httpGet: { path: /healthz, port: metrics }
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet: { path: /healthz, port: metrics }
+            initialDelaySeconds: 20
+            periodSeconds: 20
+            timeoutSeconds: 3
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: medusa-inventory-outbox
+  namespace: switchos
+  labels:
+    app.kubernetes.io/name: medusa-inventory-outbox
+    app.kubernetes.io/component: commerce-inventory-dispatch
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  selector: { app.kubernetes.io/name: medusa-inventory-outbox }
+  ports: [{ name: metrics, port: 9001, targetPort: metrics }]
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: medusa-inventory-outbox
+  namespace: switchos
+  labels:
+    app.kubernetes.io/name: medusa-inventory-outbox
+    app.kubernetes.io/component: commerce-inventory-dispatch
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  minAvailable: 1
+  selector: { matchLabels: { app.kubernetes.io/name: medusa-inventory-outbox } }

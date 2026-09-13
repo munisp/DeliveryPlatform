@@ -77,13 +77,17 @@ import {
   getFinancialAdminAlerts,
   getFinancialDatabaseEvidence,
   getFinancialAdminSettings,
+  getFinancialDeadLetterHeadResolution,
   listFinancialAlertDeliveryReceipts,
   listFinancialDeadLetterCases,
   listFinancialDependencyHealthHistory,
   openFinancialDeadLetterCase,
+  approveFinancialDeadLetterHeadResolution,
   approveFinancialDeadLetterRemediation,
   recordFinancialAdminAlertAction,
+  rejectFinancialDeadLetterHeadResolution,
   rejectFinancialDeadLetterRemediation,
+  requestFinancialDeadLetterHeadResolution,
   requestFinancialDeadLetterRemediation,
   recordFinancialAlertDeliveryReceipt,
   recordFinancialDependencyHealth,
@@ -100,6 +104,11 @@ import {
   VehicleTrackerIntegrationError,
 } from "./vehicleTrackerIntegration";
 import {
+  dispatchOneVehicleTrackerProviderIngest,
+  startVehicleTrackerProviderConsumers,
+  VehicleTrackerProviderConsumerError,
+} from "./vehicleTrackerProviderConsumers";
+import {
   getFinancialTopology,
   getLatestDeliveryLocation,
   recordDeliveryLocation,
@@ -114,6 +123,11 @@ import {
 import { startDeveloperWebhookDispatcher } from "./developerWebhookDispatcher";
 import { developerOpenApi } from "./developerOpenApi";
 import { ingestMedusaWebhook, MedusaCommerceError } from "./medusaCommerce";
+import { ingestExternalCommerceWebhook } from "./commerceFulfillment";
+import {
+  handleRoleScopedTrackingSnapshot,
+  handleRoleScopedTrackingStream,
+} from "./realtimeTracking";
 import {
   assertWorkOrderTenant,
   createGeofence,
@@ -475,6 +489,51 @@ app.post(
         return;
       }
       res.status(503).json({ error: "medusa_event_unavailable" });
+    }
+  },
+);
+
+app.post(
+  "/api/internal/commerce/platforms/:connectionKey/events",
+  express.raw({ type: "application/json", limit: ENV.apiBodyLimit }),
+  rateLimit(120),
+  async (req, res) => {
+    const eventId = `${req.header("X-Commerce-Event-Id") ?? ""}`.trim();
+    const eventType = `${req.header("X-Commerce-Event-Type") ?? ""}`.trim();
+    const rawBody = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+    try {
+      const event = await ingestExternalCommerceWebhook({
+        connectionKey: req.params.connectionKey,
+        externalEventId: eventId,
+        eventType: eventType as "commerce.order.placed" | "commerce.order.cancelled" | "commerce.fulfillment.ready",
+        signature: req.header("X-Commerce-Signature"),
+        rawBody,
+        parsedBody: rawBody.length ? JSON.parse(rawBody.toString("utf8")) : null,
+      });
+      await recordOperationalEvent({
+        eventType: "commerce.external_platform_event.received",
+        route: req.path,
+        outcome: "success",
+        payload: { connectionKey: req.params.connectionKey, eventId, eventType, eventRecordId: event.id },
+      });
+      res.status(202).json({ accepted: true, eventId: event.id });
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : "external_commerce_event_ingestion_failed";
+      await recordOperationalEvent({
+        eventType: "commerce.external_platform_event.received",
+        route: req.path,
+        outcome: "failure",
+        payload: { connectionKey: req.params.connectionKey, eventId, eventType, reason },
+      });
+      if (reason.includes("signature") || reason.includes("not_configured")) {
+        res.status(401).json({ error: "external_commerce_signature_invalid" });
+      } else if (reason.includes("identity") || reason.includes("payload") || reason.includes("input")) {
+        res.status(400).json({ error: "external_commerce_event_invalid" });
+      } else if (reason.includes("disabled") || reason.includes("not found") || reason.includes("required")) {
+        res.status(404).json({ error: "external_commerce_connection_unavailable" });
+      } else {
+        res.status(503).json({ error: "external_commerce_event_unavailable" });
+      }
     }
   },
 );
@@ -1188,6 +1247,13 @@ async function operationsRoute(
 app.get("/api/operations/snapshot", rateLimit(60), async (req, res) => {
   await operationsRoute(req, res, (actor) => listOperationsSnapshot(actor));
 });
+app.get("/api/tracking/live/:scope/snapshot", rateLimit(30), async (req, res) => {
+  await handleRoleScopedTrackingSnapshot(req, res, getSessionUserFromRequest);
+});
+
+app.get("/api/tracking/live/:scope", rateLimit(12), async (req, res) => {
+  await handleRoleScopedTrackingStream(req, res, getSessionUserFromRequest);
+});
 app.post("/api/operations/zones", rateLimit(20), async (req, res) => {
   await operationsRoute(req, res, (actor) =>
     createServiceZone(actor, {
@@ -1616,6 +1682,39 @@ app.post(
           : code === "vehicle_tracker_ingress_disabled" ||
               code === "vehicle_tracker_webhook_secret_unavailable"
             ? 503
+            : 400;
+      res.status(status).json({ error: code });
+    }
+  },
+);
+
+app.post(
+  "/internal/vehicle-trackers/providers/poll-once",
+  rateLimit(10),
+  async (req: AppRequest, res) => {
+    if (!requireInternalServiceAccess(req, res)) return;
+    const providerKind = req.body?.providerKind;
+    if (providerKind !== "geotab_feed" && providerKind !== "traccar_rest") {
+      res.status(400).json({ error: "vehicle_tracker_provider_kind_invalid" });
+      return;
+    }
+    try {
+      const result = await dispatchOneVehicleTrackerProviderIngest({
+        providerKind,
+        workerId: `vehicle-tracker-provider-${req.requestId ?? randomUUID()}`,
+      });
+      res.status(200).json(result);
+    } catch (error) {
+      const code =
+        error instanceof VehicleTrackerProviderConsumerError
+          ? error.code
+          : "vehicle_tracker_provider_transport_failed";
+      const status =
+        code === "vehicle_tracker_provider_consumers_disabled" ||
+        code === "vehicle_tracker_provider_credentials_unavailable"
+          ? 503
+          : code === "vehicle_tracker_provider_authentication_failed"
+            ? 502
             : 400;
       res.status(status).json({ error: code });
     }
@@ -2269,6 +2368,178 @@ app.post(
       res
         .status(409)
         .json({ error: "financial_dead_letter_independent_approval_required" });
+    }
+  },
+);
+
+app.get(
+  "/api/admin/finance/dead-letter-cases/:caseId/head-resolution",
+  rateLimit(10),
+  async (req, res) => {
+    const user = requireFinancialAdministrator(req, res);
+    if (!user) return;
+    const caseId = `${req.params.caseId ?? ""}`.trim();
+    if (!/^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(caseId)) {
+      res.status(400).json({ error: "invalid_dead_letter_case_id" });
+      return;
+    }
+    try {
+      const resolution = await getFinancialDeadLetterHeadResolution({
+        actorId: Number(user.id),
+        caseId,
+      });
+      if (!resolution) {
+        res.status(404).json({ error: "financial_dead_letter_head_resolution_not_found" });
+        return;
+      }
+      res.status(200).json({ resolution, retrievedAt: new Date().toISOString() });
+    } catch (error) {
+      console.error("[SwitchOS] Unable to get financial dead-letter head resolution", error);
+      res.status(503).json({ error: "financial_dead_letter_head_resolution_unavailable" });
+    }
+  },
+);
+
+app.post(
+  "/api/admin/finance/dead-letter-cases/:caseId/head-resolution-requests",
+  rateLimit(5),
+  async (req, res) => {
+    const user = requireFinancialAdministrator(req, res);
+    if (!user) return;
+    const caseId = `${req.params.caseId ?? ""}`.trim();
+    const resolutionDisposition = `${req.body?.resolutionDisposition ?? ""}`.trim();
+    const reason = `${req.body?.reason ?? ""}`.trim();
+    const reconciliationReference = `${req.body?.reconciliationReference ?? ""}`.trim();
+    const reconciliationDigestHex = `${req.body?.reconciliationDigestHex ?? ""}`.trim();
+    const idempotencyKey = `${req.body?.idempotencyKey ?? ""}`.trim();
+    if (
+      !/^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(caseId) ||
+      ![
+        "original_confirmed_committed_resolved",
+        "original_confirmed_not_committed_superseded",
+      ].includes(resolutionDisposition) ||
+      reason.length < 3 ||
+      reason.length > 1000 ||
+      !/^[A-Za-z0-9][A-Za-z0-9._:/.-]{2,199}$/.test(reconciliationReference) ||
+      !/^[a-f0-9]{64}$/.test(reconciliationDigestHex) ||
+      !/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/.test(idempotencyKey)
+    ) {
+      res.status(400).json({ error: "invalid_dead_letter_head_resolution_request" });
+      return;
+    }
+    try {
+      const result = await requestFinancialDeadLetterHeadResolution({
+        actorId: Number(user.id),
+        caseId,
+        resolutionDisposition: resolutionDisposition as
+          | "original_confirmed_committed_resolved"
+          | "original_confirmed_not_committed_superseded",
+        reason,
+        reconciliationReference,
+        reconciliationDigestHex,
+        idempotencyKey,
+      });
+      await recordOperationalEvent({
+        eventType: "finance.dead_letter.head_resolution.requested",
+        actorId: `${user.id}`,
+        actorRole: user.role ?? null,
+        tenantId: user.tenantId ?? null,
+        route: req.path,
+        outcome: "success",
+        payload: { caseId, resolutionDisposition, resolutionId: result.resolutionId },
+      });
+      res.status(202).json(result);
+    } catch (error) {
+      console.error("[SwitchOS] Unable to request financial dead-letter head resolution", error);
+      res.status(409).json({ error: "financial_dead_letter_head_resolution_request_rejected" });
+    }
+  },
+);
+
+app.post(
+  "/api/admin/finance/dead-letter-cases/:caseId/head-resolution-approve",
+  rateLimit(5),
+  async (req, res) => {
+    const user = requireFinancialAdministrator(req, res);
+    if (!user) return;
+    const caseId = `${req.params.caseId ?? ""}`.trim();
+    const reason = `${req.body?.reason ?? ""}`.trim();
+    const idempotencyKey = `${req.body?.idempotencyKey ?? ""}`.trim();
+    if (
+      !/^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(caseId) ||
+      reason.length < 3 ||
+      reason.length > 1000 ||
+      !/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/.test(idempotencyKey)
+    ) {
+      res.status(400).json({ error: "invalid_dead_letter_head_resolution_approval" });
+      return;
+    }
+    try {
+      const result = await approveFinancialDeadLetterHeadResolution({
+        actorId: Number(user.id),
+        caseId,
+        reason,
+        idempotencyKey,
+      });
+      await recordOperationalEvent({
+        eventType: "finance.dead_letter.head_resolution.approved",
+        actorId: `${user.id}`,
+        actorRole: user.role ?? null,
+        tenantId: user.tenantId ?? null,
+        route: req.path,
+        outcome: "success",
+        payload: {
+          caseId,
+          resolutionId: result.resolutionId,
+          resolutionDisposition: result.resolutionDisposition,
+        },
+      });
+      res.status(201).json(result);
+    } catch (error) {
+      console.error("[SwitchOS] Unable to approve financial dead-letter head resolution", error);
+      res.status(409).json({ error: "financial_dead_letter_head_resolution_independent_approval_required" });
+    }
+  },
+);
+
+app.post(
+  "/api/admin/finance/dead-letter-cases/:caseId/head-resolution-reject",
+  rateLimit(5),
+  async (req, res) => {
+    const user = requireFinancialAdministrator(req, res);
+    if (!user) return;
+    const caseId = `${req.params.caseId ?? ""}`.trim();
+    const reason = `${req.body?.reason ?? ""}`.trim();
+    const idempotencyKey = `${req.body?.idempotencyKey ?? ""}`.trim();
+    if (
+      !/^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(caseId) ||
+      reason.length < 3 ||
+      reason.length > 1000 ||
+      !/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/.test(idempotencyKey)
+    ) {
+      res.status(400).json({ error: "invalid_dead_letter_head_resolution_rejection" });
+      return;
+    }
+    try {
+      const result = await rejectFinancialDeadLetterHeadResolution({
+        actorId: Number(user.id),
+        caseId,
+        reason,
+        idempotencyKey,
+      });
+      await recordOperationalEvent({
+        eventType: "finance.dead_letter.head_resolution.rejected",
+        actorId: `${user.id}`,
+        actorRole: user.role ?? null,
+        tenantId: user.tenantId ?? null,
+        route: req.path,
+        outcome: "success",
+        payload: { caseId, resolutionId: result.resolutionId },
+      });
+      res.status(200).json(result);
+    } catch (error) {
+      console.error("[SwitchOS] Unable to reject financial dead-letter head resolution", error);
+      res.status(409).json({ error: "financial_dead_letter_head_resolution_rejection_rejected" });
     }
   },
 );
@@ -4067,8 +4338,17 @@ app.post(
 );
 
 const stopDeveloperWebhookDispatcher = startDeveloperWebhookDispatcher();
-process.once("SIGTERM", () => stopDeveloperWebhookDispatcher());
-process.once("SIGINT", () => stopDeveloperWebhookDispatcher());
+const stopVehicleTrackerProviderConsumers = ENV.vehicleTrackerConsumerEmbedded
+  ? startVehicleTrackerProviderConsumers({ workerIdPrefix: "central-app" })
+  : () => undefined;
+process.once("SIGTERM", () => {
+  stopDeveloperWebhookDispatcher();
+  stopVehicleTrackerProviderConsumers();
+});
+process.once("SIGINT", () => {
+  stopDeveloperWebhookDispatcher();
+  stopVehicleTrackerProviderConsumers();
+});
 
 if (ENV.isProduction) {
   const staticRoot = path.dirname(fileURLToPath(import.meta.url));

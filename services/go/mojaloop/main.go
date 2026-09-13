@@ -127,6 +127,10 @@ func NewMojaloopService(tigerBeetle TigerBeetleLedger) (*MojaloopService, error)
 	if err != nil {
 		return nil, fmt.Errorf("open mojaloop database: %w", err)
 	}
+	if err := configureFinancialDatabasePool(db); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("configure Mojaloop database pool: %w", err)
+	}
 	if err := db.Ping(); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("ping mojaloop database: %w", err)
@@ -147,18 +151,18 @@ func NewMojaloopService(tigerBeetle TigerBeetleLedger) (*MojaloopService, error)
 	return service, nil
 }
 
-const mojaloopFundsSchemaContractVersion = 8
+const mojaloopFundsSchemaContractVersion = 10
 
 func (s *MojaloopService) verifyPersistenceContract() error {
 	var version int
 	if err := s.db.QueryRow(`SELECT version FROM platform_schema_contracts WHERE component = 'mojaloop_funds'`).Scan(&version); err != nil {
 		if err == sql.ErrNoRows {
-			return fmt.Errorf("Mojaloop funds schema contract is missing; apply migration 0007_mojaloop_schema_contract.sql before starting the service")
+			return fmt.Errorf("Mojaloop funds schema contract is missing; apply the reviewed Mojaloop financial migrations before starting the service")
 		}
 		return fmt.Errorf("read Mojaloop funds schema contract: %w", err)
 	}
 	if version < mojaloopFundsSchemaContractVersion {
-		return fmt.Errorf("Mojaloop funds schema contract version %d is obsolete; apply migration 0007_mojaloop_schema_contract.sql", version)
+		return fmt.Errorf("Mojaloop funds schema contract version %d is obsolete; apply the reviewed Mojaloop financial migrations before starting the service", version)
 	}
 
 	requiredColumns := [][2]string{
@@ -796,6 +800,13 @@ func (s *MojaloopService) updateTransferState(transferID, state string) error {
 }
 
 func (s *MojaloopService) buildReconciliationReport(transferID string) (ReconciliationReport, error) {
+	return s.buildReconciliationReportWithLedger(s.tigerBeetle, transferID)
+}
+
+func (s *MojaloopService) buildReconciliationReportWithLedger(ledgerClient TigerBeetleLedger, transferID string) (ReconciliationReport, error) {
+	if ledgerClient == nil {
+		return ReconciliationReport{}, fmt.Errorf("TigerBeetle ledger client is required for reconciliation")
+	}
 	transfer, ok := s.getTransfer(transferID)
 	if !ok {
 		return ReconciliationReport{}, fmt.Errorf("transfer not found")
@@ -820,7 +831,7 @@ func (s *MojaloopService) buildReconciliationReport(transferID string) (Reconcil
 		platformNetSettled = transfer.AmountMinor - platformRefunded
 	}
 
-	reconciliation, err := s.tigerBeetle.GetTransferReconciliation(transferID)
+	reconciliation, err := ledgerClient.GetTransferReconciliation(transferID)
 	if err != nil {
 		return ReconciliationReport{}, err
 	}
@@ -1333,9 +1344,29 @@ func main() {
 		if _, err := requiredFundsOutboxDestinations(); err != nil {
 			log.Fatalf("Failed to configure funds outbox worker: %v", err)
 		}
-		log.Printf("Mojaloop durable funds outbox worker started as %s", workerID)
-		if err := service.RunFundsOutboxDispatcher(ctx, workerID); err != nil {
-			log.Fatalf("Failed to run funds outbox worker: %v", err)
+		mux := http.NewServeMux()
+		mux.HandleFunc("/health", service.handleHealthHTTP)
+		mux.HandleFunc("/metrics/funds-outbox", service.handleFundsOutboxMetricsHTTP)
+		server := &http.Server{
+			Addr:              bindHost + ":" + httpPort,
+			Handler:           mux,
+			ReadHeaderTimeout: 5 * time.Second,
+		}
+		serverErrors := make(chan error, 1)
+		go func() {
+			log.Printf("Mojaloop durable funds outbox worker started as %s (health port %s)", workerID, server.Addr)
+			serverErrors <- server.ListenAndServe()
+		}()
+		workerError := service.RunFundsOutboxDispatcher(ctx, workerID)
+		shutdownContext, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		_ = server.Shutdown(shutdownContext)
+		serverError := <-serverErrors
+		if workerError != nil && workerError != context.Canceled {
+			log.Fatalf("Failed to run funds outbox worker: %v", workerError)
+		}
+		if serverError != nil && serverError != http.ErrServerClosed {
+			log.Fatalf("Funds outbox worker health server failed: %v", serverError)
 		}
 		return
 	}
@@ -1355,6 +1386,7 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", service.handleHealthHTTP)
+	mux.HandleFunc("/metrics/funds-outbox", service.handleFundsOutboxMetricsHTTP)
 	mux.HandleFunc("/callbacks/transfers", service.handleTransferCallback)
 	mux.HandleFunc("/callbacks/quotes", service.handleQuoteCallback)
 	mux.HandleFunc("/callbacks/refunds", service.handleRefundCallback)

@@ -21,8 +21,8 @@ function isSecureRequest(req: Request) {
 
 /**
  * Extract parent domain for cookie sharing across subdomains.
- * e.g., "3000-xxx.manuspre.computer" -> ".manuspre.computer"
- * This allows cookies set by 3000-xxx to be read by 8081-xxx
+ * e.g., "api.preview.example.com" -> ".example.com"
+ * This allows cookies set by one trusted application subdomain to be read by another.
  */
 function getParentDomain(hostname: string): string | undefined {
   // Don't set domain for localhost or IP addresses
@@ -33,14 +33,13 @@ function getParentDomain(hostname: string): string | undefined {
   // Split hostname into parts
   const parts = hostname.split(".");
 
-  // Need at least 3 parts for a subdomain (e.g., "3000-xxx.manuspre.computer")
-  // For "manuspre.computer", we can't set a parent domain
+  // Need at least three labels for a delegated application subdomain.
+  // A registrable domain alone has no parent cookie domain.
   if (parts.length < 3) {
     return undefined;
   }
 
-  // Return parent domain with leading dot (e.g., ".manuspre.computer")
-  // This allows cookie to be shared across all subdomains
+  // Return the parent domain with a leading dot for trusted subdomain sharing.
   return "." + parts.slice(-2).join(".");
 }
 

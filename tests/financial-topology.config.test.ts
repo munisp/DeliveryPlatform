@@ -32,4 +32,14 @@ describe("isolated financial topology configuration", () => {
     expect(temporalSection).toContain("--db-filename /tmp/temporal.db");
     expect(temporalSection).not.toContain("/var/lib/temporal");
   });
+
+  it("provides a loopback-bound Toxiproxy service only for local ledger transport-fault rehearsal", async () => {
+    const compose = await readFile(composePath, "utf8");
+    const proxySection = compose.slice(compose.indexOf("  toxiproxy:"), compose.indexOf("  postgres:"));
+
+    expect(proxySection).toContain("image: ghcr.io/shopify/toxiproxy:2.12.0");
+    expect(proxySection).toContain("network_mode: host");
+    expect(proxySection).toContain('command: ["-host", "127.0.0.1"]');
+    expect(proxySection).toContain('restart: "no"');
+  });
 });

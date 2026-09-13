@@ -5,5 +5,16 @@ resources:
   - resilience-invariant-probe-rules.yaml
   - resilience-circuit-breaker-alertmanagerconfig.yaml
   - resilience-matrix-wazuh-escalation-alertmanagerconfig.yaml
+  - vehicle-tracker-ingest-monitoring.yaml
+  - vehicle-tracker-pgbouncer-monitoring.yaml
+configMapGenerator:
+  - name: grafana-dashboard-vehicle-tracker-ingest
+    files:
+      - vehicle-tracker-ingest.json=grafana-dashboards/vehicle-tracker-ingest.json
+    options:
+      disableNameSuffixHash: true
+      labels:
+        grafana_dashboard: "1"
+        app.kubernetes.io/name: vehicle-tracker-ingest
 commonLabels:
   app.kubernetes.io/managed-by: kustomize

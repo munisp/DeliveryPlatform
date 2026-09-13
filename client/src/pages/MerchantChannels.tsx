@@ -68,9 +68,14 @@ export default function MerchantChannels() {
                   {logisticsTower?.network?.resilience_band ?? "unknown"} · {logisticsTower?.network?.critical_nodes ?? 0} critical nodes · {logisticsTower?.network?.constrained_nodes ?? 0} constrained nodes
                 </p>
               </div>
-              <Link href="/logistics-control-tower" className="inline-flex rounded-full border border-cyan-400/30 bg-cyan-500/10 px-4 py-2 text-sm font-medium text-cyan-100 transition hover:bg-cyan-500/20">
-                Open logistics control tower
-              </Link>
+              <div className="flex flex-wrap gap-3">
+                <Link href="/merchant-commerce" className="inline-flex rounded-full bg-cyan-500 px-4 py-2 text-sm font-medium text-slate-950 transition hover:bg-cyan-400">
+                  Open merchant store portal
+                </Link>
+                <Link href="/logistics-control-tower" className="inline-flex rounded-full border border-cyan-400/30 bg-cyan-500/10 px-4 py-2 text-sm font-medium text-cyan-100 transition hover:bg-cyan-500/20">
+                  Open logistics control tower
+                </Link>
+              </div>
             </CardContent>
           </Card>
           <Card>

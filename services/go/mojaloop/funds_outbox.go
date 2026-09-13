@@ -12,8 +12,9 @@ import (
 )
 
 const (
-	defaultOutboxBatchSize = 20
-	maximumOutboxAttempts  = 12
+	defaultOutboxBatchSize       = 20
+	maximumOutboxAttempts        = 12
+	genericFundsOutboxClaimLease = time.Minute
 )
 
 type fundsOutboxRecord struct {
@@ -27,6 +28,7 @@ type fundsOutboxRecord struct {
 	Step           string
 	Status         string
 	Payload        map[string]any
+	ClaimToken     string
 }
 
 func (s *MojaloopService) storeTransferAndWorkflow(transfer Transfer, event FundsWorkflowEvent) error {
@@ -313,20 +315,24 @@ func (s *MojaloopService) DispatchFundsOutbox(ctx context.Context, workerID stri
 		}
 		processed++
 		if err := s.dispatchFundsOutboxRecord(ctx, record); err != nil {
-			if updateErr := s.retryFundsOutboxRecord(record.ID, err); updateErr != nil {
+			if updateErr := s.retryFundsOutboxRecord(record, err); updateErr != nil {
 				return processed, updateErr
 			}
 			continue
 		}
 		if record.Destination == "tigerbeetle" {
+			// Refund finalization and generic-outbox completion are committed under
+			// the same claim fence so an expired worker cannot change local money
+			// state after a successor has reclaimed the row.
 			if err := s.finalizeTigerBeetleDispatch(record); err != nil {
-				if updateErr := s.retryFundsOutboxRecord(record.ID, err); updateErr != nil {
+				if updateErr := s.retryFundsOutboxRecord(record, err); updateErr != nil {
 					return processed, updateErr
 				}
 				continue
 			}
+			continue
 		}
-		if err := s.markFundsOutboxDelivered(record.ID); err != nil {
+		if err := s.markFundsOutboxDelivered(record); err != nil {
 			return processed, err
 		}
 	}
@@ -343,7 +349,10 @@ func (s *MojaloopService) claimFundsOutboxRecord(workerID string) (fundsOutboxRe
 	row := tx.QueryRow(
 		`WITH candidate AS (
 			SELECT candidate.id FROM mojaloop_funds_outbox AS candidate
-			WHERE candidate.status = 'pending' AND candidate.next_attempt_at <= NOW()
+			WHERE (
+				(candidate.status = 'pending' AND candidate.next_attempt_at <= NOW())
+				OR (candidate.status = 'processing' AND candidate.claim_expires_at <= NOW())
+			)
 			AND NOT (candidate.destination = 'tigerbeetle' AND candidate.workflow_type = 'transfer')
 			AND NOT EXISTS (
 				SELECT 1 FROM mojaloop_funds_outbox AS predecessor
@@ -356,15 +365,19 @@ func (s *MojaloopService) claimFundsOutboxRecord(workerID string) (fundsOutboxRe
 			LIMIT 1
 		)
 		UPDATE mojaloop_funds_outbox AS outbox
-		SET status = 'processing', locked_at = NOW(), locked_by = $1, attempt_count = attempt_count + 1, updated_at = NOW()
-		FROM candidate
-		WHERE outbox.id = candidate.id
-		RETURNING outbox.id, outbox.event_id, outbox.destination, outbox.idempotency_key, outbox.workflow_id, outbox.workflow_type, outbox.resource_id, outbox.step, outbox.workflow_status, outbox.payload`,
+			SET status = 'processing', locked_at = NOW(), locked_by = $1,
+				claim_token = gen_random_uuid(),
+				claim_expires_at = NOW() + $2::interval,
+				attempt_count = attempt_count + 1, updated_at = NOW()
+			FROM candidate
+			WHERE outbox.id = candidate.id
+			RETURNING outbox.id, outbox.event_id, outbox.destination, outbox.idempotency_key, outbox.workflow_id, outbox.workflow_type, outbox.resource_id, outbox.step, outbox.workflow_status, outbox.payload, outbox.claim_token::text`,
 		workerID,
+		fmt.Sprintf("%f seconds", genericFundsOutboxClaimLease.Seconds()),
 	)
 	record := fundsOutboxRecord{}
 	var payload []byte
-	if err := row.Scan(&record.ID, &record.EventID, &record.Destination, &record.IdempotencyKey, &record.WorkflowID, &record.WorkflowType, &record.ResourceID, &record.Step, &record.Status, &payload); err != nil {
+	if err := row.Scan(&record.ID, &record.EventID, &record.Destination, &record.IdempotencyKey, &record.WorkflowID, &record.WorkflowType, &record.ResourceID, &record.Step, &record.Status, &payload, &record.ClaimToken); err != nil {
 		if err == sql.ErrNoRows {
 			return fundsOutboxRecord{}, false, nil
 		}
@@ -434,36 +447,60 @@ func (s *MojaloopService) dispatchFundsEventToTigerBeetle(event FundsWorkflowEve
 }
 
 func (s *MojaloopService) finalizeTigerBeetleDispatch(record fundsOutboxRecord) error {
-	switch record.WorkflowType {
-	case "transfer":
-		if err := s.updateTransferState(record.WorkflowID, "COMMITTED"); err != nil {
-			return err
-		}
-		return nil
-	case "refund":
-		if _, err := s.db.Exec(
-			`UPDATE mojaloop_refunds SET state = 'COMPLETED', completed_time = NOW(), updated_at = NOW()
-			 WHERE refund_id = $1 AND state = 'PENDING_LEDGER'`,
-			record.WorkflowID,
-		); err != nil {
-			return fmt.Errorf("finalize refunded ledger state: %w", err)
-		}
-		report, err := s.buildReconciliationReport(record.ResourceID)
-		if err != nil {
-			return err
-		}
-		transferState := deriveTransferStateFromRefunds(report.Transfer.AmountMinor, report.PlatformRefundedMinor)
-		if err := s.updateTransferState(report.Transfer.TransferID, transferState); err != nil {
-			return err
-		}
-		report.Transfer.State = transferState
-		if err := s.storeReconciliationAudit(report); err != nil {
-			return err
-		}
-		return nil
-	default:
-		return fmt.Errorf("workflow type %q has no TigerBeetle finalization contract", record.WorkflowType)
+	if record.WorkflowType != "refund" {
+		return fmt.Errorf("workflow type %q has no generic TigerBeetle finalization contract", record.WorkflowType)
 	}
+
+	// Reconcile before changing the platform state. The external ledger transfer
+	// has a deterministic refund ID, so a retry after an ambiguous network result
+	// is idempotent; the local state still changes only under the active claim.
+	report, err := s.buildReconciliationReport(record.ResourceID)
+	if err != nil {
+		return err
+	}
+	if report.Ledger == nil || !report.Ledger.TransferExists || !report.LedgerConsistent {
+		return fmt.Errorf("TigerBeetle refund reconciliation is inconsistent for transfer %q", record.ResourceID)
+	}
+
+	tx, err := s.db.BeginTx(context.Background(), nil)
+	if err != nil {
+		return fmt.Errorf("begin TigerBeetle refund finalization: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := requireActiveFundsOutboxClaim(tx, record); err != nil {
+		return err
+	}
+
+	result, err := tx.Exec(
+		`UPDATE mojaloop_refunds SET state = 'COMPLETED', completed_time = NOW(), updated_at = NOW()
+		 WHERE refund_id = $1 AND state = 'PENDING_LEDGER'`,
+		record.WorkflowID,
+	)
+	if err != nil {
+		return fmt.Errorf("finalize refunded ledger state: %w", err)
+	}
+	if count, err := result.RowsAffected(); err != nil || count != 1 {
+		if err != nil {
+			return fmt.Errorf("verify refunded ledger state: %w", err)
+		}
+		return fmt.Errorf("refund %q is not pending ledger finalization", record.WorkflowID)
+	}
+
+	transferState := deriveTransferStateFromRefunds(report.Transfer.AmountMinor, report.PlatformRefundedMinor)
+	if _, err := tx.Exec(`UPDATE mojaloop_transfers SET state = $2, updated_at = NOW() WHERE transfer_id = $1`, report.Transfer.TransferID, transferState); err != nil {
+		return fmt.Errorf("finalize refunded transfer state: %w", err)
+	}
+	report.Transfer.State = transferState
+	if err := storeReconciliationAuditTx(tx, report); err != nil {
+		return err
+	}
+	if err := markFundsOutboxDeliveredTx(tx, record); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit TigerBeetle refund finalization: %w", err)
+	}
+	return nil
 }
 
 func (s *MojaloopService) dispatchFundsEventToSwitch(event FundsWorkflowEvent) error {
@@ -486,48 +523,122 @@ func (s *MojaloopService) dispatchFundsEventToSwitch(event FundsWorkflowEvent) e
 	}
 }
 
-func (s *MojaloopService) retryFundsOutboxRecord(id int64, dispatchErr error) error {
-	_, err := s.db.Exec(
-		`UPDATE mojaloop_funds_outbox
-		SET status = CASE WHEN attempt_count >= $2 THEN 'failed' ELSE 'pending' END,
-			next_attempt_at = NOW() + (LEAST(attempt_count, 10) * INTERVAL '5 seconds'),
-			locked_at = NULL, locked_by = NULL, last_error = $3, updated_at = NOW()
-		WHERE id = $1`,
-		id, maximumOutboxAttempts, dispatchErr.Error(),
-	)
-	if err != nil {
-		return fmt.Errorf("record outbox retry: %w", err)
+func requireActiveFundsOutboxClaim(tx *sql.Tx, record fundsOutboxRecord) error {
+	if tx == nil {
+		return fmt.Errorf("outbox claim transaction is required")
+	}
+	if strings.TrimSpace(record.ClaimToken) == "" {
+		return fmt.Errorf("outbox claim token is required")
+	}
+	var workflowID, workflowType, resourceID string
+	if err := tx.QueryRow(
+		`SELECT workflow_id, workflow_type, resource_id
+		 FROM mojaloop_funds_outbox
+		 WHERE id = $1 AND status = 'processing' AND claim_token::text = $2 AND claim_expires_at > NOW()
+		 FOR UPDATE`,
+		record.ID,
+		record.ClaimToken,
+	).Scan(&workflowID, &workflowType, &resourceID); err != nil {
+		if err == sql.ErrNoRows {
+			return fmt.Errorf("stale funds outbox claim for row %d", record.ID)
+		}
+		return fmt.Errorf("lock funds outbox claim for row %d: %w", record.ID, err)
+	}
+	if workflowID != record.WorkflowID || workflowType != record.WorkflowType || resourceID != record.ResourceID {
+		return fmt.Errorf("funds outbox row %d changed during claim", record.ID)
 	}
 	return nil
 }
 
-func (s *MojaloopService) markFundsOutboxDelivered(id int64) error {
-	_, err := s.db.Exec(
+func storeReconciliationAuditTx(tx *sql.Tx, report ReconciliationReport) error {
+	details, err := json.Marshal(report)
+	if err != nil {
+		return fmt.Errorf("marshal reconciliation audit: %w", err)
+	}
+	if _, err := tx.Exec(
+		`INSERT INTO mojaloop_reconciliation_audits (transfer_id, transfer_state, ledger_consistent, platform_refunded_amount, platform_net_settled_amount, platform_refunded_minor, platform_net_settled_minor, details, created_at)
+		 VALUES ($1, $2, $3, $4::numeric / 100, $5::numeric / 100, $4, $5, $6::jsonb, NOW())`,
+		report.Transfer.TransferID,
+		report.Transfer.State,
+		report.LedgerConsistent,
+		int64(report.PlatformRefundedMinor),
+		int64(report.PlatformNetSettledMinor),
+		string(details),
+	); err != nil {
+		return fmt.Errorf("store reconciliation audit: %w", err)
+	}
+	return nil
+}
+
+func markFundsOutboxDeliveredTx(tx *sql.Tx, record fundsOutboxRecord) error {
+	if err := requireActiveFundsOutboxClaim(tx, record); err != nil {
+		return err
+	}
+	result, err := tx.Exec(
 		`UPDATE mojaloop_funds_outbox
-		SET status = 'delivered', delivered_at = NOW(), locked_at = NULL, locked_by = NULL, last_error = NULL, updated_at = NOW()
-		WHERE id = $1`,
-		id,
+		 SET status = 'delivered', delivered_at = NOW(), locked_at = NULL, locked_by = NULL,
+			 claim_token = NULL, claim_expires_at = NULL, last_error = NULL, updated_at = NOW()
+		 WHERE id = $1 AND status = 'processing' AND claim_token::text = $2 AND claim_expires_at > NOW()`,
+		record.ID,
+		record.ClaimToken,
 	)
 	if err != nil {
 		return fmt.Errorf("mark outbox delivered: %w", err)
 	}
+	if count, err := result.RowsAffected(); err != nil || count != 1 {
+		if err != nil {
+			return fmt.Errorf("verify outbox delivery completion: %w", err)
+		}
+		return fmt.Errorf("stale funds outbox completion for row %d", record.ID)
+	}
 	return nil
 }
 
-func (s *MojaloopService) RunFundsOutboxDispatcher(ctx context.Context, workerID string) error {
-	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
-	for {
-		if _, err := s.DispatchTigerBeetleTransferBatch(workerID, defaultTigerBeetleDispatchBatch); err != nil {
-			return err
-		}
-		if _, err := s.DispatchFundsOutbox(ctx, workerID, defaultOutboxBatchSize); err != nil {
-			return err
-		}
-		select {
-		case <-ctx.Done():
-			return nil
-		case <-ticker.C:
-		}
+func (s *MojaloopService) retryFundsOutboxRecord(record fundsOutboxRecord, dispatchErr error) error {
+	if strings.TrimSpace(record.ClaimToken) == "" {
+		return fmt.Errorf("outbox claim token is required")
 	}
+	result, err := s.db.Exec(
+		`UPDATE mojaloop_funds_outbox
+		 SET status = CASE WHEN attempt_count >= $3 THEN 'failed' ELSE 'pending' END,
+			 next_attempt_at = NOW() + (LEAST(attempt_count, 10) * INTERVAL '5 seconds'),
+			 locked_at = NULL, locked_by = NULL, claim_token = NULL, claim_expires_at = NULL,
+			 last_error = $4, updated_at = NOW()
+		 WHERE id = $1 AND status = 'processing' AND claim_token::text = $2 AND claim_expires_at > NOW()`,
+		record.ID,
+		record.ClaimToken,
+		maximumOutboxAttempts,
+		dispatchErr.Error(),
+	)
+	if err != nil {
+		return fmt.Errorf("record outbox retry: %w", err)
+	}
+	if count, err := result.RowsAffected(); err != nil || count != 1 {
+		if err != nil {
+			return fmt.Errorf("verify outbox retry transition: %w", err)
+		}
+		return fmt.Errorf("stale funds outbox retry for row %d", record.ID)
+	}
+	return nil
+}
+
+func (s *MojaloopService) markFundsOutboxDelivered(record fundsOutboxRecord) error {
+	tx, err := s.db.BeginTx(context.Background(), nil)
+	if err != nil {
+		return fmt.Errorf("begin outbox delivery completion: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := markFundsOutboxDeliveredTx(tx, record); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit outbox delivery completion: %w", err)
+	}
+	return nil
+}
+
+// RunFundsOutboxDispatcher retains the public worker entrypoint while routing
+// production callers through the bounded, partition-aware implementation.
+func (s *MojaloopService) RunFundsOutboxDispatcher(ctx context.Context, workerID string) error {
+	return s.RunPartitionAwareFundsOutboxDispatcher(ctx, workerID)
 }

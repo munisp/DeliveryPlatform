@@ -140,6 +140,31 @@ function parseInteger(value: string | undefined, fallback: number) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function parseBoundedInteger(
+  name: string,
+  fallback: number,
+  minimum: number,
+  maximum: number,
+) {
+  const raw = process.env[name]?.trim();
+  if (!raw) return fallback;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isInteger(parsed) || parsed < minimum || parsed > maximum) {
+    throw new Error(
+      `${name} must be an integer between ${minimum} and ${maximum}`,
+    );
+  }
+  return parsed;
+}
+
+function parseKubernetesNamespace(name: string, fallback: string) {
+  const value = (process.env[name] ?? fallback).trim().toLowerCase();
+  if (!/^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$/.test(value)) {
+    throw new Error(`${name} must be a valid Kubernetes namespace label`);
+  }
+  return value;
+}
+
 function getDatabaseSslCa() {
   const configured = process.env.DATABASE_SSL_CA?.trim() ?? "";
   return configured ? configured.replace(/\\n/g, "\n") : "";
@@ -173,6 +198,21 @@ const selfServiceSignupEnabled = parseBoolean(
   process.env.ENABLE_SELF_SERVICE_SIGNUP,
   false,
 );
+const externalCommerceIngressEnabled = parseBoolean(
+  process.env.ENABLE_EXTERNAL_COMMERCE_INGRESS,
+  false,
+);
+const externalCommerceWebhookSecretsJson =
+  process.env.EXTERNAL_COMMERCE_WEBHOOK_SECRETS_JSON?.trim() ?? "";
+if (
+  process.env.NODE_ENV === "production" &&
+  externalCommerceIngressEnabled &&
+  externalCommerceWebhookSecretsJson === ""
+) {
+  throw new Error(
+    "EXTERNAL_COMMERCE_WEBHOOK_SECRETS_JSON is required when external commerce ingress is enabled",
+  );
+}
 
 export const ENV = {
   appId: getRequiredEnv("VITE_APP_ID", "switchos-operator-dashboard"),
@@ -182,6 +222,12 @@ export const ENV = {
     "postgresql://ubuntu:ubuntu@127.0.0.1:5432/switchos",
   ),
   databaseSslCa: getDatabaseSslCa(),
+  vehicleTrackerDatabasePoolMax: parseBoundedInteger(
+    "VEHICLE_TRACKER_DATABASE_POOL_MAX",
+    4,
+    4,
+    8,
+  ),
   oAuthServerUrl: normalizeOAuthServerUrl(),
   ownerOpenId: process.env.OWNER_OPEN_ID ?? "switchos-owner",
   isProduction: process.env.NODE_ENV === "production",
@@ -199,8 +245,6 @@ export const ENV = {
     process.env.LIFECYCLE_INVITATION_TTL_MINUTES,
     60 * 24 * 7,
   ),
-  forgeApiUrl: process.env.BUILT_IN_FORGE_API_URL ?? "",
-  forgeApiKey: process.env.BUILT_IN_FORGE_API_KEY ?? "",
   ollamaUrl: normalizeOptionalUrl("OLLAMA_URL") || "http://127.0.0.1:11434",
   ollamaModel: (process.env.OLLAMA_MODEL ?? "qwen2.5:3b").trim(),
   // Tiered fallback model routing configuration
@@ -317,6 +361,12 @@ export const ENV = {
   ),
   developerWebhookSecretRefsJson:
     process.env.DEVELOPER_WEBHOOK_SECRET_REFS_JSON?.trim() ?? "",
+  medusaMerchantApiUrl: getRequiredOptionalUrl("MEDUSA_MERCHANT_API_URL"),
+  medusaMerchantApiToken: getRequiredServiceCredential(
+    "MEDUSA_MERCHANT_API_TOKEN",
+  ),
+  externalCommerceIngressEnabled,
+  externalCommerceWebhookSecretsJson,
   medusaEventIngressEnabled: parseBoolean(
     process.env.ENABLE_MEDUSA_EVENT_INGRESS,
     false,
@@ -338,6 +388,32 @@ export const ENV = {
   ),
   vehicleTrackerCommandAdapterToken:
     process.env.VEHICLE_TRACKER_COMMAND_ADAPTER_TOKEN?.trim() ?? "",
+  vehicleTrackerProviderConsumersEnabled: parseBoolean(
+    process.env.ENABLE_VEHICLE_TRACKER_PROVIDER_CONSUMERS,
+    false,
+  ),
+  vehicleTrackerConsumerEmbedded: parseBoolean(
+    process.env.VEHICLE_TRACKER_CONSUMER_EMBEDDED,
+    false,
+  ),
+  vehicleTrackerWorkerMetricsPort: parseBoundedInteger(
+    "VEHICLE_TRACKER_WORKER_METRICS_PORT",
+    9464,
+    1024,
+    65535,
+  ),
+  vehicleTrackerProviderPollIntervalMs: parseInteger(
+    process.env.VEHICLE_TRACKER_PROVIDER_POLL_INTERVAL_MS,
+    60_000,
+  ),
+  vehicleTrackerMetricsNamespace: parseKubernetesNamespace(
+    "VEHICLE_TRACKER_METRICS_NAMESPACE",
+    "switchos",
+  ),
+  vehicleTrackerGeotabCredentialsJson:
+    process.env.VEHICLE_TRACKER_GEOTAB_CREDENTIALS_JSON?.trim() ?? "",
+  vehicleTrackerTraccarCredentialsJson:
+    process.env.VEHICLE_TRACKER_TRACCAR_CREDENTIALS_JSON?.trim() ?? "",
   localCommerceTraceSampleRate: parseInteger(
     process.env.LOCAL_COMMERCE_TRACE_SAMPLE_RATE,
     100,

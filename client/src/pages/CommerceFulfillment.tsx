@@ -45,6 +45,13 @@ export default function CommerceFulfillment() {
     },
     onError: (error) => setNotice(error.message),
   });
+  const assignDriver = trpc.commerceFulfillment.assignDriver.useMutation({
+    onSuccess: async () => {
+      await utils.commerceFulfillment.list.invalidate();
+      setNotice("Delivery order and eligible driver assigned with immutable evidence.");
+    },
+    onError: (error) => setNotice(error.message),
+  });
   const submitConnection = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     configure.mutate({
@@ -56,26 +63,25 @@ export default function CommerceFulfillment() {
     });
   };
   const advance = (id: string, action: string) => {
-    const detail =
-      action === "assign"
-        ? {
-            delivery_reference:
-              window
-                .prompt("Existing DeliveryPlatform delivery reference")
-                ?.trim() ?? "",
-          }
-        : action === "fail"
-          ? { reason: window.prompt("Failure reason")?.trim() ?? "" }
-          : {};
+    if (action === "assign") {
+      const deliveryOrderId = Number(window.prompt("DeliveryPlatform delivery order ID")?.trim());
+      const driverId = Number(window.prompt("Eligible driver ID")?.trim());
+      if (!Number.isInteger(deliveryOrderId) || deliveryOrderId <= 0 || !Number.isInteger(driverId) || driverId <= 0) {
+        setNotice("A positive delivery order ID and eligible driver ID are required.");
+        return;
+      }
+      assignDriver.mutate({
+        fulfillmentId: id,
+        deliveryOrderId,
+        driverId,
+        idempotencyKey: `commerce-driver-${id.slice(0, 8)}-${Date.now()}`,
+      });
+      return;
+    }
+    const detail = action === "fail" ? { reason: window.prompt("Failure reason")?.trim() ?? "" } : {};
     transition.mutate({
       fulfillmentId: id,
-      action: action as
-        | "accept"
-        | "assign"
-        | "dispatch"
-        | "deliver"
-        | "cancel"
-        | "fail",
+      action: action as "accept" | "dispatch" | "deliver" | "cancel" | "fail",
       detail,
       idempotencyKey: `commerce-${action}-${id.slice(0, 8)}-${Date.now()}`,
     });
@@ -184,8 +190,8 @@ export default function CommerceFulfillment() {
             <CardHeader>
               <CardTitle>Fulfillment queue</CardTitle>
               <CardDescription>
-                Accepted requests need a verified DeliveryPlatform delivery
-                reference before dispatch.
+                Accepted requests require a provider-matching DeliveryPlatform
+                order and an eligible driver before dispatch.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
@@ -225,7 +231,7 @@ export default function CommerceFulfillment() {
                         <button
                           key={action}
                           className="rounded-md border border-slate-600 px-3 py-1.5 text-xs text-slate-100 disabled:opacity-60"
-                          disabled={transition.isPending}
+                          disabled={transition.isPending || assignDriver.isPending}
                           onClick={() => advance(request.id, action)}
                         >
                           {action}

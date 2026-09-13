@@ -1,0 +1,104 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Active Worker Metrics Targets",
+      "gridPos": { "h": 5, "w": 6, "x": 0, "y": 0 },
+      "targets": [{ "refId": "A", "expr": "count(vehicle_tracker_pool_max_connections)", "legendFormat": "workers" }],
+      "fieldConfig": { "defaults": { "unit": "none", "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 16 }] } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "orientation": "auto", "textMode": "auto", "colorMode": "background", "graphMode": "none", "justifyMode": "auto" }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Potential Dedicated PostgreSQL Connections",
+      "description": "Sum of configured worker pool ceilings. This is a connection-admission ceiling, not active usage.",
+      "gridPos": { "h": 5, "w": 6, "x": 6, "y": 0 },
+      "targets": [{ "refId": "A", "expr": "sum(vehicle_tracker_pool_max_connections)", "legendFormat": "ceiling" }],
+      "fieldConfig": { "defaults": { "unit": "none", "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 192 }, { "color": "red", "value": 256 }] } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "orientation": "auto", "textMode": "auto", "colorMode": "background", "graphMode": "none", "justifyMode": "auto" }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Lease Observability",
+      "gridPos": { "h": 5, "w": 6, "x": 12, "y": 0 },
+      "targets": [{ "refId": "A", "expr": "min(vehicle_tracker_database_lock_observability_up)", "legendFormat": "lock statistics available" }],
+      "fieldConfig": { "defaults": { "unit": "none", "mappings": [{ "type": "value", "options": { "0": { "text": "Unavailable", "color": "red" }, "1": { "text": "Available", "color": "green" } } }], "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 1 }] } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "orientation": "auto", "textMode": "auto", "colorMode": "background", "graphMode": "none", "justifyMode": "auto" }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Workers Waiting for Pool Connection",
+      "gridPos": { "h": 5, "w": 6, "x": 18, "y": 0 },
+      "targets": [{ "refId": "A", "expr": "sum(vehicle_tracker_pool_connections{state=\"waiting\"})", "legendFormat": "waiting" }],
+      "fieldConfig": { "defaults": { "unit": "none", "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1 }] } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "orientation": "auto", "textMode": "auto", "colorMode": "background", "graphMode": "none", "justifyMode": "auto" }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Lease Remaining Time by Provider",
+      "description": "A value under 45 seconds is inside the renewal-risk boundary. Zero means no active lease and is hidden by the query.",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 5 },
+      "targets": [{ "refId": "A", "expr": "(vehicle_tracker_provider_cursor_lease_expires_at_seconds - time()) and (vehicle_tracker_provider_cursor_lease_expires_at_seconds > time())", "legendFormat": "{{provider_kind}} / {{integration_key}} remaining" }],
+      "fieldConfig": { "defaults": { "unit": "s", "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "yellow", "value": 45 }, { "color": "green", "value": 120 }] } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Cursor Age and Ingest Cycle Rate",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 5 },
+      "targets": [{ "refId": "A", "expr": "max by (provider_kind, integration_key) (vehicle_tracker_provider_cursor_age_seconds)", "legendFormat": "cursor age {{provider_kind}} / {{integration_key}}" }, { "refId": "B", "expr": "sum by (provider_kind, outcome) (rate(vehicle_tracker_provider_ingest_batches_total[5m]))", "legendFormat": "cycle rate {{provider_kind}} / {{outcome}}" }],
+      "fieldConfig": { "defaults": { "unit": "s", "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 300 }, { "color": "red", "value": 600 }] } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } }
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Pool Utilization and Queueing",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 13 },
+      "targets": [{ "refId": "A", "expr": "sum(vehicle_tracker_pool_connections{state=\"in_use\"}) / clamp_min(sum(vehicle_tracker_pool_max_connections), 1)", "legendFormat": "in-use / configured maximum" }, { "refId": "B", "expr": "sum(vehicle_tracker_pool_connections{state=\"waiting\"})", "legendFormat": "waiting authority calls" }],
+      "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1, "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 0.7 }, { "color": "red", "value": 0.9 }] } }, "overrides": [{ "matcher": { "id": "byName", "options": "waiting authority calls" }, "properties": [{ "id": "unit", "value": "none" }, { "id": "max", "value": null }] }] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } }
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "PostgreSQL Lock Waits and Authority Latency",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 13 },
+      "targets": [{ "refId": "A", "expr": "sum(vehicle_tracker_database_lock_waiting_transactions)", "legendFormat": "waiting transactions" }, { "refId": "B", "expr": "max(vehicle_tracker_database_max_lock_wait_seconds)", "legendFormat": "longest current lock wait" }, { "refId": "C", "expr": "histogram_quantile(0.95, sum by (le, operation) (rate(vehicle_tracker_database_query_duration_seconds_bucket[5m])))", "legendFormat": "p95 authority {{operation}}" }],
+      "fieldConfig": { "defaults": { "unit": "s", "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 2 }, { "color": "red", "value": 5 }] } }, "overrides": [{ "matcher": { "id": "byName", "options": "waiting transactions" }, "properties": [{ "id": "unit", "value": "none" }] }] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } }
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Fence and Database Error Isolation",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 21 },
+      "targets": [{ "refId": "A", "expr": "sum by (provider_kind, operation) (increase(vehicle_tracker_provider_cursor_fence_failures_total[5m]))", "legendFormat": "fence {{provider_kind}} / {{operation}}" }, { "refId": "B", "expr": "sum by (operation, sqlstate) (increase(vehicle_tracker_database_query_failures_total[5m]))", "legendFormat": "query {{operation}} / {{sqlstate}}" }],
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0, "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 1 }, { "color": "red", "value": 3 }] } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } }
+    }
+  ],
+  "refresh": "15s",
+  "schemaVersion": 39,
+  "style": "dark",
+  "tags": ["deliveryplatform", "vehicle-tracker", "lease", "postgresql"],
+  "templating": { "list": [] },
+  "time": { "from": "now-1h", "to": "now" },
+  "timezone": "browser",
+  "title": "Vehicle Tracker Ingest — Lease and Pool Capacity",
+  "uid": "vehicle-tracker-ingest",
+  "version": 1,
+  "weekStart": ""
+}

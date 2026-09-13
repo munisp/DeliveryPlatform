@@ -28,10 +28,10 @@ async function findAvailablePort(startPort: number = 3000): Promise<number> {
 }
 
 function configuredCorsOrigins() {
-  const origins = [
-    process.env.EXPO_WEB_PREVIEW_URL,
-    process.env.EXPO_PACKAGER_PROXY_URL,
-  ].filter((value): value is string => Boolean(value));
+  const origins = (process.env.WEB_ALLOWED_ORIGINS ?? "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
 
   if (process.env.NODE_ENV !== "production") {
     origins.push("http://localhost:8081", "http://127.0.0.1:8081");
@@ -93,13 +93,7 @@ async function startServer() {
   const preferredPort = parseInt(process.env.PORT || "3000");
   const port = await findAvailablePort(preferredPort);
 
-  if (port !== preferredPort) {
-    console.log(`Port ${preferredPort} is busy, using port ${port} instead`);
-  }
-
-  server.listen(port, () => {
-    console.log(`[api] server listening on port ${port}`);
-  });
+  server.listen(port);
 }
 
 startServer().catch(console.error);

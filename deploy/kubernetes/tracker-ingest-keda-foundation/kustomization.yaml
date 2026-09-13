@@ -1,0 +1,19 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../tracker-ingest-safe-rollout
+patches:
+  # The KEDA ScaledObject creates and owns the HPA after explicit ownership
+  # transfer. Deleting the source HPA prevents two desired-state controllers.
+  - target:
+      group: autoscaling
+      version: v2
+      kind: HorizontalPodAutoscaler
+      name: vehicle-tracker-ingest
+    patch: |-
+      $patch: delete
+      apiVersion: autoscaling/v2
+      kind: HorizontalPodAutoscaler
+      metadata:
+        name: vehicle-tracker-ingest
+        namespace: switchos

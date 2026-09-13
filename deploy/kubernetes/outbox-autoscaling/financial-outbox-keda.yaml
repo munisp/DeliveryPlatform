@@ -1,0 +1,154 @@
+# Financial outbox telemetry and KEDA scaler.
+# Apply only after 0063_financial_outbox_autoscaling_metrics.sql and the
+# Mojaloop /metrics/funds-outbox endpoint are deployed. The readiness metric
+# contains only three bounded work_class labels and no financial identifiers.
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: mojaloop-funds-outbox
+  namespace: switchos
+  labels:
+    app.kubernetes.io/name: mojaloop-funds-outbox
+    app.kubernetes.io/component: financial-observability
+    app.kubernetes.io/part-of: deliveryplatform
+    release: prometheus
+spec:
+  namespaceSelector:
+    matchNames: [switchos]
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: mojaloop-funds-outbox
+      app.kubernetes.io/component: financial-dispatch
+  endpoints:
+    - port: http
+      path: /metrics/funds-outbox
+      interval: 15s
+      scrapeTimeout: 5s
+      authorization:
+        type: Bearer
+        credentials:
+          name: go-services-secrets
+          key: INTERNAL_SERVICE_TOKEN
+      relabelings:
+        - targetLabel: component
+          replacement: mojaloop-funds-outbox
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: financial-outbox-autoscaling
+  namespace: switchos
+  labels:
+    app.kubernetes.io/name: financial-outbox-autoscaling
+    app.kubernetes.io/component: financial-observability
+    app.kubernetes.io/part-of: deliveryplatform
+    release: prometheus
+spec:
+  groups:
+    - name: deliveryplatform.financial-outbox.autoscaling
+      interval: 15s
+      rules:
+        # Every Mojaloop API replica reports the same read-only database gauge.
+        # max removes scrape duplication but retains the three safe work classes.
+        - record: deliveryplatform_funds_outbox_ready_units_global
+          expr: max by (work_class) (deliveryplatform_funds_outbox_ready_units)
+        - record: deliveryplatform_funds_outbox_oldest_ready_seconds_global
+          expr: max by (work_class) (deliveryplatform_funds_outbox_oldest_ready_seconds)
+        - alert: DeliveryPlatformFinancialOutboxMetricsUnavailable
+          expr: absent(deliveryplatform_funds_outbox_ready_units_global)
+          for: 2m
+          labels:
+            severity: critical
+            component: financial-observability
+          annotations:
+            summary: Financial outbox readiness metrics are unavailable
+            description: Do not increase financial dispatch capacity until metrics and database authority are restored.
+        - alert: DeliveryPlatformFinancialOutboxOldestReadyHigh
+          expr: max(deliveryplatform_funds_outbox_oldest_ready_seconds_global) > 300
+          for: 5m
+          labels:
+            severity: warning
+            component: financial-outbox
+          annotations:
+            summary: Eligible financial outbox work has aged beyond five minutes
+            description: Inspect destination health, claim fences, provider rate budgets, and PostgreSQL pool headroom before changing replica limits.
+---
+apiVersion: keda.sh/v1alpha1
+kind: TriggerAuthentication
+metadata:
+  name: financial-outbox-prometheus-query
+  namespace: switchos
+  labels:
+    app.kubernetes.io/name: financial-outbox-keda
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  secretTargetRef:
+    # Created by the cluster secret controller; never committed to Git.
+    - parameter: username
+      name: prometheus-query-credentials
+      key: username
+    - parameter: password
+      name: prometheus-query-credentials
+      key: password
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: mojaloop-funds-outbox
+  namespace: switchos
+  labels:
+    app.kubernetes.io/name: mojaloop-funds-outbox
+    app.kubernetes.io/component: financial-dispatch
+    app.kubernetes.io/part-of: deliveryplatform
+  annotations:
+    # The Deployment is a separate worker role; no native HPA owns it.
+    scaledobject.keda.sh/transfer-hpa-ownership: "false"
+spec:
+  scaleTargetRef:
+    name: mojaloop-funds-outbox
+  pollingInterval: 30
+  cooldownPeriod: 600
+  initialCooldownPeriod: 120
+  idleReplicaCount: 1
+  minReplicaCount: 1
+  maxReplicaCount: 4
+  fallback:
+    failureThreshold: 3
+    replicas: 1
+    behavior: currentReplicasIfHigher
+  advanced:
+    restoreToOriginalReplicaCount: false
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleUp:
+          stabilizationWindowSeconds: 60
+          selectPolicy: Min
+          policies:
+            - type: Pods
+              value: 1
+              periodSeconds: 60
+            - type: Percent
+              value: 25
+              periodSeconds: 60
+        scaleDown:
+          stabilizationWindowSeconds: 600
+          selectPolicy: Min
+          policies:
+            - type: Pods
+              value: 1
+              periodSeconds: 60
+            - type: Percent
+              value: 25
+              periodSeconds: 60
+  triggers:
+    - type: prometheus
+      metricType: AverageValue
+      metadata:
+        serverAddress: https://prometheus-operated.monitoring.svc:9090
+        query: sum(deliveryplatform_funds_outbox_ready_units_global)
+        threshold: "20"
+        activationThreshold: "1"
+        authModes: tls,basic
+      authenticationRef:
+        name: financial-outbox-prometheus-query

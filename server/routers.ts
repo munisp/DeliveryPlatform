@@ -119,10 +119,23 @@ import {
   revokeDeveloperApiKey,
 } from "./_core/developerApi";
 import {
+  assignCommerceFulfillmentDriver,
   listCommerceFulfillmentRequests,
+  registerExternalCommerceConnection,
   transitionCommerceFulfillment,
   upsertMedusaStoreConnection,
 } from "./_core/commerceFulfillment";
+import {
+  beginMerchantOnboarding,
+  createMerchantProduct,
+  decideMerchantOnboarding,
+  getMerchantCommerceProfile,
+  setMerchantPaymentConfiguration,
+  updateMerchantInventoryLevel,
+  issueMerchantApiCredential,
+  rotateMerchantApiCredential,
+  revokeMerchantApiCredential,
+} from "./_core/merchantCommerce";
 
 const listInput = z
   .object({ limit: z.number().min(1).max(25).optional() })
@@ -1445,6 +1458,89 @@ export const appRouter = router({
       ),
   }),
 
+  merchantCommerce: router({
+    beginOnboarding: authenticatedProcedure
+      .input(
+        z.object({
+          providerId: z.number().int().positive(),
+          legalName: z.string().trim().min(2).max(255),
+          displayName: z.string().trim().min(2).max(160),
+          medusaStoreId: z.string().trim().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{2,159}$/),
+          idempotencyKey: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
+        }),
+      )
+      .mutation(({ ctx, input }) =>
+        beginMerchantOnboarding({ actorUserId: ctx.user!.id, ...input }),
+      ),
+    profile: authenticatedProcedure
+      .input(z.object({ providerId: z.number().int().positive() }))
+      .query(({ ctx, input }) =>
+        getMerchantCommerceProfile({ actorUserId: ctx.user!.id, ...input }),
+      ),
+    decideOnboarding: protectedProcedure
+      .input(
+        z.object({
+          providerId: z.number().int().positive(),
+          decision: z.enum(["activate", "suspend", "reject"]),
+          verificationCaseId: z.string().uuid().nullable(),
+          idempotencyKey: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
+        }),
+      )
+      .mutation(({ ctx, input }) =>
+        decideMerchantOnboarding({ actorUserId: ctx.user!.id, ...input }),
+      ),
+    createProduct: authenticatedProcedure
+      .input(
+        z.object({
+          providerId: z.number().int().positive(),
+          title: z.string().trim().min(2).max(255),
+          handle: z.string().trim().regex(/^[a-z0-9][a-z0-9-]{1,158}$/),
+          description: z.string().trim().min(1).max(10_000),
+          status: z.enum(["draft", "published"]),
+          currencyCode: z.string().regex(/^[A-Z]{3}$/),
+          priceMinor: z.number().int().positive().max(1_000_000_000),
+          sku: z.string().trim().min(1).max(160),
+          imageUrls: z.array(z.string().url().max(2048)).max(12),
+          idempotencyKey: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
+        }),
+      )
+      .mutation(({ ctx, input }) =>
+        createMerchantProduct({ actorUserId: ctx.user!.id, ...input }),
+      ),
+    configurePayments: authenticatedProcedure
+      .input(
+        z.object({
+          providerId: z.number().int().positive(),
+          settlementFspAlias: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{2,127}$/),
+          payoutReference: z.string().trim().min(8).max(512),
+          currencyCode: z.string().regex(/^[A-Z]{3}$/),
+          enabled: z.boolean(),
+          idempotencyKey: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
+        }),
+      )
+      .mutation(({ ctx, input }) =>
+        setMerchantPaymentConfiguration({ actorUserId: ctx.user!.id, ...input }),
+      ),
+    issueApiCredential: authenticatedProcedure.input(z.object({ providerId:z.number().int().positive(), scopes:z.array(z.enum(["catalog:write","inventory:write","fulfillment:read","tracking:read"])).min(1).max(4), expiresAt:z.string().datetime() })).mutation(({ctx,input})=>issueMerchantApiCredential({actorUserId:ctx.user!.id,...input})),
+    rotateApiCredential: authenticatedProcedure.input(z.object({ providerId:z.number().int().positive(), previousKeyId:z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/), scopes:z.array(z.enum(["catalog:write","inventory:write","fulfillment:read","tracking:read"])).min(1).max(4), expiresAt:z.string().datetime() })).mutation(({ctx,input})=>rotateMerchantApiCredential({actorUserId:ctx.user!.id,...input})),
+    revokeApiCredential: authenticatedProcedure.input(z.object({ providerId:z.number().int().positive(), keyId:z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/) })).mutation(({ctx,input})=>revokeMerchantApiCredential({actorUserId:ctx.user!.id,...input})),
+    updateInventory: authenticatedProcedure
+      .input(
+        z.object({
+          providerId: z.number().int().positive(),
+          inventoryItemId: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{2,159}$/),
+          locationId: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{2,159}$/),
+          inventoryLevelId: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{2,159}$/).optional(),
+          stockedQuantity: z.number().int().min(0).max(1_000_000_000),
+          incomingQuantity: z.number().int().min(0).max(1_000_000_000),
+          idempotencyKey: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
+        }),
+      )
+      .mutation(({ ctx, input }) =>
+        updateMerchantInventoryLevel({ actorUserId: ctx.user!.id, ...input }),
+      ),
+  }),
+
   commerceFulfillment: router({
     list: protectedProcedure
       .input(
@@ -1479,6 +1575,32 @@ export const appRouter = router({
       )
       .mutation(({ ctx, input }) =>
         transitionCommerceFulfillment({ actorUserId: ctx.user!.id, ...input }),
+      ),
+    assignDriver: protectedProcedure
+      .input(
+        z.object({
+          fulfillmentId: z.string().uuid(),
+          deliveryOrderId: z.number().int().positive(),
+          driverId: z.number().int().positive(),
+          idempotencyKey: z.string().trim().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
+        }),
+      )
+      .mutation(({ ctx, input }) =>
+        assignCommerceFulfillmentDriver({ actorUserId: ctx.user!.id, ...input }),
+      ),
+    registerExternalPlatform: protectedProcedure
+      .input(
+        z.object({
+          providerId: z.number().int().positive(),
+          connectionKey: z.string().trim().regex(/^[a-z][a-z0-9-]{2,63}$/),
+          platformName: z.string().trim().min(3).max(120),
+          inboundEnabled: z.boolean(),
+          outboundEnabled: z.boolean(),
+          inboundSigningSecretRef: z.string().trim().regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]{2,255}$/),
+        }).refine((value) => value.inboundEnabled || value.outboundEnabled, { message: "at least one sync direction is required" }),
+      )
+      .mutation(({ ctx, input }) =>
+        registerExternalCommerceConnection({ actorUserId: ctx.user!.id, ...input }),
       ),
     upsertMedusaStore: protectedProcedure
       .input(
