@@ -38,22 +38,27 @@ describe("silent mockware regression guards", () => {
     expect(dbSource).toContain("DatabaseUnavailableError");
   });
 
-  it("fails unverified multimodal workspaces explicitly instead of manufacturing metrics", async () => {
+  it("multimodal workspaces are real pool-backed implementations, not fail-closed traps or fabricated metrics", async () => {
     const dbSource = await source("server/db.ts");
 
-    for (const workspace of [
-      "mobility_overview",
-      "rider_app",
-      "driver_mobility_summary",
-      "business_travel",
-      "freight",
-      "healthcare_transport",
-      "merchant_channels_summary",
-      "phone_ordering_summary",
-      "tableside_ordering_summary",
-      "white_label_apps_summary",
+    // The fail-closed VERIFIED_DATA_UNAVAILABLE traps were replaced by real
+    // implementations in server/_core/mobilityQueries.ts,
+    // server/_core/commerceSummaries.ts and server/_core/workspaceTruthfulness.ts.
+    // Guard: the traps must never come back.
+    expect(dbSource).not.toContain("VERIFIED_DATA_UNAVAILABLE");
+
+    for (const modulePath of [
+      "server/_core/mobilityQueries.ts",
+      "server/_core/commerceSummaries.ts",
+      "server/_core/workspaceTruthfulness.ts",
     ]) {
-      expect(dbSource).toContain(`VERIFIED_DATA_UNAVAILABLE:${workspace}`);
+      const moduleSource = await source(modulePath);
+      // Real implementations query through the shared pool…
+      expect(moduleSource).toContain("getPool");
+      // …and must not fabricate headline metrics by padding real row counts
+      // with a synthetic floor (e.g. Math.max(4, rows.length)).
+      expect(moduleSource).not.toMatch(/Math\.max\(\s*\d+\s*,\s*[\w.]+\.rows/);
+      expect(moduleSource).not.toContain("VERIFIED_DATA_UNAVAILABLE");
     }
   });
 });

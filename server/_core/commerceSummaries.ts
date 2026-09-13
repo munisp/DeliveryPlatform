@@ -1,8 +1,8 @@
 import { getPool } from "../db";
 
 /**
- * Real replacements for the fail-closed summary functions that lived in
- * server/db.ts behind `VERIFIED_DATA_UNAVAILABLE` throws. Every metric here is
+ * Real replacements for the former fail-closed summary functions in
+ * server/db.ts (removed in the gap-closure round). Every metric here is
  * computed from live tables; lists that describe product capabilities (channel
  * names, call-flow labels) are static copy, never fabricated counts.
  *
