@@ -25,7 +25,7 @@ import {
   getLakehouseOrderStats,
   syncLakehouseFromPostgres,
 } from "./lib/lakehouse";
-import { getFundsReconciliationSnapshot } from "./db";
+import { getFundsReconciliationSnapshot, getOrderRevenueTrend, getOrdersByVertical } from "./db";
 import {
   appendLongCatMessagingTurn,
   appendLongCatVoiceTurn,
@@ -193,6 +193,12 @@ export const appRouter = router({
     ),
     fundsReconciliation: analyticsReadProcedure.query(async () =>
       getFundsReconciliationSnapshot(),
+    ),
+    revenueTrend: analyticsReadProcedure.query(async () =>
+      getOrderRevenueTrend(),
+    ),
+    ordersByVertical: analyticsReadProcedure.query(async () =>
+      getOrdersByVertical(),
     ),
   }),
 

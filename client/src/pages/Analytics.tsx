@@ -5,21 +5,22 @@ import { trpc } from "@/lib/trpc";
 import { TrendingUp, DollarSign, Package, Users, Loader2, Radar, AlertTriangle } from "lucide-react";
 import { LineChart, Line, BarChart, Bar, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
 
-const revenueData = [
-  { month: "Jan", revenue: 4500, orders: 120 },
-  { month: "Feb", revenue: 5200, orders: 145 },
-  { month: "Mar", revenue: 4800, orders: 132 },
-  { month: "Apr", revenue: 6100, orders: 168 },
-  { month: "May", revenue: 7200, orders: 195 },
-  { month: "Jun", revenue: 6800, orders: 182 },
-];
+function formatMonthLabel(month: string): string {
+  const parsed = new Date(`${month}-01T00:00:00`);
+  return Number.isNaN(parsed.getTime()) ? month : parsed.toLocaleString(undefined, { month: "short" });
+}
 
-const ordersByVertical = [
-  { vertical: "Laundry", orders: 450, revenue: 12500 },
-  { vertical: "Pharmacy", orders: 320, revenue: 8900 },
-  { vertical: "Grocery", orders: 280, revenue: 7200 },
-  { vertical: "Food", orders: 510, revenue: 15800 },
-];
+function formatCurrency(value: number): string {
+  return `€${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+function EmptyChartState({ message }: { message: string }) {
+  return (
+    <div className="flex h-[300px] items-center justify-center rounded-lg border border-dashed text-sm text-muted-foreground">
+      {message}
+    </div>
+  );
+}
 
 function hotspotVariant(pressureBand: string): "default" | "secondary" | "destructive" | "outline" {
   if (pressureBand === "critical") return "destructive";
@@ -33,15 +34,33 @@ export default function Analytics() {
   const { data: orderStats, isLoading: loadingOrders } = trpc.analytics.orderStats.useQuery();
   const { data: driverStats, isLoading: loadingDrivers } = trpc.analytics.driverStats.useQuery();
   const { data: marketplaceOverview, isLoading: loadingMarketplace } = trpc.analytics.marketplaceOverview.useQuery();
+  const { data: revenueTrend, isLoading: loadingRevenueTrend } = trpc.analytics.revenueTrend.useQuery();
+  const { data: verticalBreakdown, isLoading: loadingVerticals } = trpc.analytics.ordersByVertical.useQuery();
+
+  const totalRevenue = Number(orderStats?.revenue ?? 0) || 0;
+  const totalOrders = Number(orderStats?.total ?? 0) || 0;
+  const avgOrderValue = totalOrders > 0 ? totalRevenue / totalOrders : 0;
 
   const stats = [
-    { title: "Total Revenue", value: "€42,580", change: "+12.5%", icon: DollarSign, color: "text-green-500" },
-    { title: "Total Orders", value: orderStats?.total || 0, change: "+8.2%", icon: Package, color: "text-blue-500" },
-    { title: "Active Drivers", value: driverStats?.online || 0, change: "+5.1%", icon: Users, color: "text-purple-500" },
-    { title: "Avg Order Value", value: "€28.50", change: "+3.8%", icon: TrendingUp, color: "text-orange-500" },
+    { title: "Total Revenue", value: formatCurrency(totalRevenue), icon: DollarSign, color: "text-green-500" },
+    { title: "Total Orders", value: totalOrders, icon: Package, color: "text-blue-500" },
+    { title: "Active Drivers", value: driverStats?.online || 0, icon: Users, color: "text-purple-500" },
+    { title: "Avg Order Value", value: formatCurrency(avgOrderValue), icon: TrendingUp, color: "text-orange-500" },
   ];
 
-  if (loadingSummary || loadingOrders || loadingDrivers || loadingMarketplace) {
+  const revenueData = (revenueTrend ?? []).map((point) => ({
+    month: formatMonthLabel(point.month),
+    revenue: point.revenue,
+    orders: point.orders,
+  }));
+
+  const ordersByVertical = (verticalBreakdown ?? []).map((point) => ({
+    vertical: point.vertical,
+    orders: point.orders,
+    revenue: point.revenue,
+  }));
+
+  if (loadingSummary || loadingOrders || loadingDrivers || loadingMarketplace || loadingRevenueTrend || loadingVerticals) {
     return (
       <DashboardLayout>
         <div className="flex h-screen items-center justify-center">
@@ -78,7 +97,6 @@ export default function Analytics() {
               </CardHeader>
               <CardContent>
                 <div className="text-2xl font-bold">{stat.value}</div>
-                <p className="text-xs font-medium text-green-500">{stat.change} from last month</p>
               </CardContent>
             </Card>
           ))}
@@ -135,6 +153,9 @@ export default function Analytics() {
               <CardDescription>Monthly revenue and order volume</CardDescription>
             </CardHeader>
             <CardContent>
+              {revenueData.length === 0 ? (
+                <EmptyChartState message="No revenue data available yet." />
+              ) : (
               <ResponsiveContainer width="100%" height={320}>
                 <AreaChart data={revenueData}>
                   <CartesianGrid strokeDasharray="3 3" />
@@ -145,6 +166,7 @@ export default function Analytics() {
                   <Area type="monotone" dataKey="revenue" stroke="#8884d8" fill="#8884d8" fillOpacity={0.6} />
                 </AreaChart>
               </ResponsiveContainer>
+              )}
             </CardContent>
           </Card>
         </div>
@@ -156,6 +178,9 @@ export default function Analytics() {
               <CardDescription>Distribution across service categories</CardDescription>
             </CardHeader>
             <CardContent>
+              {ordersByVertical.length === 0 ? (
+                <EmptyChartState message="No order data available by vertical yet." />
+              ) : (
               <ResponsiveContainer width="100%" height={300}>
                 <BarChart data={ordersByVertical}>
                   <CartesianGrid strokeDasharray="3 3" />
@@ -166,6 +191,7 @@ export default function Analytics() {
                   <Bar dataKey="orders" fill="#8884d8" />
                 </BarChart>
               </ResponsiveContainer>
+              )}
             </CardContent>
           </Card>
 
@@ -196,9 +222,12 @@ export default function Analytics() {
         <Card>
           <CardHeader>
             <CardTitle>Order Volume Trend</CardTitle>
-            <CardDescription>Daily order count over the last 6 months</CardDescription>
+            <CardDescription>Monthly order count over the last 6 months</CardDescription>
           </CardHeader>
           <CardContent>
+            {revenueData.length === 0 ? (
+              <EmptyChartState message="No order volume data available yet." />
+            ) : (
             <ResponsiveContainer width="100%" height={300}>
               <LineChart data={revenueData}>
                 <CartesianGrid strokeDasharray="3 3" />
@@ -209,6 +238,7 @@ export default function Analytics() {
                 <Line type="monotone" dataKey="orders" stroke="#82ca9d" strokeWidth={2} />
               </LineChart>
             </ResponsiveContainer>
+            )}
           </CardContent>
         </Card>
       </div>

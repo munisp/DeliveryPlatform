@@ -8462,3 +8462,61 @@ export async function getFundsReconciliationSnapshot() {
     recommendation,
   };
 }
+
+export type OrderRevenueTrendPoint = {
+  month: string;
+  revenue: number;
+  orders: number;
+};
+
+export async function getOrderRevenueTrend(months = 6): Promise<OrderRevenueTrendPoint[]> {
+  await getDb();
+  if (!_pool) return [];
+
+  const safeMonths = Math.min(Math.max(Math.trunc(months), 1), 24);
+  const result = await _pool.query(
+    `SELECT to_char(date_trunc('month', created_at), 'YYYY-MM') AS month,
+            COUNT(*)::int AS orders,
+            COALESCE(SUM(total_amount::numeric), 0)::float8 AS revenue
+       FROM orders
+      WHERE created_at >= date_trunc('month', now()) - (($1::int - 1) || ' months')::interval
+        AND status NOT IN ('cancelled', 'refunded')
+      GROUP BY 1
+      ORDER BY 1`,
+    [safeMonths],
+  );
+
+  return result.rows.map((row) => ({
+    month: String(row.month),
+    revenue: Number(Number(row.revenue || 0).toFixed(2)),
+    orders: Number(row.orders || 0),
+  }));
+}
+
+export type OrdersByVerticalPoint = {
+  vertical: string;
+  orders: number;
+  revenue: number;
+};
+
+export async function getOrdersByVertical(): Promise<OrdersByVerticalPoint[]> {
+  await getDb();
+  if (!_pool) return [];
+
+  const result = await _pool.query(
+    `SELECT COALESCE(v.name, 'Vertical ' || o.vertical_id) AS vertical,
+            COUNT(*)::int AS orders,
+            COALESCE(SUM(o.total_amount::numeric), 0)::float8 AS revenue
+       FROM orders o
+       LEFT JOIN service_verticals v ON v.id = o.vertical_id
+      WHERE o.status NOT IN ('cancelled', 'refunded')
+      GROUP BY 1
+      ORDER BY orders DESC, vertical ASC`,
+  );
+
+  return result.rows.map((row) => ({
+    vertical: String(row.vertical),
+    orders: Number(row.orders || 0),
+    revenue: Number(Number(row.revenue || 0).toFixed(2)),
+  }));
+}
