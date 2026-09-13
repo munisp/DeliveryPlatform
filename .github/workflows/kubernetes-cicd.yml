@@ -244,11 +244,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for service in intake-orchestrator lakehouse procurement-planner retail-forecast speech-runtime ride-payment-webhook; do
+          for service in intake-orchestrator lakehouse procurement-planner retail-forecast speech-runtime payment-webhook; do
+            image_name="$service"
+            if [ "$service" = "payment-webhook" ]; then
+              image_name="ride-payment-webhook"
+            fi
             docker buildx build --push --platform linux/amd64,linux/arm64 --provenance=true --sbom=true \
               --build-arg "SERVICE=$service" \
               --file services/python/Dockerfile \
-              --tag "${IMAGE_PREFIX}-${service}:${IMAGE_TAG}" \
+              --tag "${IMAGE_PREFIX}-${image_name}:${IMAGE_TAG}" \
               services/python
           done
       - name: Build and publish Rust services and migration image
