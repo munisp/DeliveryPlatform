@@ -1,4 +1,5 @@
 import DashboardLayout from "@/components/DashboardLayout";
+import { QueryErrorState } from "@/components/QueryState";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { trpc } from "@/lib/trpc";
@@ -12,6 +13,21 @@ const dateLabel = (value: string | Date | null | undefined) =>
 export default function MerchantAdsStudio() {
   const query = trpc.consoles.merchantAds.useQuery();
   const data = query.data;
+
+  if (query.isError) {
+    return (
+      <DashboardLayout>
+        <div className="space-y-6">
+          <QueryErrorState
+            resource="merchant ads data"
+            message={query.error.message}
+            onRetry={() => void query.refetch()}
+            retrying={query.isRefetching}
+          />
+        </div>
+      </DashboardLayout>
+    );
+  }
 
   return (
     <DashboardLayout>

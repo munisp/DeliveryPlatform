@@ -1,4 +1,5 @@
 import DashboardLayout from "@/components/DashboardLayout";
+import { QueryErrorState } from "@/components/QueryState";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { trpc } from "@/lib/trpc";
@@ -9,6 +10,21 @@ const currency = (value: number) =>
 export default function MerchantHub() {
   const query = trpc.consoles.merchantHub.useQuery();
   const data = query.data;
+
+  if (query.isError) {
+    return (
+      <DashboardLayout>
+        <div className="space-y-6">
+          <QueryErrorState
+            resource="merchant hub data"
+            message={query.error.message}
+            onRetry={() => void query.refetch()}
+            retrying={query.isRefetching}
+          />
+        </div>
+      </DashboardLayout>
+    );
+  }
 
   return (
     <DashboardLayout>

@@ -1,6 +1,7 @@
-import { CircleAlert, FileCheck, ShieldCheck, Thermometer } from "lucide-react";
+import { FileCheck, ShieldCheck, Thermometer } from "lucide-react";
 
 import DashboardLayout from "@/components/DashboardLayout";
+import { QueryErrorState } from "@/components/QueryState";
 import { Badge } from "@/components/ui/badge";
 import {
   Card,
@@ -14,6 +15,21 @@ import { trpc } from "@/lib/trpc";
 export default function VerticalCompliance() {
   const query = trpc.compliancePacks.summary.useQuery();
   const data = query.data;
+
+  if (query.isError) {
+    return (
+      <DashboardLayout>
+        <div className="space-y-6">
+          <QueryErrorState
+            resource="compliance pack data"
+            message={query.error.message}
+            onRetry={() => void query.refetch()}
+            retrying={query.isRefetching}
+          />
+        </div>
+      </DashboardLayout>
+    );
+  }
 
   return (
     <DashboardLayout>
@@ -31,22 +47,6 @@ export default function VerticalCompliance() {
             </p>
           </div>
         </div>
-
-        {query.error ? (
-          <Card>
-            <CardContent className="flex items-start gap-3 py-6">
-              <CircleAlert className="mt-0.5 h-5 w-5 text-amber-400" />
-              <div>
-                <p className="font-medium text-white">
-                  Compliance pack data is unavailable
-                </p>
-                <p className="mt-1 text-sm text-slate-400">
-                  {query.error.message}
-                </p>
-              </div>
-            </CardContent>
-          </Card>
-        ) : null}
 
         <div className="grid gap-4 md:grid-cols-3 xl:grid-cols-6">
           <Card>
@@ -99,7 +99,7 @@ export default function VerticalCompliance() {
           </Card>
         </div>
 
-        {!query.isLoading && !query.error && (data?.packs.length ?? 0) === 0 ? (
+        {!query.isLoading && (data?.packs.length ?? 0) === 0 ? (
           <Card>
             <CardContent className="py-6">
               <p className="font-medium text-white">

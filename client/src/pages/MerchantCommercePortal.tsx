@@ -54,7 +54,29 @@ export default function MerchantCommercePortal() {
             <label className="space-y-1 text-sm text-slate-300">Provider ID
               <input value={providerId} onChange={(event) => setProviderId(event.target.value.replace(/\D/g, ""))} inputMode="numeric" className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100" placeholder="e.g. 42" />
             </label>
-            <div className="self-end text-sm text-slate-300">{profile.data ? `${profile.data.display_name}: ${profile.data.state}; ${profile.data.productCount} catalog items` : "Select a provider to load your authorized merchant profile."}</div>
+            <div className="self-end text-sm text-slate-300">
+              {profile.isError ? (
+                <div className="flex flex-wrap items-center gap-3 rounded-xl border border-amber-900/40 bg-amber-500/5 px-4 py-3">
+                  <span className="text-amber-100">
+                    Merchant profile could not be loaded: {profile.error.message}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => void profile.refetch()}
+                    disabled={profile.isRefetching}
+                    className="rounded-full border border-amber-500/40 bg-amber-500/10 px-3 py-1 text-xs font-medium text-amber-100 transition hover:bg-amber-500/20 disabled:opacity-60"
+                  >
+                    {profile.isRefetching ? "Retrying…" : "Retry"}
+                  </button>
+                </div>
+              ) : profile.isLoading ? (
+                "Loading authorized merchant profile…"
+              ) : profile.data ? (
+                `${profile.data.display_name}: ${profile.data.state}; ${profile.data.productCount} catalog items`
+              ) : (
+                "Select a provider to load your authorized merchant profile."
+              )}
+            </div>
           </CardContent>
         </Card>
 
