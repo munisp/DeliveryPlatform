@@ -25,11 +25,15 @@ func TestMojaloopSchemaContractIntegration(t *testing.T) {
 		t.Fatalf("expected applied migration contract to verify: %v", err)
 	}
 
+	var originalVersion int
+	if err := db.QueryRow(`SELECT version FROM platform_schema_contracts WHERE component = 'mojaloop_funds'`).Scan(&originalVersion); err != nil {
+		t.Fatalf("read current schema contract version: %v", err)
+	}
 	if _, err := db.Exec(`DELETE FROM platform_schema_contracts WHERE component = 'mojaloop_funds'`); err != nil {
 		t.Fatalf("remove schema contract marker: %v", err)
 	}
 	defer func() {
-		if _, err := db.Exec(`INSERT INTO platform_schema_contracts (component, version) VALUES ('mojaloop_funds', 7) ON CONFLICT (component) DO UPDATE SET version = EXCLUDED.version, applied_at = NOW()`); err != nil {
+		if _, err := db.Exec(`INSERT INTO platform_schema_contracts (component, version) VALUES ('mojaloop_funds', $1) ON CONFLICT (component) DO UPDATE SET version = EXCLUDED.version, applied_at = NOW()`, originalVersion); err != nil {
 			t.Fatalf("restore schema contract marker: %v", err)
 		}
 	}()
