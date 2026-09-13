@@ -78,7 +78,21 @@ function optionalBoolean(value: unknown) {
 }
 
 function isoTimestamp(value: unknown) {
-  const parsed = new Date(`${value ?? ""}`);
+  const numeric =
+    typeof value === "number"
+      ? value
+      : typeof value === "string" && /^\d+(?:\.\d+)?$/.test(value.trim())
+        ? Number(value)
+        : null;
+  const milliseconds =
+    numeric === null || !Number.isFinite(numeric)
+      ? null
+      : numeric >= 1_000_000_000_000
+        ? numeric
+        : numeric >= 1_000_000_000
+          ? numeric * 1_000
+          : null;
+  const parsed = milliseconds === null ? new Date(`${value ?? ""}`) : new Date(milliseconds);
   if (
     Number.isNaN(parsed.getTime()) ||
     parsed.getTime() > Date.now() + 60_000 ||

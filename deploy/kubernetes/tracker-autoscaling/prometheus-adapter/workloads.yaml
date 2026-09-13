@@ -1,0 +1,338 @@
+# Alternative A: install this bundle only when KEDA is not managing vehicle-tracker-ingest.
+# This uses Prometheus Adapter v0.12.0 and cert-manager to serve the aggregated
+# external.metrics.k8s.io API with a verified serving certificate.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: vehicle-tracker-prometheus-adapter
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: vehicle-tracker-prometheus-adapter
+    app.kubernetes.io/component: external-metrics-adapter
+automountServiceAccountToken: true
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: vehicle-tracker-prometheus-adapter-resource-reader
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "services", "endpoints", "namespaces"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["discovery.k8s.io"]
+    resources: ["endpointslices"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "replicasets"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: vehicle-tracker-prometheus-adapter-resource-reader
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: vehicle-tracker-prometheus-adapter-resource-reader
+subjects:
+  - kind: ServiceAccount
+    name: vehicle-tracker-prometheus-adapter
+    namespace: monitoring
+---
+# Required for delegated authentication and authorization by an aggregated API.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: vehicle-tracker-prometheus-adapter-auth-delegator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:auth-delegator
+subjects:
+  - kind: ServiceAccount
+    name: vehicle-tracker-prometheus-adapter
+    namespace: monitoring
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: vehicle-tracker-prometheus-adapter-auth-reader
+  namespace: kube-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: extension-apiserver-authentication-reader
+subjects:
+  - kind: ServiceAccount
+    name: vehicle-tracker-prometheus-adapter
+    namespace: monitoring
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vehicle-tracker-prometheus-adapter-config
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: vehicle-tracker-prometheus-adapter
+data:
+  config.yaml: |
+    # The single exposed external metric counts provider work lanes that are
+    # overdue by at least two bounded poll intervals. It never represents a
+    # third-party provider's unverified record count.
+    externalRules:
+      - seriesQuery: 'vehicle_tracker_provider_overdue_cursors{namespace!="",autoscaling_scope="vehicle-tracker-ingest"}'
+        resources:
+          overrides:
+            namespace:
+              resource: namespace
+        name:
+          matches: '^vehicle_tracker_provider_overdue_cursors$'
+          as: vehicle_tracker_provider_overdue_cursors
+        metricsQuery: >-
+          sum(max by (namespace, provider_kind, integration_key) (
+            vehicle_tracker_provider_overdue_cursors{<<.LabelMatchers>>,autoscaling_scope="vehicle-tracker-ingest"}
+          )) by (namespace)
+---
+# cert-manager is an explicit dependency of this secure aggregated API bundle.
+# The cluster's API aggregation layer must trust this injected CA bundle.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: vehicle-tracker-prometheus-adapter-tls
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: vehicle-tracker-prometheus-adapter
+spec:
+  secretName: vehicle-tracker-prometheus-adapter-tls
+  duration: 2160h
+  renewBefore: 360h
+  issuerRef:
+    kind: ClusterIssuer
+    name: platform-internal-ca
+  dnsNames:
+    - vehicle-tracker-prometheus-adapter
+    - vehicle-tracker-prometheus-adapter.monitoring
+    - vehicle-tracker-prometheus-adapter.monitoring.svc
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vehicle-tracker-prometheus-adapter
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: vehicle-tracker-prometheus-adapter
+    app.kubernetes.io/component: external-metrics-adapter
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: vehicle-tracker-prometheus-adapter
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: vehicle-tracker-prometheus-adapter
+        app.kubernetes.io/component: external-metrics-adapter
+    spec:
+      serviceAccountName: vehicle-tracker-prometheus-adapter
+      automountServiceAccountToken: true
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: prometheus-adapter
+          image: registry.k8s.io/prometheus-adapter/prometheus-adapter:v0.12.0
+          imagePullPolicy: IfNotPresent
+          args:
+            - --config=/etc/adapter/config.yaml
+            - --prometheus-url=http://prometheus-operated.monitoring.svc:9090
+            - --metrics-relist-interval=30s
+            - --metrics-max-age=60s
+            - --secure-port=6443
+            - --cert-dir=/var/run/serving-cert
+            - --v=2
+          ports:
+            - name: https
+              containerPort: 6443
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: https
+              scheme: HTTPS
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: https
+              scheme: HTTPS
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: config
+              mountPath: /etc/adapter
+              readOnly: true
+            - name: serving-cert
+              mountPath: /var/run/serving-cert
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: vehicle-tracker-prometheus-adapter-config
+        - name: serving-cert
+          secret:
+            secretName: vehicle-tracker-prometheus-adapter-tls
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vehicle-tracker-prometheus-adapter
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: vehicle-tracker-prometheus-adapter
+spec:
+  selector:
+    app.kubernetes.io/name: vehicle-tracker-prometheus-adapter
+  ports:
+    - name: https
+      port: 443
+      targetPort: https
+---
+apiVersion: apiregistration.k8s.io/v1
+kind: APIService
+metadata:
+  name: v1beta1.external.metrics.k8s.io
+  annotations:
+    cert-manager.io/inject-ca-from: monitoring/vehicle-tracker-prometheus-adapter-tls
+  labels:
+    app.kubernetes.io/name: vehicle-tracker-prometheus-adapter
+spec:
+  group: external.metrics.k8s.io
+  groupPriorityMinimum: 100
+  version: v1beta1
+  versionPriority: 100
+  service:
+    name: vehicle-tracker-prometheus-adapter
+    namespace: monitoring
+    port: 443
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: vehicle-tracker-ingest
+  namespace: switchos
+  annotations:
+    deliveryplatform.io/autoscaling-mode: prometheus-adapter-backlog
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: vehicle-tracker-ingest
+  minReplicas: 16
+  maxReplicas: 64
+  metrics:
+    - type: External
+      external:
+        metric:
+          name: vehicle_tracker_provider_overdue_cursors
+          selector:
+            matchLabels:
+              autoscaling_scope: vehicle-tracker-ingest
+        # AverageValue asks the controller to divide the global, bounded work
+        # lane count by ready worker pods. 250m means one overdue work lane per
+        # four ready workers; it is an initial test-only calibration value.
+        target:
+          type: AverageValue
+          averageValue: 250m
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 65
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      selectPolicy: Min
+      policies:
+        - type: Pods
+          value: 4
+          periodSeconds: 60
+        - type: Percent
+          value: 25
+          periodSeconds: 60
+    scaleDown:
+      stabilizationWindowSeconds: 600
+      selectPolicy: Min
+      policies:
+        - type: Pods
+          value: 4
+          periodSeconds: 60
+        - type: Percent
+          value: 25
+          periodSeconds: 60
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: vehicle-tracker-prometheus-adapter
+  namespace: monitoring
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: vehicle-tracker-prometheus-adapter
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: vehicle-tracker-prometheus-adapter-restrict-network
+  namespace: monitoring
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: vehicle-tracker-prometheus-adapter
+  policyTypes: ["Ingress", "Egress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: TCP
+          port: 6443
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - protocol: TCP
+          port: 9090
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - protocol: TCP
+          port: 443
+# The final egress rule is only for the Kubernetes API endpoint. In clusters
+# where the API server CIDRs are known, replace 0.0.0.0/0 with those CIDRs.

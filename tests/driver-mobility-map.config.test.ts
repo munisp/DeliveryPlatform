@@ -3,60 +3,72 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const root = resolve(import.meta.dirname, "..");
+const read = (path: string) => readFileSync(resolve(root, path), "utf8");
 
 describe("Driver Mobility durable vehicle map", () => {
-  it("uses MapLibre and only displays bounded durable position input", () => {
-    const map = readFileSync(
-      resolve(root, "client/src/components/VehicleTrackingMap.tsx"),
-      "utf8",
-    );
+  it("loads MapLibre progressively while preserving bounded accessible position context", () => {
+    const wrapper = read("client/src/components/VehicleTrackingMap.tsx");
+    const canvas = read("client/src/components/MapLibreFleetCanvas.tsx");
+    const model = read("client/src/components/vehicleTrackingMapModel.ts");
 
-    expect(map).toContain(
-      'import maplibregl, { type Map as MapLibreMap } from "maplibre-gl"',
-    );
-    expect(map).toContain('import "maplibre-gl/dist/maplibre-gl.css"');
-    expect(map).toContain("const defaultMapStyle");
-    expect(map).toContain(
-      "positions.filter(isRenderablePosition).slice(0, 250)",
-    );
-    expect(map).toContain("new maplibregl.Map");
-    expect(map).toContain("new maplibregl.Marker");
-    expect(map).toContain("setDOMContent(");
-    expect(map).not.toContain("setHTML(");
-    expect(map).toContain("No durable current vehicle positions are available");
-    expect(map).toMatch(
-      /Automobile\s+markers are derived only from authenticated\s+tracking records/,
-    );
+    expect(wrapper).toContain('lazy(() => import("@/components/MapLibreFleetCanvas"))');
+    expect(wrapper).toContain("IntersectionObserver");
+    expect(wrapper).toContain("Load interactive map");
+    expect(canvas).toContain('import { LngLatBounds, Map, NavigationControl, Popup, ScaleControl, type GeoJSONSource, type Map as MapLibreMap } from "maplibre-gl"');
+    expect(canvas).toContain('import "maplibre-gl/dist/maplibre-gl.css"');
+    expect(canvas).toContain("const defaultMapStyle");
+    expect(canvas).toContain("positions.filter(isRenderablePosition).slice(0, 250)");
+    expect(canvas).toContain("new Map({");
+    expect(canvas).toContain("map.addSource(TRACKING_SOURCE_ID");
+    expect(canvas).toContain("cluster: true");
+    expect(canvas).toContain('type: "circle"');
+    expect(canvas).toContain("source.setData(featureCollection(renderablePositions))");
+    expect(canvas).toContain("getClusterExpansionZoom");
+    expect(canvas).toContain("setDOMContent(");
+    expect(canvas).not.toContain("new Marker");
+    expect(canvas).not.toContain("setHTML(");
+    expect(canvas).toContain("No authorized current vehicle positions are available");
+    expect(model).toContain("function isRenderablePosition");
+    expect(model).toContain("function featureCollection");
   });
 
-  it("refreshes authenticated tenant-scoped positions separately from the summary query", () => {
-    const page = readFileSync(
-      resolve(root, "client/src/pages/DriverMobility.tsx"),
-      "utf8",
-    );
-    const layout = readFileSync(
-      resolve(root, "client/src/components/PlatformSummaryPage.tsx"),
-      "utf8",
-    );
+  it("uses a role-resolved cursor SSE stream with bounded reconnect, freshness, and operator control", () => {
+    const page = read("client/src/pages/DriverMobility.tsx");
+    const stream = read("client/src/lib/useRoleScopedTracking.ts");
+    const layout = read("client/src/components/PlatformSummaryPage.tsx");
 
-    expect(page).toContain('fetch("/api/operations/snapshot"');
-    expect(page).toContain('credentials: "include"');
-    expect(page).toContain('cache: "no-store"');
-    expect(page).toContain("refetchInterval: 20_000");
-    expect(page).toContain("<VehicleTrackingMap");
-    expect(page).toContain("vehicle_tracking_unavailable");
+    expect(page).toContain('useRoleScopedTracking("me")');
+    expect(page).not.toContain('fetch("/api/operations/snapshot"');
+    expect(page).not.toContain("refetchInterval: 20_000");
+    expect(page).toContain("freshness={tracking.freshness}");
+    expect(page).toContain("onPause={tracking.pause}");
+    expect(page).toContain("onResume={tracking.resume}");
+    expect(stream).toContain("/api/tracking/live/${encodeURIComponent(scope)}/snapshot");
+    expect(stream).toContain("new EventSource(");
+    expect(stream).toContain('stream.addEventListener("tracking.delta"');
+    expect(stream).toContain("cursorRef.current");
+    expect(stream).toContain("withCredentials: true");
+    expect(stream).toContain("function reconnectDelay");
+    expect(stream).toContain('window.addEventListener("offline"');
+    expect(stream).toContain('status: "paused"');
+    expect(stream).toContain("freshnessFor");
     expect(layout.indexOf("{monitoringPanel}")).toBeLessThan(
       layout.indexOf("{error && !loading ? ("),
     );
   });
 
-  it("retains the Tailwind v4 Vite integration required for the monitoring PWA layout", () => {
-    const vite = readFileSync(resolve(root, "vite.config.ts"), "utf8");
-    const css = readFileSync(resolve(root, "client/src/index.css"), "utf8");
+  it("keeps Tailwind integration and isolates map libraries in a deferred vendor chunk", () => {
+    const vite = read("vite.config.ts");
+    const css = read("client/src/index.css");
 
     expect(vite).toContain('import tailwindcss from "@tailwindcss/vite"');
-    expect(vite).toContain("plugins: [tailwindcss(), react()]");
+    expect(vite).toContain("tailwindcss(),");
+    expect(vite).toContain("react(),");
+    expect(vite).toContain("viteStaticCopy(");
+    expect(vite).toContain('return "vendor-map"');
+    expect(vite).not.toContain('return "vendor-cesium-engine"');
+    expect(vite).toContain("chunkSizeWarningLimit: 500");
     expect(css).toContain('@import "tailwindcss";');
-    expect(css).toContain(".vehicle-map-marker");
+    expect(css).toContain(".vehicle-map-popup");
   });
 });

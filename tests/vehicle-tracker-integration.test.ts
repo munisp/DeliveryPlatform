@@ -17,7 +17,7 @@ const state = vi.hoisted(() => ({
   },
   tracker: {
     trackerId: "11111111-1111-4111-8111-111111111111",
-    providerKind: "generic_webhook" as const,
+    providerKind: "generic_webhook" as "generic_webhook" | "samsara_webhook",
   },
   ingested: [] as Array<Record<string, unknown>>,
   failedClaims: [] as Array<Record<string, unknown>>,
@@ -102,8 +102,62 @@ describe("vehicle tracker integration", () => {
     expect(state.ingested[0]?.payloadSha256Hex).toMatch(/^[a-f0-9]{64}$/);
   });
 
+  it("verifies an exact Samsara v1 timestamped raw-body HMAC before creating provider geofence evidence", async () => {
+    const previousSecrets = state.environment.vehicleTrackerWebhookSecretsJson;
+    const previousProviderKind = state.tracker.providerKind;
+    const samsaraSecret = Buffer.from(
+      "samsara-test-signing-secret-at-least-32-bytes",
+    ).toString("base64");
+    const timestamp = `${Math.floor(Date.now() / 1_000)}`;
+    const payload = {
+      eventId: "samsara-event-0001",
+      eventMs: Number(timestamp) * 1_000,
+      event: {
+        device: { id: "samsara-device-001" },
+        alertConditionId: "DeviceLocationInsideGeofence",
+      },
+    };
+    const body = Buffer.from(JSON.stringify(payload));
+    const signature = `v1=${createHmac(
+      "sha256",
+      Buffer.from(samsaraSecret, "base64"),
+    )
+      .update(Buffer.concat([Buffer.from(`v1:${timestamp}:`), body]))
+      .digest("hex")}`;
+    state.environment.vehicleTrackerWebhookSecretsJson = JSON.stringify({
+      samsara_fleet: { secret: samsaraSecret, signature: "samsara_v1" },
+    });
+    state.tracker.providerKind = "samsara_webhook";
+    const before = state.ingested.length;
+
+    try {
+      await expect(
+        ingestSignedVehicleTrackerEvent({
+          integrationKey: "samsara_fleet",
+          rawBody: body,
+          parsedBody: payload,
+          samsaraSignature: signature,
+          samsaraTimestamp: timestamp,
+        }),
+      ).resolves.toEqual({
+        id: "55555555-5555-4555-8555-555555555555",
+        accepted: true,
+      });
+      expect(state.ingested).toHaveLength(before + 1);
+      expect(state.ingested.at(-1)).toMatchObject({
+        externalEventId: "samsara-event-0001",
+        signalKind: "provider_geofence",
+        integrityScore: 100,
+      });
+    } finally {
+      state.environment.vehicleTrackerWebhookSecretsJson = previousSecrets;
+      state.tracker.providerKind = previousProviderKind;
+    }
+  });
+
   it("rejects a malformed signature before normalized tracker evidence is written", async () => {
     const body = Buffer.from(JSON.stringify(genericPayload()));
+    const before = state.ingested.length;
     await expect(
       ingestSignedVehicleTrackerEvent({
         integrationKey: "fleet_tracker",
@@ -114,7 +168,7 @@ describe("vehicle tracker integration", () => {
     ).rejects.toEqual(
       new VehicleTrackerIntegrationError("vehicle_tracker_signature_invalid"),
     );
-    expect(state.ingested).toHaveLength(1);
+    expect(state.ingested).toHaveLength(before);
   });
 
   it("fails closed before network dispatch when no command adapter is explicitly enabled", async () => {

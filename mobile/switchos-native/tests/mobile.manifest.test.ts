@@ -40,3 +40,20 @@ describe("tab navigation shell", () => {
     expect(contents).toContain("href: isAdministrator ? undefined : null");
   });
 });
+
+
+describe("native authentication log hygiene", () => {
+  it("does not emit OAuth parameters, session tokens, or profile data through console logging", () => {
+    const sourcePaths = [
+      "../app/oauth/callback.tsx",
+      "../hooks/use-auth.ts",
+      "../lib/_core/auth.ts",
+      "../server/_core/index.ts",
+    ];
+
+    for (const sourcePath of sourcePaths) {
+      const source = readFileSync(resolve(import.meta.dirname, sourcePath), "utf8");
+      expect(source).not.toMatch(/console\.log\s*\(/);
+    }
+  });
+});

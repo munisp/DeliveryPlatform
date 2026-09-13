@@ -2,6 +2,7 @@ import { Suspense, lazy } from "react";
 import { useQuery } from "@tanstack/react-query";
 import PlatformSummaryPage from "@/components/PlatformSummaryPage";
 import type { DurableTrackingPosition } from "@/components/VehicleTrackingMap";
+import { useRoleScopedTracking } from "@/lib/useRoleScopedTracking";
 import { trpc } from "@/lib/trpc";
 import { CarFront } from "lucide-react";
 
@@ -14,26 +15,30 @@ type LogisticsTowerSummary = {
   };
 };
 
-type OperationsTrackingSnapshot = {
-  positions: DurableTrackingPosition[];
-};
-
 const VehicleTrackingMap = lazy(
   () => import("@/components/VehicleTrackingMap"),
 );
 
-async function fetchDurableVehiclePositions(): Promise<OperationsTrackingSnapshot> {
-  const response = await fetch("/api/operations/snapshot", {
-    credentials: "include",
-    cache: "no-store",
-  });
-  const body = await response
-    .json()
-    .catch(() => ({ error: "vehicle_tracking_unavailable" }));
-  if (!response.ok || !body || !Array.isArray(body.positions)) {
-    throw new Error(body?.error ?? "vehicle_tracking_unavailable");
-  }
-  return body as OperationsTrackingSnapshot;
+function mapTrackingDeltaToPosition(delta: {
+  orderId: number;
+  observedAt: string;
+  latitude: number;
+  longitude: number;
+  accuracyM: number | null;
+  etaSeconds: number | null;
+}): DurableTrackingPosition {
+  return {
+    work_order_id: `delivery-${delta.orderId}`,
+    external_reference: `Delivery ${delta.orderId}`,
+    subject_user_id: null,
+    observed_at: delta.observedAt,
+    latitude: delta.latitude,
+    longitude: delta.longitude,
+    accuracy_m: delta.accuracyM,
+    integrity_score: null,
+    source: "role_scoped_delivery_delta",
+    eta_seconds: delta.etaSeconds,
+  };
 }
 
 export default function DriverMobility() {
@@ -42,11 +47,8 @@ export default function DriverMobility() {
     trpc.localCommerceSuperGateway.logisticsControlTower.useQuery({
       city: "Lagos",
     });
-  const trackingQuery = useQuery({
-    queryKey: ["operations-snapshot", "vehicle-tracking"],
-    queryFn: fetchDurableVehiclePositions,
-    refetchInterval: 20_000,
-  });
+  const tracking = useRoleScopedTracking("me");
+  const trackingPositions = tracking.deltas.map(mapTrackingDeltaToPosition);
   const logisticsTower = logisticsQuery.data as
     | LogisticsTowerSummary
     | undefined;
@@ -69,20 +71,15 @@ export default function DriverMobility() {
           }
         >
           <VehicleTrackingMap
-            positions={trackingQuery.data?.positions ?? []}
-            isLoading={trackingQuery.isLoading}
-            error={
-              trackingQuery.isError
-                ? trackingQuery.error instanceof Error
-                  ? trackingQuery.error.message
-                  : "vehicle_tracking_unavailable"
-                : null
-            }
-            refreshedAt={
-              trackingQuery.dataUpdatedAt
-                ? new Date(trackingQuery.dataUpdatedAt).toISOString()
-                : null
-            }
+            positions={trackingPositions}
+            isLoading={tracking.status === "bootstrapping"}
+            error={tracking.error}
+            refreshedAt={tracking.updatedAt}
+            streamStatus={tracking.status}
+            freshness={tracking.freshness}
+            truncated={tracking.truncated}
+            onPause={tracking.pause}
+            onResume={tracking.resume}
           />
         </Suspense>
       }

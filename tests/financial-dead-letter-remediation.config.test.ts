@@ -76,6 +76,31 @@ describe("financial dead-letter remediation safeguards", () => {
     );
   });
 
+  it("adds append-only, evidence-bound head resolution that only releases an approved original or its governed replacement", () => {
+    const migration = readFileSync(
+      resolve(root, "drizzle/0071_financial_dead_letter_head_resolution.sql"),
+      "utf8",
+    );
+    const dispatcher = readFileSync(
+      resolve(root, "services/go/mojaloop/tigerbeetle_batch_outbox.go"),
+      "utf8",
+    );
+    const validator = readFileSync(
+      resolve(root, "scripts/testing/validate-financial-dead-letter-remediation.sh"),
+      "utf8",
+    );
+    expect(migration).toContain("mojaloop_dead_letter_head_resolution");
+    expect(migration).toContain("approved_by_user_id IS DISTINCT FROM requested_by_user_id");
+    expect(migration).toContain("reconciliation_digest_hex");
+    expect(migration).toContain("mojaloop_dead_letter_predecessor_blocks");
+    expect(migration).toContain("REVOKE ALL ON public.mojaloop_dead_letter_head_resolution FROM PUBLIC");
+    expect(migration).toContain("'original_confirmed_not_committed_superseded'");
+    expect(dispatcher).toContain("mojaloop_dead_letter_predecessor_blocks(earlier.id, candidate.id)");
+    expect(validator).toContain("head_resolution_request_and_independent_approval=PASS");
+    expect(validator).toContain("approved_replacement_logically_occupies_original_head=PASS");
+    expect(validator).toContain("ordinary_successor_blocked_until_replacement_delivered=PASS");
+  });
+
   it("exposes only MFA-gated, bounded API routes that invoke database authority functions through the store", () => {
     const server = readFileSync(resolve(root, "server/_core/index.ts"), "utf8");
     const store = readFileSync(
@@ -104,6 +129,18 @@ describe("financial dead-letter remediation safeguards", () => {
     expect(server).toContain(
       '"/api/admin/finance/dead-letter-cases/:caseId/reject"',
     );
+    expect(server).toContain(
+      '"/api/admin/finance/dead-letter-cases/:caseId/head-resolution"',
+    );
+    expect(server).toContain(
+      '"/api/admin/finance/dead-letter-cases/:caseId/head-resolution-requests"',
+    );
+    expect(server).toContain(
+      '"/api/admin/finance/dead-letter-cases/:caseId/head-resolution-approve"',
+    );
+    expect(server).toContain(
+      '"/api/admin/finance/dead-letter-cases/:caseId/head-resolution-reject"',
+    );
     expect(server).toContain("invalid_dead_letter_remediation_request");
     expect(server).toContain("invalid_dead_letter_approval");
     expect(server).toContain("invalid_dead_letter_rejection");
@@ -115,6 +152,10 @@ describe("financial dead-letter remediation safeguards", () => {
       "mojaloop_approve_dead_letter_remediation",
     );
     expect(authorityCalls).toContain("mojaloop_reject_dead_letter_remediation");
+    expect(authorityCalls).toContain("mojaloop_get_dead_letter_head_resolution");
+    expect(authorityCalls).toContain("mojaloop_request_dead_letter_head_resolution");
+    expect(authorityCalls).toContain("mojaloop_approve_dead_letter_head_resolution");
+    expect(authorityCalls).toContain("mojaloop_reject_dead_letter_head_resolution");
     expect(authorityCalls).not.toContain(
       "INSERT INTO mojaloop_dead_letter_case",
     );

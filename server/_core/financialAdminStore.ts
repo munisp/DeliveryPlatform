@@ -716,3 +716,127 @@ export async function rejectFinancialDeadLetterRemediation(input: {
   );
   return { state: String(result.rows[0]?.state ?? "") };
 }
+
+export type FinancialDeadLetterHeadResolution = {
+  resolutionId: string;
+  originalOutboxId: string;
+  resolutionDisposition:
+    | "original_confirmed_committed_resolved"
+    | "original_confirmed_not_committed_superseded";
+  state: "approval_pending" | "approved" | "rejected";
+  requestedByUserId: number;
+  requestedAt: string;
+  approvedByUserId: number | null;
+  approvedAt: string | null;
+  rejectedByUserId: number | null;
+  rejectedAt: string | null;
+  reconciliationReference: string;
+  reconciliationDigestHex: string;
+  updatedAt: string;
+};
+
+function mapFinancialDeadLetterHeadResolution(
+  row: Record<string, unknown>,
+): FinancialDeadLetterHeadResolution {
+  return {
+    resolutionId: String(row.resolution_id),
+    originalOutboxId: String(row.original_outbox_id),
+    resolutionDisposition: String(row.resolution_disposition) as FinancialDeadLetterHeadResolution["resolutionDisposition"],
+    state: String(row.state) as FinancialDeadLetterHeadResolution["state"],
+    requestedByUserId: Number(row.requested_by_user_id),
+    requestedAt: new Date(String(row.requested_at)).toISOString(),
+    approvedByUserId:
+      row.approved_by_user_id === null ? null : Number(row.approved_by_user_id),
+    approvedAt:
+      row.approved_at === null ? null : new Date(String(row.approved_at)).toISOString(),
+    rejectedByUserId:
+      row.rejected_by_user_id === null ? null : Number(row.rejected_by_user_id),
+    rejectedAt:
+      row.rejected_at === null ? null : new Date(String(row.rejected_at)).toISOString(),
+    reconciliationReference: String(row.reconciliation_reference),
+    reconciliationDigestHex: String(row.reconciliation_digest_hex),
+    updatedAt: new Date(String(row.updated_at)).toISOString(),
+  };
+}
+
+export async function getFinancialDeadLetterHeadResolution(input: {
+  actorId: number;
+  caseId: string;
+}): Promise<FinancialDeadLetterHeadResolution | null> {
+  const result = await requirePool().query(
+    `SELECT * FROM mojaloop_get_dead_letter_head_resolution($1::integer, $2::uuid)`,
+    [input.actorId, input.caseId],
+  );
+  return result.rows[0] ? mapFinancialDeadLetterHeadResolution(result.rows[0]) : null;
+}
+
+export async function requestFinancialDeadLetterHeadResolution(input: {
+  actorId: number;
+  caseId: string;
+  resolutionDisposition: FinancialDeadLetterHeadResolution["resolutionDisposition"];
+  reason: string;
+  reconciliationReference: string;
+  reconciliationDigestHex: string;
+  idempotencyKey: string;
+}): Promise<{ resolutionId: string; state: string }> {
+  const result = await requirePool().query(
+    `SELECT * FROM mojaloop_request_dead_letter_head_resolution(
+      $1::integer, $2::uuid, $3::text, $4::text, $5::text, $6::text,
+      $7::text, clock_timestamp()
+    )`,
+    [
+      input.actorId,
+      input.caseId,
+      input.resolutionDisposition,
+      input.reason,
+      input.reconciliationReference,
+      input.reconciliationDigestHex,
+      input.idempotencyKey,
+    ],
+  );
+  return {
+    resolutionId: String(result.rows[0]?.resolution_id ?? ""),
+    state: String(result.rows[0]?.state ?? ""),
+  };
+}
+
+export async function approveFinancialDeadLetterHeadResolution(input: {
+  actorId: number;
+  caseId: string;
+  reason: string;
+  idempotencyKey: string;
+}): Promise<{
+  resolutionId: string;
+  state: string;
+  resolutionDisposition: string;
+}> {
+  const result = await requirePool().query(
+    `SELECT * FROM mojaloop_approve_dead_letter_head_resolution(
+      $1::integer, $2::uuid, $3::text, $4::text, clock_timestamp()
+    )`,
+    [input.actorId, input.caseId, input.reason, input.idempotencyKey],
+  );
+  return {
+    resolutionId: String(result.rows[0]?.resolution_id ?? ""),
+    state: String(result.rows[0]?.state ?? ""),
+    resolutionDisposition: String(result.rows[0]?.resolution_disposition ?? ""),
+  };
+}
+
+export async function rejectFinancialDeadLetterHeadResolution(input: {
+  actorId: number;
+  caseId: string;
+  reason: string;
+  idempotencyKey: string;
+}): Promise<{ resolutionId: string; state: string }> {
+  const result = await requirePool().query(
+    `SELECT * FROM mojaloop_reject_dead_letter_head_resolution(
+      $1::integer, $2::uuid, $3::text, $4::text, clock_timestamp()
+    )`,
+    [input.actorId, input.caseId, input.reason, input.idempotencyKey],
+  );
+  return {
+    resolutionId: String(result.rows[0]?.resolution_id ?? ""),
+    state: String(result.rows[0]?.state ?? ""),
+  };
+}

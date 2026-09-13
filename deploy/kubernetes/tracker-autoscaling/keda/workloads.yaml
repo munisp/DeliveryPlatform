@@ -1,0 +1,112 @@
+# Alternative B: apply only after KEDA v2.20.2 and its CRDs are installed.
+# Do not apply with the Prometheus Adapter HPA alternative: both would own the
+# vehicle-tracker-ingest scale target.
+---
+apiVersion: keda.sh/v1alpha1
+kind: TriggerAuthentication
+metadata:
+  name: vehicle-tracker-prometheus-query
+  namespace: switchos
+  labels:
+    app.kubernetes.io/name: vehicle-tracker-ingest
+    app.kubernetes.io/component: autoscaling
+spec:
+  secretTargetRef:
+    - parameter: username
+      name: vehicle-tracker-prometheus-query
+      key: username
+    - parameter: password
+      name: vehicle-tracker-prometheus-query
+      key: password
+    - parameter: ca
+      name: vehicle-tracker-prometheus-query
+      key: ca.crt
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: vehicle-tracker-ingest
+  namespace: switchos
+  annotations:
+    # KEDA must explicitly adopt the current native HPA. Without this transfer,
+    # two controllers could independently write the Deployment scale target.
+    scaledobject.keda.sh/transfer-hpa-ownership: "true"
+  labels:
+    app.kubernetes.io/name: vehicle-tracker-ingest
+    app.kubernetes.io/component: autoscaling
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: vehicle-tracker-ingest
+  pollingInterval: 30
+  cooldownPeriod: 600
+  minReplicaCount: 16
+  maxReplicaCount: 64
+  fallback:
+    # A Prometheus timeout storm is an observability failure, not evidence that
+    # peak tracker work disappeared. After three failed polls, preserve the
+    # greater of 16 and the current replica count; a 64-worker peak therefore
+    # cannot be collapsed to the old 16-replica fallback by stale monitoring.
+    failureThreshold: 3
+    replicas: 16
+    behavior: currentReplicasIfHigher
+  advanced:
+    restoreToOriginalReplicaCount: false
+    horizontalPodAutoscalerConfig:
+      name: vehicle-tracker-ingest
+      behavior:
+        scaleUp:
+          stabilizationWindowSeconds: 60
+          selectPolicy: Min
+          policies:
+            - type: Pods
+              value: 4
+              periodSeconds: 60
+            - type: Percent
+              value: 25
+              periodSeconds: 60
+        scaleDown:
+          stabilizationWindowSeconds: 600
+          selectPolicy: Min
+          policies:
+            - type: Pods
+              value: 4
+              periodSeconds: 60
+            - type: Percent
+              value: 25
+              periodSeconds: 60
+  triggers:
+    - type: prometheus
+      name: bounded-overdue-provider-work
+      authenticationRef:
+        name: vehicle-tracker-prometheus-query
+      metadata:
+        # This service must be reachable only through the in-cluster network
+        # and present a certificate trusted by ca.crt. It is intentionally not
+        # exposed through a public ingress.
+        serverAddress: https://prometheus-operated.monitoring.svc:9090
+        query: >-
+          sum(max by (namespace, provider_kind, integration_key) (
+            vehicle_tracker_provider_overdue_cursors{
+              namespace="switchos",
+              autoscaling_scope="vehicle-tracker-ingest"
+            }
+          ))
+        # This target is an initial rehearsal parameter. With KEDA's external
+        # average-value semantics, 250m corresponds to one overdue provider
+        # work lane per four ready workers. It must be recalibrated only from
+        # the controlled rehearsal evidence.
+        threshold: "0.25"
+        activationThreshold: "0"
+        # Cache the last successful scalar for the 30-second polling window so
+        # HPA's nominal 15-second metric reads do not multiply Prometheus load.
+        # A failed poll does not turn a stale success into a healthy result;
+        # fallback activates after three failed polls.
+        useCachedMetrics: "true"
+        authModes: tls,basic
+        ignoreNullValues: "false"
+        timeout: "5s"
+# Required existing secret in the switchos namespace (not committed):
+# vehicle-tracker-prometheus-query: username, password, ca.crt.
+# The credential must be read-only and limited to the one metric query above.

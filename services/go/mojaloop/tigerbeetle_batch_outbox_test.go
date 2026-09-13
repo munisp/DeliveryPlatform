@@ -10,10 +10,11 @@ import (
 )
 
 type simulatedTigerBeetleLedger struct {
-	mu           sync.Mutex
-	batches      [][]TigerBeetleTransferRequest
-	outcomeError map[string]error
-	seen         map[string]int
+	mu              sync.Mutex
+	batches         [][]TigerBeetleTransferRequest
+	outcomeError    map[string]error
+	seen            map[string]int
+	reconciliations map[string]TransferReconciliation
 }
 
 func (s *simulatedTigerBeetleLedger) CreatePayerAccount(string) error { return nil }
@@ -37,6 +38,9 @@ func (s *simulatedTigerBeetleLedger) ProcessMojaloopTransferBatch(requests []Tig
 	return outcomes, nil
 }
 func (s *simulatedTigerBeetleLedger) GetTransferReconciliation(transferID string) (TransferReconciliation, error) {
+	if reconciliation, ok := s.reconciliations[transferID]; ok {
+		return reconciliation, nil
+	}
 	return TransferReconciliation{
 		TransferID:       transferID,
 		TransferExists:   true,
@@ -61,7 +65,7 @@ func batchTestDatabase(t *testing.T) *sql.DB {
 		t.Fatalf("open isolated TigerBeetle batch database: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	if _, err := db.Exec(`TRUNCATE mojaloop_reconciliation_audits, mojaloop_funds_outbox, mojaloop_workflow_events, mojaloop_workflows, mojaloop_transfers RESTART IDENTITY`); err != nil {
+	if _, err := db.Exec(`TRUNCATE mojaloop_dead_letter_head_resolution, mojaloop_dead_letter_case_event, mojaloop_dead_letter_case, mojaloop_reconciliation_audits, mojaloop_funds_outbox, mojaloop_workflow_events, mojaloop_workflows, mojaloop_transfers RESTART IDENTITY`); err != nil {
 		t.Fatalf("reset isolated TigerBeetle batch database: %v", err)
 	}
 	return db
@@ -154,6 +158,87 @@ func TestTigerBeetleBatchDispatchClaimsOnceAcrossConcurrentWorkers(t *testing.T)
 	}
 	if len(ledger.seen) != records {
 		t.Fatalf("expected %d unique ledger submissions, got %d", records, len(ledger.seen))
+	}
+}
+
+func TestTigerBeetleApprovedHeadResolutionClaimsReplacementBeforeLaterSuccessor(t *testing.T) {
+	db := batchTestDatabase(t)
+	originalWorkflowID := seedTigerBeetleBatchTransfer(t, db, 650, "payer-head-resolution")
+	successorWorkflowID := seedTigerBeetleBatchTransfer(t, db, 651, "payer-head-resolution")
+	if _, err := db.Exec(`
+		INSERT INTO users (id, open_id, role)
+		VALUES (9101, 'financial-head-requester', 'admin'), (9102, 'financial-remediation-approver', 'admin'), (9103, 'financial-head-approver', 'admin')
+		ON CONFLICT (id) DO UPDATE SET role = EXCLUDED.role`); err != nil {
+		t.Fatalf("seed financial administrators: %v", err)
+	}
+	if _, err := db.Exec(`
+		UPDATE mojaloop_funds_outbox SET status = 'dead_letter', attempt_count = 12,
+			last_error = 'simulated terminal ledger response'
+		WHERE workflow_id = $1`, originalWorkflowID); err != nil {
+		t.Fatalf("make original outbox row a dead-letter head: %v", err)
+	}
+	if _, err := db.Exec(`UPDATE mojaloop_transfers SET state = 'PREPARED' WHERE transfer_id = $1`, originalWorkflowID); err != nil {
+		t.Fatalf("keep dead-letter transfer non-final for replacement authority: %v", err)
+	}
+
+	var caseID string
+	if err := db.QueryRow(`SELECT mojaloop_open_dead_letter_case(
+		9101, id, 'terminal response investigated', repeat('a', 64),
+		'head-case-open-0001', clock_timestamp()
+	) FROM mojaloop_funds_outbox WHERE workflow_id = $1`, originalWorkflowID).Scan(&caseID); err != nil {
+		t.Fatalf("open dead-letter case: %v", err)
+	}
+	var requestState string
+	if err := db.QueryRow(`SELECT mojaloop_request_dead_letter_remediation(
+		9101, $1::uuid, 'confirmed not committed with replacement', 'confirmed_not_committed',
+		'recon://local/head-replacement', repeat('b', 64), 'replacement-head-resolution-0001',
+		'packet-replacement', 'condition-replacement', NOW() + INTERVAL '1 hour',
+		'head-remediation-request-0001', clock_timestamp()
+	)`, caseID).Scan(&requestState); err != nil || requestState != "approval_pending" {
+		t.Fatalf("request dead-letter replacement: state=%q err=%v", requestState, err)
+	}
+	var replacementWorkflowID string
+	if err := db.QueryRow(`SELECT replacement_transfer_id FROM mojaloop_approve_dead_letter_remediation(
+		9102, $1::uuid, 'independent replacement approval', 'head-remediation-approve-0001', clock_timestamp()
+	)`, caseID).Scan(&replacementWorkflowID); err != nil {
+		t.Fatalf("approve dead-letter replacement: %v", err)
+	}
+	var resolutionState string
+	if err := db.QueryRow(`SELECT state FROM mojaloop_request_dead_letter_head_resolution(
+		9101, $1::uuid, 'original_confirmed_not_committed_superseded',
+		'approved replacement occupies the original ordered position',
+		'recon://local/head-replacement', repeat('c', 64),
+		'head-resolution-request-0001', clock_timestamp()
+	)`, caseID).Scan(&resolutionState); err != nil || resolutionState != "approval_pending" {
+		t.Fatalf("request head resolution: state=%q err=%v", resolutionState, err)
+	}
+	if err := db.QueryRow(`SELECT state FROM mojaloop_approve_dead_letter_head_resolution(
+		9103, $1::uuid, 'independent resolution approval',
+		'head-resolution-approve-0001', clock_timestamp()
+	)`, caseID).Scan(&resolutionState); err != nil || resolutionState != "approved" {
+		t.Fatalf("approve head resolution: state=%q err=%v", resolutionState, err)
+	}
+
+	ledger := &simulatedTigerBeetleLedger{outcomeError: map[string]error{}, seen: map[string]int{}}
+	service := &MojaloopService{db: db, tigerBeetle: ledger}
+	if processed, err := service.DispatchTigerBeetleTransferBatch("head-resolution-worker", 1); err != nil || processed != 1 {
+		t.Fatalf("claim approved replacement ahead of ordinary successor: processed=%d err=%v", processed, err)
+	}
+	var replacementStatus, successorStatus string
+	if err := db.QueryRow(`SELECT status FROM mojaloop_funds_outbox WHERE workflow_id = $1`, replacementWorkflowID).Scan(&replacementStatus); err != nil || replacementStatus != "delivered" {
+		t.Fatalf("replacement was not delivered: status=%q err=%v", replacementStatus, err)
+	}
+	if err := db.QueryRow(`SELECT status FROM mojaloop_funds_outbox WHERE workflow_id = $1`, successorWorkflowID).Scan(&successorStatus); err != nil || successorStatus != "pending" {
+		t.Fatalf("ordinary successor bypassed replacement: status=%q err=%v", successorStatus, err)
+	}
+	if processed, err := service.DispatchTigerBeetleTransferBatch("head-resolution-worker", 1); err != nil || processed != 1 {
+		t.Fatalf("claim successor after replacement delivery: processed=%d err=%v", processed, err)
+	}
+	if err := db.QueryRow(`SELECT status FROM mojaloop_funds_outbox WHERE workflow_id = $1`, successorWorkflowID).Scan(&successorStatus); err != nil || successorStatus != "delivered" {
+		t.Fatalf("successor was not released after replacement delivery: status=%q err=%v", successorStatus, err)
+	}
+	if ledger.seen[originalWorkflowID] != 0 || ledger.seen[replacementWorkflowID] != 1 || ledger.seen[successorWorkflowID] != 1 {
+		t.Fatalf("unexpected ordered ledger submissions: original=%d replacement=%d successor=%d", ledger.seen[originalWorkflowID], ledger.seen[replacementWorkflowID], ledger.seen[successorWorkflowID])
 	}
 }
 

@@ -1,0 +1,21 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: vehicle-tracker-ingest
+  namespace: monitoring
+  labels:
+    prometheus: platform
+    app.kubernetes.io/name: vehicle-tracker-ingest
+spec:
+  namespaceSelector:
+    matchNames: ["switchos"]
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: vehicle-tracker-ingest
+      app.kubernetes.io/component: tracker-worker
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: 15s
+      scrapeTimeout: 10s
+      honorLabels: false

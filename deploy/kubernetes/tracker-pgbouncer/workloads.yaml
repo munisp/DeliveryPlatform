@@ -1,0 +1,254 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: vehicle-tracker-pgbouncer
+  namespace: switchos
+  labels:
+    app.kubernetes.io/name: vehicle-tracker-pgbouncer
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vehicle-tracker-pgbouncer-config
+  namespace: switchos
+  labels:
+    app.kubernetes.io/name: vehicle-tracker-pgbouncer
+data:
+  pgbouncer.ini: |
+    [databases]
+    deliveryplatform = host=REPLACE_WITH_POSTGRES_SERVICE port=5432 dbname=deliveryplatform pool_size=16 reserve_pool_size=4 max_db_connections=20 max_db_client_connections=96
+
+    [pgbouncer]
+    listen_addr = 0.0.0.0
+    listen_port = 6432
+    pool_mode = transaction
+    auth_type = scram-sha-256
+    auth_file = /etc/pgbouncer-auth/userlist.txt
+    stats_users = tracker_pgbouncer_exporter
+    max_client_conn = 128
+    default_pool_size = 16
+    min_pool_size = 4
+    reserve_pool_size = 4
+    reserve_pool_timeout = 2
+    max_db_connections = 20
+    max_db_client_connections = 96
+    server_connect_timeout = 5
+    server_login_retry = 5
+    query_wait_timeout = 10
+    server_idle_timeout = 60
+    server_lifetime = 3600
+    server_reset_query = DISCARD ALL
+    max_prepared_statements = 0
+    ignore_startup_parameters = extra_float_digits
+    client_tls_sslmode = require
+    client_tls_key_file = /etc/pgbouncer-tls/tls.key
+    client_tls_cert_file = /etc/pgbouncer-tls/tls.crt
+    client_tls_ca_file = /etc/pgbouncer-tls/ca.crt
+    server_tls_sslmode = verify-full
+    server_tls_ca_file = /etc/pgbouncer-tls/ca.crt
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vehicle-tracker-pgbouncer
+  namespace: switchos
+  labels:
+    app.kubernetes.io/name: vehicle-tracker-pgbouncer
+    app.kubernetes.io/component: postgres-transaction-pooler
+spec:
+  replicas: 4
+  revisionHistoryLimit: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: vehicle-tracker-pgbouncer
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: vehicle-tracker-pgbouncer
+        app.kubernetes.io/component: postgres-transaction-pooler
+        app.kubernetes.io/part-of: deliveryplatform
+    spec:
+      serviceAccountName: vehicle-tracker-pgbouncer
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: vehicle-tracker-pgbouncer
+      containers:
+        - name: pgbouncer
+          image: edoburu/pgbouncer:REPLACE_WITH_IMMUTABLE_TAG
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: postgres
+              containerPort: 6432
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - name: config
+              mountPath: /etc/pgbouncer/pgbouncer.ini
+              subPath: pgbouncer.ini
+              readOnly: true
+            - name: auth
+              mountPath: /etc/pgbouncer-auth
+              readOnly: true
+            - name: tls
+              mountPath: /etc/pgbouncer-tls
+              readOnly: true
+            - name: runtime
+              mountPath: /var/run/pgbouncer
+          readinessProbe:
+            tcpSocket:
+              port: postgres
+            initialDelaySeconds: 3
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3
+          livenessProbe:
+            tcpSocket:
+              port: postgres
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+        - name: pgbouncer-exporter
+          image: quay.io/prometheuscommunity/pgbouncer-exporter:REPLACE_WITH_IMMUTABLE_TAG
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: metrics
+              containerPort: 9127
+          env:
+            - name: PGBOUNCER_EXPORTER_CONNECTION_STRING
+              valueFrom:
+                secretKeyRef:
+                  name: vehicle-tracker-pgbouncer-exporter
+                  key: connection-string
+          args:
+            - --web.config.file=/etc/pgbouncer-exporter/web-config.yml
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              cpu: "250m"
+              memory: "128Mi"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - name: exporter-web
+              mountPath: /etc/pgbouncer-exporter
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /metrics
+              port: metrics
+              scheme: HTTPS
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+      volumes:
+        - name: config
+          configMap:
+            name: vehicle-tracker-pgbouncer-config
+        - name: auth
+          secret:
+            name: vehicle-tracker-pgbouncer-auth
+        - name: tls
+          secret:
+            name: vehicle-tracker-pgbouncer-tls
+        - name: exporter-web
+          secret:
+            name: vehicle-tracker-pgbouncer-exporter-web
+        - name: runtime
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vehicle-tracker-pgbouncer
+  namespace: switchos
+  labels:
+    app.kubernetes.io/name: vehicle-tracker-pgbouncer
+spec:
+  selector:
+    app.kubernetes.io/name: vehicle-tracker-pgbouncer
+  ports:
+    - name: postgres
+      port: 6432
+      targetPort: postgres
+    - name: metrics
+      port: 9127
+      targetPort: metrics
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: vehicle-tracker-pgbouncer
+  namespace: switchos
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: vehicle-tracker-pgbouncer
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: vehicle-tracker-pgbouncer
+  namespace: switchos
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: vehicle-tracker-pgbouncer
+  minReplicas: 4
+  maxReplicas: 4
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 60
+# Required externally managed secrets; never place credentials, TLS keys, or
+# PostgreSQL service names in this manifest. Before rollout, replace the image
+# placeholders and `REPLACE_WITH_POSTGRES_SERVICE`, then verify that the total
+# 4 * 20 = 80 permitted PgBouncer server connections fit the PostgreSQL tracker
+# connection budget after all service, maintenance, and operator reserves.
+#
+# vehicle-tracker-pgbouncer-auth: userlist.txt with SCRAM verifier entries for
+# tracker worker and tracker_pgbouncer_exporter roles.
+# vehicle-tracker-pgbouncer-tls: tls.crt, tls.key, ca.crt.
+# vehicle-tracker-pgbouncer-exporter: connection-string for the local pgbouncer
+# admin database using the stats_users role over TLS.
+# vehicle-tracker-pgbouncer-exporter-web: web-config.yml plus TLS assets for
+# the exporter HTTPS endpoint; ServiceMonitor must provide matching credentials.
