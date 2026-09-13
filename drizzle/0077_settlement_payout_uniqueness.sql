@@ -1,10 +1,31 @@
 -- Settlement payout uniqueness: prevent double-payout of the same driver
 -- settlement period under concurrent settlement-job retries/workers.
 --
--- payout_settlements is provisioned outside the in-repo DDL (see the note on
--- the payoutSettlements definition in drizzle/schema.ts); this migration only
--- hardens the existing table.
+-- payout_settlements previously had no in-repo DDL (only the ORM model in
+-- drizzle/schema.ts), which broke fresh deploys. This migration therefore
+-- creates the table idempotently (columns mirror drizzle/schema.ts
+-- payoutSettlements) before hardening it; on environments where the table
+-- was provisioned externally the CREATE is a no-op and only the dedupe +
+-- unique index apply.
 --
+CREATE TABLE IF NOT EXISTS public.payout_settlements (
+  id SERIAL PRIMARY KEY,
+  driver_id INTEGER NOT NULL,
+  period_start TIMESTAMP NOT NULL,
+  period_end TIMESTAMP NOT NULL,
+  base_earnings NUMERIC(12,2) NOT NULL DEFAULT '0',
+  bonus_amount NUMERIC(12,2) NOT NULL DEFAULT '0',
+  total_amount NUMERIC(12,2) NOT NULL DEFAULT '0',
+  status VARCHAR(32) NOT NULL DEFAULT 'pending',
+  approved_by INTEGER,
+  approved_at TIMESTAMP,
+  processed_at TIMESTAMP,
+  payment_method VARCHAR(64),
+  payment_reference VARCHAR(160),
+  created_at TIMESTAMP NOT NULL DEFAULT now(),
+  updated_at TIMESTAMP NOT NULL DEFAULT now()
+);
+
 -- 1) Defensive dedupe: if historical duplicates for the same
 --    (driver_id, period_start, period_end) window exist, keep the oldest row
 --    (lowest id) and remove the rest. On the expected empty/dev-scale table
