@@ -49,11 +49,28 @@ const DEFAULT_SYNC_LIMIT = 500;
 const { Pool } = pg;
 let pool: pg.Pool | null = null;
 
+// TLS verification is always on for database connections. The only way to
+// disable it is the development-only DATABASE_TLS_SKIP_VERIFY flag, which
+// env.ts refuses to honor in production.
+function buildDatabaseSsl(useSsl: boolean) {
+  if (!useSsl) return false;
+  if (ENV.databaseTlsSkipVerify) {
+    console.warn(
+      "[SECURITY] DATABASE_TLS_SKIP_VERIFY=true: TLS certificate verification is DISABLED for the lakehouse database connection. This is a development-only override and is rejected in production.",
+    );
+    return { rejectUnauthorized: false as const };
+  }
+  return {
+    rejectUnauthorized: true as const,
+    ...(ENV.databaseSslCa ? { ca: ENV.databaseSslCa } : {}),
+  };
+}
+
 function getPool() {
   if (!pool) {
     pool = new Pool({
       connectionString: ENV.databaseUrl,
-      ssl: ENV.databaseUrl.includes("sslmode=require") ? { rejectUnauthorized: false } : false,
+      ssl: buildDatabaseSsl(ENV.databaseUrl.includes("sslmode=require")),
     });
   }
   return pool;

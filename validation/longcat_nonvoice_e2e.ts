@@ -79,9 +79,20 @@ async function main() {
     },
   });
 
+  // TLS verification is always on for database connections. The only way to
+  // disable it is the development-only DATABASE_TLS_SKIP_VERIFY flag, which
+  // env.ts refuses to honor in production.
+  const useSsl = ENV.databaseUrl.includes("sslmode=require");
   const pool = new Pool({
     connectionString: ENV.databaseUrl,
-    ssl: ENV.databaseUrl.includes("sslmode=require") ? { rejectUnauthorized: false } : false,
+    ssl: !useSsl
+      ? false
+      : ENV.databaseTlsSkipVerify
+        ? { rejectUnauthorized: false as const }
+        : {
+            rejectUnauthorized: true as const,
+            ...(ENV.databaseSslCa ? { ca: ENV.databaseSslCa } : {}),
+          },
   });
 
   try {
