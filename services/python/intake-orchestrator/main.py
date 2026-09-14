@@ -11,6 +11,7 @@ if str(SERVICE_ROOT) not in sys.path:
 from fastapi import FastAPI, Header, HTTPException, Response
 from pydantic import BaseModel
 
+from config_validation import validate_boot_configuration
 from durable_run_store import DurableRunStore
 from service import IntakeOrchestratorService, IntakeRequest
 
@@ -19,6 +20,7 @@ if str(_SHARED_DIR) not in sys.path:
     sys.path.insert(0, str(_SHARED_DIR))
 
 from switchos_resilience import MetricsRegistry
+validate_boot_configuration()
 
 INTERNAL_SERVICE_TOKEN = os.getenv("INTERNAL_SERVICE_TOKEN", "").strip()
 

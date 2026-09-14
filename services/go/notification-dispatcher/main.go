@@ -112,14 +112,12 @@ var (
 )
 
 func main() {
+	if err := validateBootConfiguration(); err != nil {
+		log.Fatal(err)
+	}
+	logOptionalDegradations()
 	databaseURL := strings.TrimSpace(os.Getenv("DATABASE_URL"))
-	if databaseURL == "" {
-		log.Fatal("DATABASE_URL must be explicitly configured")
-	}
 	internalServiceToken := strings.TrimSpace(os.Getenv("INTERNAL_SERVICE_TOKEN"))
-	if len(internalServiceToken) < 32 {
-		log.Fatal("INTERNAL_SERVICE_TOKEN must be explicitly configured with at least 32 characters")
-	}
 	db, err := sql.Open("postgres", databaseURL)
 	if err != nil {
 		log.Fatalf("open database: %v", err)
@@ -248,9 +246,10 @@ func (s *Service) requireInternalAccess(w http.ResponseWriter, r *http.Request) 
 
 func (s *Service) healthHandler(w http.ResponseWriter, _ *http.Request) {
 	respondJSON(w, http.StatusOK, map[string]any{
-		"status":    "ok",
-		"service":   "notification-dispatcher",
-		"timestamp": time.Now().UTC().Format(time.RFC3339),
+		"status":            "ok",
+		"service":           "notification-dispatcher",
+		"timestamp":         time.Now().UTC().Format(time.RFC3339),
+		"disabled_channels": disabledChannels(),
 	})
 }
 

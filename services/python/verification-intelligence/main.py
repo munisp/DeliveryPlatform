@@ -2,6 +2,7 @@ import base64
 import hashlib
 import io
 import json
+import logging
 import math
 import os
 import tempfile
@@ -21,11 +22,24 @@ if str(_SHARED_DIR) not in _sys.path:
     _sys.path.insert(0, str(_SHARED_DIR))
 
 from switchos_resilience import CircuitBreaker, MetricsRegistry, request_with_resilience
+from config_validation import validate_boot_configuration
+
+validate_boot_configuration()
 
 INTERNAL_SERVICE_TOKEN = os.environ.get("INTERNAL_SERVICE_TOKEN", "")
 MAX_EVIDENCE_BYTES = int(os.environ.get("VERIFICATION_MAX_EVIDENCE_BYTES", "10485760"))
 VLM_DOCUMENT_URL = os.environ.get("VLM_DOCUMENT_URL", "").strip()
 VLM_DOCUMENT_TOKEN = os.environ.get("VLM_DOCUMENT_TOKEN", "").strip()
+
+if bool(VLM_DOCUMENT_URL) != bool(VLM_DOCUMENT_TOKEN):
+    raise RuntimeError(
+        "invalid boot configuration: VLM_DOCUMENT_URL and VLM_DOCUMENT_TOKEN must be configured together"
+    )
+if not VLM_DOCUMENT_URL:
+    logging.getLogger("verification-intelligence").warning(
+        "VLM_DOCUMENT_URL/VLM_DOCUMENT_TOKEN are not configured; the vlm_document processor is DISABLED "
+        "(reflected as vlm_enabled=false on the health surface)"
+    )
 
 app = FastAPI(title="DeliveryPlatform Verification Intelligence", version="1.1.0")
 

@@ -87,6 +87,7 @@ jobs:
       - name: Validate Kubernetes security and resilience configuration
         run: |
           python scripts/testing/validate-kubernetes-manifests.py
+          python scripts/testing/check-config-contract.py
           python scripts/testing/simulate-kubernetes-node-failure.py
           python scripts/testing/validate-kubernetes-security.py
           bash scripts/testing/validate-resilience-test-templates.sh

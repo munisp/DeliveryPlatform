@@ -1,3 +1,5 @@
+mod config_validation;
+
 use axum::{
     extract::State,
     http::{HeaderMap, StatusCode},
@@ -165,6 +167,9 @@ async fn validate_mrz_handler(State(state): State<Arc<AppState>>, headers: Heade
 
 #[tokio::main]
 async fn main() {
+    if let Err(error) = config_validation::validate_boot_configuration() {
+        panic!("{error}");
+    }
     let token = env::var("INTERNAL_SERVICE_TOKEN").expect("INTERNAL_SERVICE_TOKEN is required");
     metrics::init("switchos-verification-policy");
     let app = Router::new()

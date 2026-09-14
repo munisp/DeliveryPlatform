@@ -10,7 +10,6 @@ data:
   KAFKA_BROKERS: "kafka.switchos.svc.cluster.local:9092"
   KAFKA_INVENTORY_TOPIC: "inventory-events"
   KAFKA_LOCAL_COMMERCE_TOPIC: "local-commerce-events"
-  KAFKA_NOTIFICATION_TOPIC: "notification-events"
   KAFKA_FUNDS_TOPIC: "funds-events"
   FLUVIO_KAFKA_BROKERS: "fluvio.switchos.svc.cluster.local:9092"
   FLUVIO_INVENTORY_TOPIC: "inventory-events"

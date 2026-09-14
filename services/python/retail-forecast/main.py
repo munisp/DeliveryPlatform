@@ -18,6 +18,7 @@ if str(SERVICE_ROOT) not in sys.path:
 from fastapi import FastAPI, Header, HTTPException, Response
 from pydantic import BaseModel, Field
 
+from config_validation import validate_boot_configuration
 from durable_run_store import DurableRunStore
 
 _SHARED_DIR = Path(__file__).resolve().parent.parent / "shared"
@@ -25,6 +26,7 @@ if str(_SHARED_DIR) not in sys.path:
     sys.path.insert(0, str(_SHARED_DIR))
 
 from switchos_resilience import MetricsRegistry
+validate_boot_configuration()
 
 INTERNAL_SERVICE_TOKEN = os.getenv("INTERNAL_SERVICE_TOKEN", "").strip()
 logger = logging.getLogger("switchos.retail_forecast")
