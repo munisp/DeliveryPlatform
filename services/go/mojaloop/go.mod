@@ -3,6 +3,16 @@ module mojaloop
 go 1.22
 
 require (
+	switchos-metrics v0.0.0
+	switchos-resilience v0.0.0
+)
+
+replace (
+	switchos-metrics => ../shared/metrics
+	switchos-resilience => ../shared/resilience
+)
+
+require (
 	github.com/lib/pq v1.10.9
 	github.com/segmentio/kafka-go v0.4.47
 	github.com/tigerbeetle/tigerbeetle-go v0.17.9

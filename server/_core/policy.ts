@@ -1,5 +1,6 @@
 import { ENV } from "./env";
 import type { SessionUser } from "./trpc";
+import { resilientFetch } from "./resilientFetch";
 
 type RedisPolicyCacheClient = {
   connect(): Promise<void>;
@@ -103,7 +104,7 @@ async function checkOpaPolicy(input: PolicyCheckInput): Promise<boolean> {
   const authToken = getOpaAuthToken();
   if (authToken === "") throw new Error("OPA policy client requires OPA_AUTH_TOKEN when OPA_ENDPOINT is configured");
 
-  const response = await fetch(`${normalizeOpaEndpoint()}/v1/data/switchos/authz/allow`, {
+  const response = await resilientFetch(`${normalizeOpaEndpoint()}/v1/data/switchos/authz/allow`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${authToken}` },
     body: JSON.stringify({ input: {
@@ -222,7 +223,7 @@ export async function checkPolicy(input: PolicyCheckInput): Promise<boolean> {
   }
 
   const endpoint = normalizePermifyEndpoint();
-  const response = await fetch(`${endpoint}/v1/permissions/check`, {
+  const response = await resilientFetch(`${endpoint}/v1/permissions/check`, {
     method: "POST",
 		headers: {
 			"Content-Type": "application/json",

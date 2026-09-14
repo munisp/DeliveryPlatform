@@ -18,6 +18,9 @@ import (
 	"time"
 
 	_ "github.com/lib/pq"
+
+	sharedmetrics "switchos-metrics"
+	"switchos-resilience"
 )
 
 type Channel string
@@ -128,7 +131,9 @@ func main() {
 
 	service := &Service{
 		db:                   db,
-		httpClient:           &http.Client{Timeout: 20 * time.Second},
+		httpClient: resilience.NewClient(20*time.Second,
+			resilience.RetryPolicy{MaxAttempts: 3, BackoffBase: 100 * time.Millisecond, BackoffMax: 2 * time.Second},
+			resilience.BreakerConfig{FailureThreshold: 5, ResetTimeout: 30 * time.Second, HalfOpenMaxProbes: 1}),
 		internalServiceToken: internalServiceToken,
 		smsProviderURL:       strings.TrimSpace(os.Getenv("SMS_PROVIDER_URL")),
 		emailProviderURL:     strings.TrimSpace(os.Getenv("EMAIL_PROVIDER_URL")),
@@ -139,8 +144,10 @@ func main() {
 		log.Fatalf("ensure schema: %v", err)
 	}
 
+	httpMetrics := sharedmetrics.New("notification-dispatcher", getEnv("SERVICE_VERSION", ""))
 	mux := http.NewServeMux()
-	mux.HandleFunc("/metrics", service.metricsHandler)
+	mux.Handle("/metrics", httpMetrics.Handler())
+	mux.HandleFunc("/metrics/snapshot", service.metricsHandler)
 	mux.HandleFunc("/health", service.healthHandler)
 	mux.HandleFunc("/business-health", service.businessHealthHandler)
 	mux.HandleFunc("/dead-letters", service.deadLettersHandler)
@@ -148,7 +155,7 @@ func main() {
 
 	server := &http.Server{
 		Addr:              fmt.Sprintf("%s:%s", bindHost, port),
-		Handler:           loggingMiddleware(mux),
+		Handler:           loggingMiddleware(httpMetrics.Middleware(mux)),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 

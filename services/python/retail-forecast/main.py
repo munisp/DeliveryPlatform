@@ -15,10 +15,16 @@ SERVICE_ROOT = Path(__file__).resolve().parents[1]
 if str(SERVICE_ROOT) not in sys.path:
     sys.path.insert(0, str(SERVICE_ROOT))
 
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Response
 from pydantic import BaseModel, Field
 
 from durable_run_store import DurableRunStore
+
+_SHARED_DIR = Path(__file__).resolve().parent.parent / "shared"
+if str(_SHARED_DIR) not in sys.path:
+    sys.path.insert(0, str(_SHARED_DIR))
+
+from switchos_resilience import MetricsRegistry
 
 INTERNAL_SERVICE_TOKEN = os.getenv("INTERNAL_SERVICE_TOKEN", "").strip()
 logger = logging.getLogger("switchos.retail_forecast")
@@ -26,6 +32,14 @@ APP_VERSION = "2026-07-09-logistics-resilience-wave"
 TRACE_ENABLED = os.getenv("LOCAL_COMMERCE_ENABLE_TRACING", "true").strip().lower() == "true"
 
 app = FastAPI(title="switchos-retail-forecast", version=APP_VERSION)
+_metrics = MetricsRegistry("retail-forecast", os.getenv("SERVICE_VERSION", APP_VERSION))
+app.middleware("http")(_metrics.fastapi_middleware())
+
+
+@app.get("/metrics")
+async def metrics() -> Response:
+    return Response(content=_metrics.render(), media_type="text/plain; version=0.0.4; charset=utf-8")
+
 execution_store = DurableRunStore("retail-forecast")
 
 

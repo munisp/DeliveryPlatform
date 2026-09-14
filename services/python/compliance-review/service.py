@@ -16,6 +16,14 @@ import psycopg
 import requests
 from psycopg.rows import dict_row
 
+import sys as _sys
+
+_SHARED_DIR = Path(__file__).resolve().parents[1] / "shared"
+if str(_SHARED_DIR) not in _sys.path:
+    _sys.path.insert(0, str(_SHARED_DIR))
+
+from switchos_resilience import ResilientSession
+
 
 @dataclass(frozen=True)
 class ComplianceConfig:
@@ -55,7 +63,12 @@ class ComplianceConfig:
 class ComplianceVerificationService:
     def __init__(self, config: ComplianceConfig):
         self.config = config
-        self.http = requests.Session()
+        self.http = ResilientSession(
+            default_timeout=self.config.request_timeout_seconds,
+            max_attempts=3,
+            failure_threshold=5,
+            reset_timeout_seconds=30.0,
+        )
         self.http.verify = config.provider_ca_file if config.provider_ca_file else True
 
     def _connect(self):

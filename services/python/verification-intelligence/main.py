@@ -14,12 +14,32 @@ import httpx
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
 
+import sys as _sys
+
+_SHARED_DIR = Path(__file__).resolve().parents[1] / "shared"
+if str(_SHARED_DIR) not in _sys.path:
+    _sys.path.insert(0, str(_SHARED_DIR))
+
+from switchos_resilience import CircuitBreaker, MetricsRegistry, request_with_resilience
+
 INTERNAL_SERVICE_TOKEN = os.environ.get("INTERNAL_SERVICE_TOKEN", "")
 MAX_EVIDENCE_BYTES = int(os.environ.get("VERIFICATION_MAX_EVIDENCE_BYTES", "10485760"))
 VLM_DOCUMENT_URL = os.environ.get("VLM_DOCUMENT_URL", "").strip()
 VLM_DOCUMENT_TOKEN = os.environ.get("VLM_DOCUMENT_TOKEN", "").strip()
 
 app = FastAPI(title="DeliveryPlatform Verification Intelligence", version="1.1.0")
+
+_vlm_breaker = CircuitBreaker(failure_threshold=5, reset_timeout_seconds=30.0)
+_metrics = MetricsRegistry("verification-intelligence", os.environ.get("SERVICE_VERSION", "1.1.0"))
+app.middleware("http")(_metrics.fastapi_middleware())
+
+
+@app.get("/metrics")
+async def metrics() -> Any:
+    from fastapi.responses import PlainTextResponse
+
+    return PlainTextResponse(_metrics.render(), media_type="text/plain; version=0.0.4; charset=utf-8")
+
 
 
 class DocumentRequest(BaseModel):
@@ -332,8 +352,11 @@ async def vlm_result(request: DocumentRequest, body: bytes) -> ProcessResponse:
     }
     try:
         async with httpx.AsyncClient(timeout=20.0) as client:
-            response = await client.post(
+            response = await request_with_resilience(
+                client,
+                "POST",
                 VLM_DOCUMENT_URL,
+                breaker=_vlm_breaker,
                 json=payload,
                 headers={"Authorization": f"Bearer {VLM_DOCUMENT_TOKEN}"},
             )

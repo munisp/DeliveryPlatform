@@ -1,5 +1,6 @@
 import { ENV } from "./env";
 import { optimizeDispatch } from "./dispatchOptimizer";
+import { resilientFetch } from "./resilientFetch";
 
 // ============================================================
 // Tiered Model Fallback Router
@@ -177,7 +178,7 @@ async function attemptGeneration<T>(prompt: string, model: string, timeoutMs: nu
   }
 
   try {
-    const response = await fetch(`${ENV.ollamaUrl.replace(/\/$/, "")}/api/generate`, {
+    const response = await resilientFetch(`${ENV.ollamaUrl.replace(/\/$/, "")}/api/generate`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ model, prompt, stream: false, format: "json" }),

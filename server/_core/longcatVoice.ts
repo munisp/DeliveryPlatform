@@ -5,6 +5,7 @@ import { Pool } from "pg";
 import { ENV } from "./env";
 import { dispatchLongCatMessage } from "./notificationGateway";
 import { recordOperationalEvent } from "./operationalEvents";
+import { resilientFetch } from "./resilientFetch";
 
 export type LongCatCustomerMemory = {
   profile_id: string;
@@ -573,7 +574,7 @@ async function persistMemory(memory: LongCatCustomerMemory) {
 async function ingestLakehouse(tableName: string, rows: Array<Record<string, unknown>>) {
   if (!ENV.lakehouseServiceUrl || rows.length === 0) return;
   try {
-    await fetch(`${ENV.lakehouseServiceUrl}/ingest/${tableName}`, {
+    await resilientFetch(`${ENV.lakehouseServiceUrl}/ingest/${tableName}`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -610,7 +611,7 @@ async function generateVoiceResponse(prompt: string): Promise<OllamaVoiceRespons
   if (!ENV.ollamaUrl || !ENV.ollamaModel) return null;
 
   try {
-    const response = await fetch(`${ENV.ollamaUrl.replace(/\/$/, "")}/api/generate`, {
+    const response = await resilientFetch(`${ENV.ollamaUrl.replace(/\/$/, "")}/api/generate`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -637,7 +638,7 @@ async function scoreVoicePriority(input: {
   substitutionRisk: LongCatCustomerMemory["substitution_risk"];
 }) : Promise<LongCatVoicePriority> {
   try {
-    const response = await fetch(`${ENV.dispatchOptimizerUrl.replace(/\/$/, "")}/voice-priority`, {
+    const response = await resilientFetch(`${ENV.dispatchOptimizerUrl.replace(/\/$/, "")}/voice-priority`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -994,7 +995,7 @@ export async function synthesizeLongCatSpeech(input: {
 
   const start = Date.now();
   try {
-    const response = await fetch(`${ENV.longcatSpeechServiceUrl.replace(/\/$/, "")}/tts/synthesize`, {
+    const response = await resilientFetch(`${ENV.longcatSpeechServiceUrl.replace(/\/$/, "")}/tts/synthesize`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",

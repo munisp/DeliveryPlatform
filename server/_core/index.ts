@@ -167,6 +167,7 @@ import coverageBaseline from "../../assurance/CODE_COVERAGE_BASELINE.json";
 import coverageHistory from "../../assurance/CODE_COVERAGE_HISTORY.json";
 import playwrightExecutions from "../../assurance/PLAYWRIGHT_EXECUTION_HISTORY.json";
 
+import { httpMetricsHandler, httpMetricsMiddleware } from "./httpMetrics";
 import type { SessionUser } from "./trpc";
 
 const OIDC_STATE_COOKIE = "switchos_oidc_state";
@@ -427,6 +428,7 @@ async function issueOperatorSession(
 app.disable("x-powered-by");
 app.set("trust proxy", 1);
 app.use(cookieParser());
+app.use(httpMetricsMiddleware);
 
 app.use((req, res, next) => {
   const request = req as AppRequest;
@@ -572,6 +574,8 @@ app.use(
   }),
 );
 app.use(express.urlencoded({ extended: true, limit: ENV.apiBodyLimit }));
+
+app.get("/metrics", httpMetricsHandler);
 
 app.get("/api/health", async (req, res) => {
   const discovery = ENV.enableExternalOidc

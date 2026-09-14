@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { ENV } from "./env";
+import { resilientFetch } from "./resilientFetch";
 import {
   getCheckoutSummary,
   getConsumerMarketplaceSummary,
@@ -444,7 +445,7 @@ async function maybeForecastRetailDemand(input: ConciergeIntent, traceId: string
     })),
   };
 
-  const response = await fetch(`${ENV.retailForecastServiceUrl.replace(/\/$/, "")}/forecast`, {
+  const response = await resilientFetch(`${ENV.retailForecastServiceUrl.replace(/\/$/, "")}/forecast`, {
     method: "POST",
     headers: baseHeaders(traceId),
     body: JSON.stringify(payload),
@@ -488,7 +489,7 @@ async function maybeAllocateInstantRetail(input: ConciergeIntent, traceId: strin
     })),
   };
 
-  const response = await fetch(`${ENV.dispatchOptimizerUrl.replace(/\/$/, "")}/instant-retail-allocation`, {
+  const response = await resilientFetch(`${ENV.dispatchOptimizerUrl.replace(/\/$/, "")}/instant-retail-allocation`, {
     method: "POST",
     headers: baseHeaders(traceId),
     body: JSON.stringify(payload),
@@ -523,7 +524,7 @@ async function maybePlanThroughGateway(
     payload_metrics: summarizePayloadShape(input),
   };
 
-  const response = await fetch(`${ENV.localCommerceGatewayUrl.replace(/\/$/, "")}/plan`, {
+  const response = await resilientFetch(`${ENV.localCommerceGatewayUrl.replace(/\/$/, "")}/plan`, {
     method: "POST",
     headers: baseHeaders(traceId),
     body: JSON.stringify(payload),
@@ -549,7 +550,7 @@ async function loadGatewayControlTower(traceId: string): Promise<GatewayControlT
     return null;
   }
 
-  const response = await fetch(`${ENV.localCommerceGatewayUrl.replace(/\/$/, "")}/logistics-control-tower`, {
+  const response = await resilientFetch(`${ENV.localCommerceGatewayUrl.replace(/\/$/, "")}/logistics-control-tower`, {
     method: "GET",
     headers: baseHeaders(traceId),
   }).catch(() => null);
@@ -572,7 +573,7 @@ async function loadNetworkHealth(city: string, workspace: Workspace, traceId: st
     nodes: defaultNetworkNodesFromWorkspace(workspace),
   };
 
-  const response = await fetch(`${ENV.retailForecastServiceUrl.replace(/\/$/, "")}/network-health`, {
+  const response = await resilientFetch(`${ENV.retailForecastServiceUrl.replace(/\/$/, "")}/network-health`, {
     method: "POST",
     headers: baseHeaders(traceId),
     body: JSON.stringify(payload),
@@ -589,7 +590,7 @@ async function loadInventoryMiddlewareStatus(traceId: string): Promise<Inventory
   if (!ENV.inventoryControlServiceUrl) {
     return null;
   }
-  const response = await fetch(`${ENV.inventoryControlServiceUrl.replace(/\/$/, "")}/middleware-status`, {
+  const response = await resilientFetch(`${ENV.inventoryControlServiceUrl.replace(/\/$/, "")}/middleware-status`, {
     method: "GET",
     headers: baseHeaders(traceId),
   }).catch(() => null);
@@ -607,7 +608,7 @@ async function loadSupplierHealth(city: string, workspace: Workspace, traceId: s
     city,
     suppliers: defaultSuppliersFromWorkspace(workspace),
   };
-  const response = await fetch(`${ENV.procurementPlannerServiceUrl.replace(/\/$/, "")}/procurement/supplier-health`, {
+  const response = await resilientFetch(`${ENV.procurementPlannerServiceUrl.replace(/\/$/, "")}/procurement/supplier-health`, {
     method: "POST",
     headers: baseHeaders(traceId),
     body: JSON.stringify(payload),
@@ -663,7 +664,7 @@ async function maybePlanProcurement(
     })),
   };
 
-  const response = await fetch(`${ENV.procurementPlannerServiceUrl.replace(/\/$/, "")}/procurement/plan`, {
+  const response = await resilientFetch(`${ENV.procurementPlannerServiceUrl.replace(/\/$/, "")}/procurement/plan`, {
     method: "POST",
     headers: baseHeaders(traceId),
     body: JSON.stringify(payload),

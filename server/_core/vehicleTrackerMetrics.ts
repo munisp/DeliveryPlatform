@@ -45,7 +45,7 @@ function finite(value: number) {
   return Number.isFinite(value) ? value : 0;
 }
 
-class Registry {
+export class Registry {
   private readonly counters = new Map<string, Counter>();
   private readonly gauges = new Map<string, Gauge>();
   private readonly histograms = new Map<string, Histogram>();
