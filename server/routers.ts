@@ -141,6 +141,7 @@ import {
   revokeMerchantApiCredential,
 } from "./_core/merchantCommerce";
 import { selfserveRouter } from "./_core/selfserveRouter";
+import { consumerRouter } from "./_core/consumerRouter";
 
 const listInput = z
   .object({ limit: z.number().min(1).max(25).optional() })
@@ -1888,6 +1889,8 @@ export const appRouter = router({
   }),
 
   selfserve: selfserveRouter,
+
+  consumer: consumerRouter,
 });
 
 export type AppRouter = typeof appRouter;
