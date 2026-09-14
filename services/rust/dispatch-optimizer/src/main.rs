@@ -1,3 +1,5 @@
+mod config_validation;
+
 use axum::{
     extract::State,
     http::{HeaderMap, HeaderValue, StatusCode},
@@ -345,6 +347,9 @@ async fn main() {
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
 
+    if let Err(error) = config_validation::validate_boot_configuration() {
+        panic!("{error}");
+    }
     let database_url = env::var("DATABASE_URL")
         .ok()
         .map(|value| value.trim().to_string())

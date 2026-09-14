@@ -1,0 +1,99 @@
+name: Funds Correctness Merge Gate
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: funds-merge-gate-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  mojaloop-funds-suite:
+    name: Mojaloop funds suite against migrated PostGIS
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgis/postgis:16-3.5
+        env:
+          POSTGRES_DB: deliveryplatform
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d deliveryplatform"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      POSTGRES_URL: postgresql://postgres:postgres@127.0.0.1:5432/deliveryplatform
+      TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/deliveryplatform
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22.x"
+
+      - name: Apply full drizzle migration chain in lexical order
+        run: |
+          set -euo pipefail
+          # Mirrors deploy/kubernetes/pricing-dispatch/apply-migrations.sh:
+          # the complete chain is applied in lexical (numeric) order so the
+          # suite runs against the same schema a fresh deployment produces.
+          for migration in drizzle/*.sql; do
+            echo "Applying $migration"
+            psql "$POSTGRES_URL" -X -v ON_ERROR_STOP=1 -f "$migration" > /dev/null
+          done
+          psql "$POSTGRES_URL" -X -v ON_ERROR_STOP=1 \
+            -c "SELECT component, version FROM platform_schema_contracts ORDER BY component"
+
+      - name: Vet mojaloop module
+        run: |
+          set -euo pipefail
+          cd services/go/mojaloop
+          go vet ./...
+
+      - name: Run mojaloop funds correctness suite
+        run: |
+          set -euo pipefail
+          cd services/go/mojaloop
+          go test -count=1 ./...
+
+  funds-settlement-ts-suite:
+    name: TypeScript funds and settlement vitest suite
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+
+      - name: Install Node.js dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Run funds and settlement vitest suites
+        run: |
+          set -euo pipefail
+          ./node_modules/.bin/vitest run \
+            tests/funds-integrity.test.ts \
+            tests/settlement-audit.test.ts \
+            tests/non_mojaloop_idempotency.test.ts

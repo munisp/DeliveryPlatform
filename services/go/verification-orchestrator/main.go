@@ -366,6 +366,9 @@ func nullable(value string) any {
 }
 
 func main() {
+	if err := validateBootConfiguration(); err != nil {
+		log.Fatal(err)
+	}
 	cfg := loadConfig()
 	db, err := sql.Open("postgres", cfg.databaseURL)
 	if err != nil {

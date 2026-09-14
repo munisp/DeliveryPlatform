@@ -313,14 +313,8 @@ func loadConfig() (config, error) {
 		RedisPoolSize:          getenvInt("REDIS_POOL_SIZE", 64),
 		RequireDeviceIntegrity: getenvBool("MATCH_REQUIRE_DEVICE_INTEGRITY", false),
 	}
-	if cfg.DatabaseURL == "" {
-		return config{}, errors.New("DATABASE_URL must be explicitly configured")
-	}
-	if cfg.RedisURL == "" {
-		return config{}, errors.New("REDIS_URL must be explicitly configured")
-	}
-	if len(cfg.InternalServiceToken) < 32 {
-		return config{}, errors.New("INTERNAL_SERVICE_TOKEN must be explicitly configured with at least 32 characters")
+	if err := validateBootConfiguration(); err != nil {
+		return config{}, err
 	}
 	if cfg.MatchRadiusM <= 0 || cfg.CandidateLimit < 1 || cfg.CandidateLimit > 100 || cfg.OfferWaveSize < 1 || cfg.OfferWaveSize > maxOfferWaveSize || cfg.OfferTTL < 5*time.Second || cfg.OfferTTL > 90*time.Second || cfg.LocationMinIntegrity < 0 || cfg.LocationMinIntegrity > 100 || cfg.AverageSpeedMPS <= 0 || cfg.ReaperInterval < time.Second || cfg.H3Resolution < 0 || cfg.H3Resolution > 15 || cfg.DatabaseMaxOpenConns < 2 || cfg.DatabaseMaxOpenConns > 96 || cfg.DatabaseMaxIdleConns < 0 || cfg.DatabaseMaxIdleConns > cfg.DatabaseMaxOpenConns || cfg.RedisPoolSize < 4 || cfg.RedisPoolSize > 512 {
 		return config{}, errors.New("matching worker configuration is outside allowed safe bounds")

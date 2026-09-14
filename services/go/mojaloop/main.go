@@ -1351,6 +1351,9 @@ func (s *MojaloopService) handleReconcileTransferHTTP(w http.ResponseWriter, r *
 }
 
 func main() {
+	if err := validateMojaloopBootConfiguration(); err != nil {
+		log.Fatalf("Failed to configure mojaloop service: %v", err)
+	}
 	httpPort := getEnv("HTTP_PORT", "8086")
 	bindHost := getEnv("BIND_HOST", "127.0.0.1")
 	serviceMode := strings.ToLower(strings.TrimSpace(getEnv("MOJALOOP_SERVICE_MODE", "http")))

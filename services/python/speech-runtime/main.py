@@ -23,6 +23,7 @@ if str(SERVICE_ROOT) not in sys.path:
 from fastapi import FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect, status
 from fastapi.middleware.cors import CORSMiddleware
 
+from config_validation import validate_boot_configuration
 from durable_run_store import DurableRunStore
 
 
@@ -80,6 +81,7 @@ async def require_websocket_internal_access(websocket: WebSocket) -> None:
 
 @app.on_event("startup")
 async def startup() -> None:
+    validate_boot_configuration()
     execution_store.initialize()
 
 

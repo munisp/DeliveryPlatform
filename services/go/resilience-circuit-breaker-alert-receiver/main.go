@@ -203,8 +203,11 @@ func loadConfig() (config, error) {
 		serviceAccountTokenFile: getenv("SERVICE_ACCOUNT_TOKEN_FILE", serviceAccountTokenPath),
 		serviceAccountCAFile:    getenv("SERVICE_ACCOUNT_CA_FILE", serviceAccountCAPath),
 	}
-	if len(cfg.token) < 32 || cfg.namespace != "resilience-test" || cfg.configMap != "resilience-validation-circuit-breaker" {
-		return config{}, errors.New("invalid fixed-scope receiver configuration")
+	if err := validateBootConfiguration(); err != nil {
+		return config{}, err
+	}
+	if cfg.namespace != "resilience-test" || cfg.configMap != "resilience-validation-circuit-breaker" {
+		return config{}, fmt.Errorf("invalid fixed-scope receiver configuration: TARGET_NAMESPACE must be %q and TARGET_CONFIGMAP must be %q", "resilience-test", "resilience-validation-circuit-breaker")
 	}
 	if cfg.kubeScheme != "https" && !(cfg.kubeScheme == "http" && getenv("LOCAL_RESILIENCE_TEST", "") == "true") {
 		return config{}, errors.New("Kubernetes API must use HTTPS outside explicit local testing")

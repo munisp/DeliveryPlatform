@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI, Header, HTTPException, Request, Response
 
+from config_validation import validate_boot_configuration
 from correlation import begin_request_context, log_event, restore_request_context
 from service import (
     InvalidWebhookSignature,
@@ -156,6 +157,7 @@ def _require_internal_access(provided: str | None) -> None:
         raise HTTPException(status_code=401, detail="invalid internal service token")
 
 
+validate_boot_configuration()
 app = create_app(PaymentConfig.from_environment())
 
 

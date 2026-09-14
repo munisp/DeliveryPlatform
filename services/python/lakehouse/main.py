@@ -8,7 +8,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from prometheus_client import Counter, Histogram, generate_latest
 
+from config_validation import validate_boot_configuration
 from service import LakehouseService
+
+validate_boot_configuration()
 
 
 ALLOWED_ORIGINS = [

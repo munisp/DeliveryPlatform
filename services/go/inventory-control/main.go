@@ -146,14 +146,11 @@ type replenishmentCancelResponse struct {
 }
 
 func main() {
+	if err := validateBootConfiguration(); err != nil {
+		log.Fatal(err)
+	}
 	databaseURL := strings.TrimSpace(os.Getenv("DATABASE_URL"))
-	if databaseURL == "" {
-		log.Fatal("DATABASE_URL must be explicitly configured")
-	}
 	internalServiceToken := strings.TrimSpace(os.Getenv("INTERNAL_SERVICE_TOKEN"))
-	if len(internalServiceToken) < 32 {
-		log.Fatal("INTERNAL_SERVICE_TOKEN must be explicitly configured with at least 32 characters")
-	}
 	service := &inventoryService{
 		db:                   openDB(databaseURL),
 		httpClient:           &http.Client{Timeout: 5 * time.Second},

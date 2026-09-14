@@ -18,7 +18,10 @@ if str(SERVICE_ROOT) not in sys.path:
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
 
+from config_validation import validate_boot_configuration
 from durable_run_store import DurableRunStore
+
+validate_boot_configuration()
 
 INTERNAL_SERVICE_TOKEN = os.getenv("INTERNAL_SERVICE_TOKEN", "").strip()
 logger = logging.getLogger("switchos.retail_forecast")

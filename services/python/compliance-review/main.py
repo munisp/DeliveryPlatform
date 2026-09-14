@@ -18,6 +18,7 @@ SERVICE_ROOT = Path(__file__).resolve().parents[1]
 if str(SERVICE_ROOT) not in sys.path:
     sys.path.insert(0, str(SERVICE_ROOT))
 
+from config_validation import validate_boot_configuration
 from service import ComplianceConfig, ComplianceVerificationService
 
 INTERNAL_SERVICE_TOKEN = os.getenv("INTERNAL_SERVICE_TOKEN", "").strip()
@@ -86,6 +87,7 @@ async def run_expiry_reconciliation() -> None:
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     global service, expiry_task
+    validate_boot_configuration()
     if len(INTERNAL_SERVICE_TOKEN) < 32:
         raise RuntimeError("INTERNAL_SERVICE_TOKEN must be explicitly configured with at least 32 characters")
     service = ComplianceVerificationService(ComplianceConfig.from_environment())
