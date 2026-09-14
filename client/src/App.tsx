@@ -1,6 +1,6 @@
 import React, { FormEvent, useMemo, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Link, Route, Switch } from "wouter";
+import { Link, Redirect, Route, Switch } from "wouter";
 
 import DashboardLayout from "@/components/DashboardLayout";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
@@ -36,6 +36,10 @@ import ExperimentConsole from "@/pages/ExperimentConsole";
 import MerchantAdsStudio from "@/pages/MerchantAdsStudio";
 import MerchantCommercePortal from "@/pages/MerchantCommercePortal";
 import PhoneOrderingStudio from "@/pages/PhoneOrderingStudio";
+import ConsumerOrders from "@/pages/ConsumerOrders";
+import ConsumerOrderDetail from "@/pages/ConsumerOrderDetail";
+import ConsumerSupport from "@/pages/ConsumerSupport";
+import ConsumerWallet from "@/pages/ConsumerWallet";
 import TenantAdminActions from "@/pages/TenantAdminActions";
 import SecurityProfilePage, {
   SecurityBlockedPage,
@@ -73,6 +77,12 @@ type AuthConfig = {
 };
 
 const quickLinks = [
+  {
+    title: "My Account",
+    href: "/account",
+    description:
+      "Consumer surface: track your orders live, open and follow disputes, and review your wallet and payment ledger.",
+  },
   {
     title: "Driver Mobility",
     href: "/driver-mobility",
@@ -219,6 +229,12 @@ function HomePage() {
               className="rounded-full border border-slate-700 px-5 py-3 text-sm font-medium text-slate-100 transition hover:border-cyan-400/40 hover:bg-slate-900"
             >
               Create organization
+            </Link>
+            <Link
+              href="/account"
+              className="rounded-full border border-amber-400/30 bg-amber-500/10 px-5 py-3 text-sm font-medium text-amber-100 transition hover:bg-amber-500/20"
+            >
+              My account — orders, support, wallet
             </Link>
           </div>
         </div>
@@ -597,6 +613,13 @@ export default function App() {
       <Route path="/mobility/business" component={BusinessTravel} />
       <Route path="/mobility/freight" component={FreightOperations} />
       <Route path="/mobility/healthcare" component={HealthcareTransport} />
+      <Route path="/account/orders/:orderId" component={ConsumerOrderDetail} />
+      <Route path="/account/orders" component={ConsumerOrders} />
+      <Route path="/account/support" component={ConsumerSupport} />
+      <Route path="/account/wallet" component={ConsumerWallet} />
+      <Route path="/account">
+        <Redirect to="/account/orders" />
+      </Route>
         <Route component={NotFoundPage} />
       </Switch>
     </ErrorBoundary>
