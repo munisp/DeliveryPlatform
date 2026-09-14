@@ -19,6 +19,9 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	sharedmetrics "switchos-metrics"
+	"switchos-resilience"
 )
 
 const (
@@ -184,11 +187,12 @@ func newHandler(cfg config, client *http.Client, tokenReader func() ([]byte, err
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
-	mux.HandleFunc("/metrics", metrics.serveHTTP)
+	httpMetrics := sharedmetrics.New(serviceName, getenv("SERVICE_VERSION", ""))
+	mux.Handle("/metrics", httpMetrics.Handler(http.HandlerFunc(metrics.serveHTTP)))
 	mux.HandleFunc("/v1/alertmanager/open", func(w http.ResponseWriter, r *http.Request) {
 		handleAlert(w, r, cfg, client, tokenReader, metrics)
 	})
-	return mux
+	return httpMetrics.Middleware(mux)
 }
 
 func loadConfig() (config, error) {
@@ -227,7 +231,9 @@ func kubeClient(cfg config) (*http.Client, error) {
 		if getenv("LOCAL_RESILIENCE_TEST", "") != "true" {
 			return nil, errors.New("plaintext Kubernetes API is restricted to explicit local testing")
 		}
-		return &http.Client{Timeout: 8 * time.Second}, nil
+		return resilience.WrapClient(&http.Client{Timeout: 8 * time.Second},
+			resilience.RetryPolicy{MaxAttempts: 3, BackoffBase: 100 * time.Millisecond, BackoffMax: 2 * time.Second},
+			resilience.BreakerConfig{FailureThreshold: 5, ResetTimeout: 30 * time.Second, HalfOpenMaxProbes: 1}), nil
 	}
 	ca, err := os.ReadFile(cfg.serviceAccountCAFile)
 	if err != nil {
@@ -237,7 +243,9 @@ func kubeClient(cfg config) (*http.Client, error) {
 	if !pool.AppendCertsFromPEM(ca) {
 		return nil, errors.New("invalid Kubernetes CA")
 	}
-	return &http.Client{Timeout: 8 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}}}, nil
+	return resilience.WrapClient(&http.Client{Timeout: 8 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}}},
+		resilience.RetryPolicy{MaxAttempts: 3, BackoffBase: 100 * time.Millisecond, BackoffMax: 2 * time.Second},
+		resilience.BreakerConfig{FailureThreshold: 5, ResetTimeout: 30 * time.Second, HalfOpenMaxProbes: 1}), nil
 }
 
 func handleAlert(w http.ResponseWriter, r *http.Request, cfg config, client *http.Client, tokenReader func() ([]byte, error), metrics *receiverMetrics) {

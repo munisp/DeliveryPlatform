@@ -25,6 +25,7 @@ import (
 	"github.com/lib/pq"
 	"github.com/redis/go-redis/v9"
 	h3 "github.com/uber/h3-go/v4"
+	sharedmetrics "switchos-metrics"
 )
 
 const (
@@ -248,7 +249,9 @@ func main() {
 		svc.reapExpiredOffers(ctx)
 	}()
 
+	httpMetrics := sharedmetrics.New("ride-matching-worker", getenv("SERVICE_VERSION", ""))
 	mux := http.NewServeMux()
+	mux.Handle("/metrics", httpMetrics.Handler())
 	mux.HandleFunc("/health", svc.healthHandler)
 	mux.HandleFunc("/matches/attempts", svc.matchHandler)
 	mux.HandleFunc("/events/driver-presence", svc.presenceProjectionHandler)
@@ -262,7 +265,7 @@ func main() {
 
 	server := &http.Server{
 		Addr:              cfg.BindHost + ":" + cfg.Port,
-		Handler:           svc.securityHeaders(svc.correlationLogging(mux)),
+		Handler:           svc.securityHeaders(svc.correlationLogging(httpMetrics.Middleware(mux))),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      15 * time.Second,

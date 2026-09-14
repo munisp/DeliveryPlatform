@@ -22,6 +22,9 @@ import (
 	"time"
 
 	_ "github.com/lib/pq"
+
+	sharedmetrics "switchos-metrics"
+	"switchos-resilience"
 )
 
 const (
@@ -155,7 +158,9 @@ func main() {
 	}
 	service := &GatewayService{
 		db:                   db,
-		httpClient:           &http.Client{Timeout: 25 * time.Second},
+		httpClient: resilience.NewClient(25*time.Second,
+			resilience.RetryPolicy{MaxAttempts: 3, BackoffBase: 100 * time.Millisecond, BackoffMax: 2 * time.Second},
+			resilience.BreakerConfig{FailureThreshold: 5, ResetTimeout: 30 * time.Second, HalfOpenMaxProbes: 1}),
 		internalServiceToken: internalServiceToken,
 		longcatCoreURL:       strings.TrimRight(getEnv("LONGCAT_CORE_URL", "http://127.0.0.1:3005"), "/"),
 		speechServiceURL:     strings.TrimRight(getEnv("LONGCAT_SPEECH_SERVICE_URL", "http://127.0.0.1:8105"), "/"),
@@ -173,15 +178,17 @@ func main() {
 		go service.runAudioSocketListener(ctx)
 	}
 
+	httpMetrics := sharedmetrics.New("voice-gateway", getEnv("SERVICE_VERSION", ""))
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", service.healthHandler)
+	mux.Handle("/metrics", httpMetrics.Handler())
 	mux.HandleFunc("/sessions/bootstrap", service.bootstrapHandler)
 	mux.HandleFunc("/sessions/transcript", service.transcriptHandler)
 	mux.HandleFunc("/sessions/stream-event", service.streamEventHandler)
 
 	server := &http.Server{
 		Addr:              fmt.Sprintf("%s:%s", bindHost, port),
-		Handler:           loggingMiddleware(mux),
+		Handler:           loggingMiddleware(httpMetrics.Middleware(mux)),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 

@@ -21,6 +21,12 @@ if str(SERVICE_ROOT) not in sys.path:
 from config_validation import validate_boot_configuration
 from service import ComplianceConfig, ComplianceVerificationService
 
+_SHARED_DIR = Path(__file__).resolve().parent.parent / "shared"
+if str(_SHARED_DIR) not in sys.path:
+    sys.path.insert(0, str(_SHARED_DIR))
+
+from switchos_resilience import MetricsRegistry
+
 INTERNAL_SERVICE_TOKEN = os.getenv("INTERNAL_SERVICE_TOKEN", "").strip()
 service: ComplianceVerificationService | None = None
 expiry_task: asyncio.Task | None = None
@@ -105,6 +111,14 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="SwitchOS Lagos Compliance Review", version="1.0.0", lifespan=lifespan)
+_metrics = MetricsRegistry("compliance-review", os.getenv("SERVICE_VERSION", "1.0.0"))
+app.middleware("http")(_metrics.fastapi_middleware())
+
+
+@app.get("/metrics")
+async def metrics() -> Response:
+    return Response(content=_metrics.render(), media_type="text/plain; version=0.0.4; charset=utf-8")
+
 
 
 @app.middleware("http")

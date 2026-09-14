@@ -51,22 +51,22 @@ export async function getMerchantChannelsSummary(
          ORDER BY rating DESC NULLS LAST, business_name ASC
          LIMIT $1`,
         [bounded],
-      ).catch(() => ({ rows: [] as any[] })),
+      ),
       pool.query(
         `SELECT id, name, channel, status, budget, spent
          FROM marketing_campaigns
          ORDER BY updated_at DESC NULLS LAST, created_at DESC NULLS LAST
          LIMIT $1`,
         [bounded],
-      ).catch(() => ({ rows: [] as any[] })),
+      ),
       // White-label branded apps and tableside QR venues are real channel
       // inventory once migrations 0075/0076 are applied.
       pool.query(
         `SELECT COUNT(*)::int AS apps FROM white_label_apps WHERE status = 'live'`,
-      ).catch(() => ({ rows: [{ apps: 0 }] })),
+      ),
       pool.query(
         `SELECT COUNT(*)::int AS venues FROM tableside_venues WHERE qr_enabled`,
-      ).catch(() => ({ rows: [{ venues: 0 }] })),
+      ),
     ]);
 
   const providers = providerResult.rows as any[];
@@ -146,20 +146,20 @@ export async function getPhoneOrderingSummary(
        ORDER BY created_at DESC NULLS LAST
        LIMIT $1`,
       [bounded],
-    ).catch(() => ({ rows: [] as any[] })),
+    ),
     pool.query(
       `SELECT id, status, priority, created_at
        FROM support_tickets
        WHERE created_at >= NOW() - INTERVAL '1 day'
        ORDER BY created_at DESC NULLS LAST
        LIMIT 200`,
-    ).catch(() => ({ rows: [] as any[] })),
+    ),
     // Live voice session volume from the LongCat voice pipeline.
     pool.query(
       `SELECT COUNT(*)::int AS sessions
        FROM longcat_voice_sessions
        WHERE created_at >= NOW() - INTERVAL '1 day'`,
-    ).catch(() => ({ rows: [{ sessions: 0 }] })),
+    ),
   ]);
 
   const providers = providerResult.rows as any[];

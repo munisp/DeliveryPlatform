@@ -14,6 +14,7 @@ import {
   sendCampaignToAudience,
   updateCampaign,
 } from "../db";
+import { resilientFetch } from "./resilientFetch";
 
 type ReplenishmentSkuInput = {
   sku: string;
@@ -148,7 +149,7 @@ export async function queueReplenishmentWorkflow(input: ReplenishmentWorkflowInp
     })),
   };
 
-  const planResponse = await fetch(`${ENV.procurementPlannerServiceUrl.replace(/\/$/, "")}/procurement/plan`, {
+  const planResponse = await resilientFetch(`${ENV.procurementPlannerServiceUrl.replace(/\/$/, "")}/procurement/plan`, {
     method: "POST",
     headers: baseHeaders(traceId),
     body: JSON.stringify(procurementPayload),
@@ -158,7 +159,7 @@ export async function queueReplenishmentWorkflow(input: ReplenishmentWorkflowInp
   }
   const plan = await planResponse.json();
 
-  const workflowResponse = await fetch(`${ENV.inventoryControlServiceUrl.replace(/\/$/, "")}/inventory/replenishment-request`, {
+  const workflowResponse = await resilientFetch(`${ENV.inventoryControlServiceUrl.replace(/\/$/, "")}/inventory/replenishment-request`, {
     method: "POST",
     headers: baseHeaders(traceId),
     body: JSON.stringify({

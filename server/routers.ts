@@ -140,7 +140,9 @@ import {
   rotateMerchantApiCredential,
   revokeMerchantApiCredential,
 } from "./_core/merchantCommerce";
+import { getMerchantOnboardingProgress } from "./_core/merchantOnboarding";
 import { selfserveRouter } from "./_core/selfserveRouter";
+import { consumerRouter } from "./_core/consumerRouter";
 
 const listInput = z
   .object({ limit: z.number().min(1).max(25).optional() })
@@ -1492,6 +1494,11 @@ export const appRouter = router({
       .query(({ ctx, input }) =>
         getMerchantCommerceProfile({ actorUserId: ctx.user!.id, ...input }),
       ),
+    onboardingProgress: authenticatedProcedure
+      .input(z.object({ providerId: z.number().int().positive() }))
+      .query(({ ctx, input }) =>
+        getMerchantOnboardingProgress({ actorUserId: ctx.user!.id, ...input }),
+      ),
     decideOnboarding: operatorMutationProcedure("operate")
       .input(
         z.object({
@@ -1888,6 +1895,8 @@ export const appRouter = router({
   }),
 
   selfserve: selfserveRouter,
+
+  consumer: consumerRouter,
 });
 
 export type AppRouter = typeof appRouter;

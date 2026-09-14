@@ -20,6 +20,8 @@ import (
 	enumspb "go.temporal.io/api/enums/v1"
 	temporalclient "go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/temporal"
+
+	"switchos-resilience"
 	"go.temporal.io/sdk/workflow"
 )
 
@@ -417,7 +419,9 @@ func (a *JourneyActivities) ExecuteJourneyAction(ctx context.Context, invocation
 	request.Header.Set("X-Resilience-Run-Id", invocation.WorkflowID)
 	client := a.HTTPClient
 	if client == nil {
-		client = &http.Client{Timeout: 10 * time.Second}
+		client = resilience.NewClient(10*time.Second,
+			resilience.RetryPolicy{MaxAttempts: 3, BackoffBase: 100 * time.Millisecond, BackoffMax: 2 * time.Second},
+			resilience.BreakerConfig{FailureThreshold: 5, ResetTimeout: 30 * time.Second, HalfOpenMaxProbes: 1})
 	}
 	response, err := client.Do(request)
 	if err != nil {

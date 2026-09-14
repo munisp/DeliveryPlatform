@@ -1,6 +1,7 @@
 import { randomUUID } from "crypto";
 
 import { ENV } from "./env";
+import { resilientFetch } from "./resilientFetch";
 
 type NotificationChannel = "sms" | "email" | "push" | "voice";
 
@@ -56,7 +57,7 @@ async function dispatchNotification(requestId: string, input: DispatchPayload): 
     throw new Error("notification_dispatcher_not_configured");
   }
 
-  const response = await fetch(`${ENV.notificationDispatcherUrl.replace(/\/$/, "")}/dispatch`, {
+  const response = await resilientFetch(`${ENV.notificationDispatcherUrl.replace(/\/$/, "")}/dispatch`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",

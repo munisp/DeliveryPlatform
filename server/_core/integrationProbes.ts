@@ -2,6 +2,7 @@ import { access } from "node:fs/promises";
 import { Socket } from "node:net";
 
 import { ENV } from "./env";
+import { resilientFetch } from "./resilientFetch";
 
 type ProbeStatus = "configured" | "healthy" | "degraded" | "unconfigured";
 
@@ -44,7 +45,7 @@ function unconfigured(target: string | null): ProbeResult {
 }
 
 async function fetchJson(url: string, init?: RequestInit) {
-  const response = await fetch(url, {
+  const response = await resilientFetch(url, {
     ...init,
     headers: {
       accept: "application/json",

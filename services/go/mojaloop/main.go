@@ -18,6 +18,9 @@ import (
 	"time"
 
 	_ "github.com/lib/pq"
+
+	"switchos-metrics"
+	"switchos-resilience"
 )
 
 type TigerBeetleLedger interface {
@@ -28,6 +31,10 @@ type TigerBeetleLedger interface {
 	ReverseMojaloopTransfer(refundID string, originalTransferID string, payerID string, payeeID string, amount uint64) error
 	GetTransferReconciliation(transferID string) (TransferReconciliation, error)
 }
+
+// httpMetrics is the service-level Prometheus registry (request counts,
+// latency histogram, error counts, uptime/version gauges) exposed on /metrics.
+var httpMetrics = metrics.New("mojaloop", getEnv("SERVICE_VERSION", ""))
 
 type MojaloopService struct {
 	httpClient           *http.Client
@@ -150,7 +157,9 @@ func NewMojaloopService(tigerBeetle TigerBeetleLedger) (*MojaloopService, error)
 	}
 
 	service := &MojaloopService{
-		httpClient:           &http.Client{Timeout: 30 * time.Second},
+		httpClient: resilience.NewClient(30*time.Second,
+			resilience.RetryPolicy{MaxAttempts: 3, BackoffBase: 100 * time.Millisecond, BackoffMax: 2 * time.Second},
+			resilience.BreakerConfig{FailureThreshold: 5, ResetTimeout: 30 * time.Second, HalfOpenMaxProbes: 1}),
 		switchURL:            getEnv("MOJALOOP_SWITCH_URL", "http://localhost:4001"),
 		participantID:        getEnv("MOJALOOP_PARTICIPANT_ID", "switchos"),
 		internalServiceToken: internalServiceToken,
@@ -1390,10 +1399,11 @@ func main() {
 		}
 		mux := http.NewServeMux()
 		mux.HandleFunc("/health", service.handleHealthHTTP)
+		mux.Handle("/metrics", httpMetrics.Handler())
 		mux.HandleFunc("/metrics/funds-outbox", service.handleFundsOutboxMetricsHTTP)
 		server := &http.Server{
 			Addr:              bindHost + ":" + httpPort,
-			Handler:           mux,
+			Handler:           httpMetrics.Middleware(mux),
 			ReadHeaderTimeout: 5 * time.Second,
 		}
 		serverErrors := make(chan error, 1)
@@ -1417,12 +1427,13 @@ func main() {
 	if serviceMode == "temporal-bridge" {
 		mux := http.NewServeMux()
 		mux.HandleFunc("/health", service.handleHealthHTTP)
+		mux.Handle("/metrics", httpMetrics.Handler())
 		mux.HandleFunc("/funds/workflows", service.handleTemporalWorkflowBridgeHTTP)
 		mux.HandleFunc("/journeys/catalog", service.handleJourneyCatalogHTTP)
 		mux.HandleFunc("/journeys/start", service.handleJourneyStartHTTP)
 		addr := bindHost + ":" + httpPort
 		log.Printf("Mojaloop Temporal workflow bridge listening on %s (namespace=%s, fundsTaskQueue=%s, journeyTaskQueue=%s)", addr, effectiveTemporalNamespace(), effectiveTemporalTaskQueue(), effectiveJourneyTaskQueue())
-		if err := serveWithGracefulShutdown(addr, mux); err != nil {
+		if err := serveWithGracefulShutdown(addr, httpMetrics.Middleware(mux)); err != nil {
 			log.Fatalf("Failed to serve Temporal workflow bridge: %v", err)
 		}
 		return
@@ -1430,6 +1441,7 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", service.handleHealthHTTP)
+	mux.Handle("/metrics", httpMetrics.Handler())
 	mux.HandleFunc("/metrics/funds-outbox", service.handleFundsOutboxMetricsHTTP)
 	mux.HandleFunc("/callbacks/transfers", service.handleTransferCallback)
 	mux.HandleFunc("/callbacks/quotes", service.handleQuoteCallback)
@@ -1444,7 +1456,7 @@ func main() {
 	mux.HandleFunc("/refunds/", service.handleGetRefundHTTP)
 	addr := bindHost + ":" + httpPort
 	log.Printf("Mojaloop HTTP server listening on %s", addr)
-	if err := serveWithGracefulShutdown(addr, mux); err != nil {
+	if err := serveWithGracefulShutdown(addr, httpMetrics.Middleware(mux)); err != nil {
 		log.Fatalf("Failed to serve HTTP: %v", err)
 	}
 }

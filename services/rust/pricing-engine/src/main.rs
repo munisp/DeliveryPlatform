@@ -22,6 +22,8 @@ use std::{
 use tokio_postgres::{Client, NoTls};
 use tracing::{info, info_span, Instrument};
 
+mod metrics;
+
 const RESILIENCE_RUN_HEADER: &str = "x-resilience-run-id";
 const REQUEST_ID_HEADER: &str = "x-request-id";
 
@@ -287,9 +289,12 @@ async fn main() {
         .route("/quote-courier-offer", post(quote_courier_offer))
         .route("/quote-marketplace", post(quote_marketplace))
         .route_layer(middleware::from_fn_with_state(state.clone(), require_internal_access_middleware));
+    metrics::init("switchos-pricing-engine");
     let app = Router::new()
         .route("/health", get(health))
+        .route("/metrics", get(metrics::handler))
         .merge(protected_routes)
+        .layer(middleware::from_fn(metrics::track))
         .layer(middleware::from_fn_with_state(state.clone(), correlation_middleware))
         .with_state(state);
 

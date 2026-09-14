@@ -3,10 +3,13 @@ mod config_validation;
 use axum::{
     extract::State,
     http::{HeaderMap, StatusCode},
+    middleware,
     routing::{get, post},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
+
+mod metrics;
 use std::{collections::HashSet, env, net::SocketAddr, sync::Arc};
 use tracing::info;
 
@@ -168,10 +171,13 @@ async fn main() {
         panic!("{error}");
     }
     let token = env::var("INTERNAL_SERVICE_TOKEN").expect("INTERNAL_SERVICE_TOKEN is required");
+    metrics::init("switchos-verification-policy");
     let app = Router::new()
         .route("/health", get(health))
+        .route("/metrics", get(metrics::handler))
         .route("/v1/evaluate", post(evaluate_handler))
         .route("/v1/forensics/mrz", post(validate_mrz_handler))
+        .layer(middleware::from_fn(metrics::track))
         .with_state(Arc::new(AppState { internal_token: token }));
     let addr: SocketAddr = env::var("BIND_ADDR").unwrap_or_else(|_| "127.0.0.1:8122".into()).parse().expect("valid BIND_ADDR");
     info!(%addr, "verification policy service starting");

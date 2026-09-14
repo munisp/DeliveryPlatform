@@ -42,13 +42,9 @@ function toCount(value: unknown): number {
 }
 
 async function queryRows(sql: string, params: unknown[] = []): Promise<any[]> {
-  try {
-    const pool = await getPool();
-    const result: QueryRows = await pool.query(sql, params);
-    return result.rows;
-  } catch {
-    return [];
-  }
+  const pool = await getPool();
+  const result: QueryRows = await pool.query(sql, params);
+  return result.rows;
 }
 
 async function countOf(sql: string, params: unknown[] = []): Promise<number> {

@@ -17,6 +17,9 @@ import (
 	"time"
 
 	_ "github.com/lib/pq"
+
+	sharedmetrics "switchos-metrics"
+	"switchos-resilience"
 	"github.com/segmentio/kafka-go"
 )
 
@@ -153,7 +156,9 @@ func main() {
 	internalServiceToken := strings.TrimSpace(os.Getenv("INTERNAL_SERVICE_TOKEN"))
 	service := &inventoryService{
 		db:                   openDB(databaseURL),
-		httpClient:           &http.Client{Timeout: 5 * time.Second},
+		httpClient: resilience.NewClient(5*time.Second,
+			resilience.RetryPolicy{MaxAttempts: 3, BackoffBase: 100 * time.Millisecond, BackoffMax: 2 * time.Second},
+			resilience.BreakerConfig{FailureThreshold: 5, ResetTimeout: 30 * time.Second, HalfOpenMaxProbes: 1}),
 		internalServiceToken: internalServiceToken,
 		serviceName:          "switchos-inventory-control",
 	}
@@ -164,8 +169,10 @@ func main() {
 		log.Fatalf("ensure schema: %v", err)
 	}
 
+	httpMetrics := sharedmetrics.New("inventory-control", getenv("SERVICE_VERSION", ""))
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", service.healthHandler)
+	mux.Handle("/metrics", httpMetrics.Handler())
 	mux.HandleFunc("/middleware-status", service.middlewareStatusHandler)
 	mux.HandleFunc("/inventory/adjustment", service.adjustmentHandler)
 	mux.HandleFunc("/inventory/replenishment-request", service.replenishmentHandler)
@@ -173,7 +180,7 @@ func main() {
 	mux.HandleFunc("/inventory/position", service.positionHandler)
 
 	addr := fmt.Sprintf("%s:%s", getenv("BIND_HOST", "127.0.0.1"), getenv("PORT", "8117"))
-	server := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	server := &http.Server{Addr: addr, Handler: httpMetrics.Middleware(mux), ReadHeaderTimeout: 5 * time.Second}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
