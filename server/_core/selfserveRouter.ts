@@ -14,7 +14,13 @@ import {
   declineTransparentDriverOffer,
   listTransparentDriverOffers,
 } from "./driverDispatchFairness";
+import { resolvePublicUser } from "./publicUsers";
 import { authenticatedProcedure, router, type SessionUser } from "./trpc";
+
+// resolvePublicUser now lives in ./publicUsers (shared with the session
+// unification path); re-exported here so existing imports keep working.
+export { resolvePublicUser } from "./publicUsers";
+export type { LinkedPublicUser } from "./publicUsers";
 import {
   listVehicleAccessContracts,
   listVehicleAccessOffers,
@@ -48,89 +54,6 @@ export type LinkedDriver = {
   status: string;
   link: "open_id" | "email";
 };
-
-export type LinkedPublicUser = {
-  id: number;
-  link: "open_id" | "email" | "created";
-};
-
-/**
- * Resolve (or ensure) the caller's row in `public.users`.
- *
- * Sessions are issued against `operator_credentials.id`, but the courier
- * domain tables (`vehicle_access.*`, `public.vehicle_rental_charges`,
- * `mobility.*`) key on `public.users.id` — including the
- * `vehicle_access.transition_contract` worker/operator authorization checks
- * (drizzle/0058) and `vehicle_access.is_operator` (drizzle/0050), which both
- * compare against `public.users.id`. Passing the operator-credential id
- * straight through would be a cross-identity IDOR: credential ids and user
- * ids collide numerically while referring to different people.
- *
- * Resolution mirrors resolveDriverForUser: match by open_id first (rank 0),
- * then by case-insensitive email (rank 1). When no row exists yet, one is
- * provisioned from the session identity so the caller always operates inside
- * the public.users ID space.
- */
-export async function resolvePublicUser(
-  user: Pick<SessionUser, "id" | "openId" | "email" | "name">,
-): Promise<LinkedPublicUser> {
-  const pool = await getPool();
-  const openId =
-    user.openId && user.openId.trim().length > 0
-      ? user.openId.trim()
-      : `operator:${user.id}`;
-  const email = user.email ?? null;
-
-  const found = await pool.query<{
-    id: number;
-    link: "open_id" | "email";
-  }>(
-    `SELECT id, link
-     FROM (
-       SELECT u.id, 'open_id'::text AS link, 0 AS rank
-       FROM public.users u
-       WHERE u.open_id = $1
-       UNION ALL
-       SELECT u.id, 'email'::text AS link, 1 AS rank
-       FROM public.users u
-       WHERE $2::text IS NOT NULL AND u.email IS NOT NULL
-         AND lower(u.email) = lower($2)
-     ) matches
-     ORDER BY rank, id
-     LIMIT 1`,
-    [openId, email],
-  );
-  const existing = found.rows[0];
-  if (existing) {
-    return { id: Number(existing.id), link: existing.link };
-  }
-
-  // Ensure a public.users row exists for this identity. ON CONFLICT absorbs
-  // the race where two concurrent first requests provision the same row.
-  const inserted = await pool.query<{ id: number }>(
-    `INSERT INTO public.users (open_id, name, email, login_method, last_signed_in)
-     VALUES ($1, $2, $3, 'operator_credential', now())
-     ON CONFLICT (open_id) DO NOTHING
-     RETURNING id`,
-    [openId, user.name ?? null, email],
-  );
-  const created = inserted.rows[0];
-  if (created) {
-    return { id: Number(created.id), link: "created" };
-  }
-  const raced = await pool.query<{ id: number }>(
-    `SELECT id FROM public.users WHERE open_id = $1`,
-    [openId],
-  );
-  const racedRow = raced.rows[0];
-  if (!racedRow) {
-    throw new TRPCError({
-      code: "INTERNAL_SERVER_ERROR",
-      message: "public_user_resolution_failed",
-    });
-  }
-  return { id: Number(racedRow.id), link: "open_id" };
-}
 
 export async function resolveDriverForUser(
   user: Pick<SessionUser, "openId" | "email">,

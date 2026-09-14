@@ -53,10 +53,14 @@ describe("courier self-serve portal", () => {
       expect(router).toContain(`${name}: authenticatedProcedure`);
     }
     // every wrapper resolves the caller into the public.users ID space and
-    // passes THAT id through — never the operator_credential session id
-    expect(router).toContain("export async function resolvePublicUser");
-    expect(router).toContain("FROM public.users u");
-    expect(router).toContain("ON CONFLICT (open_id) DO NOTHING");
+    // passes THAT id through — never the operator_credential session id.
+    // resolvePublicUser lives in the shared publicUsers module (session
+    // unification reuses it) and is re-exported from the router.
+    const publicUsers = source("server/_core/publicUsers.ts");
+    expect(publicUsers).toContain("export async function resolvePublicUser");
+    expect(publicUsers).toContain("FROM public.users u");
+    expect(publicUsers).toContain("ON CONFLICT (open_id) DO NOTHING");
+    expect(router).toContain('export { resolvePublicUser } from "./publicUsers";');
     expect(router).toContain("const publicUser = await resolvePublicUser(ctx.user)");
     expect(router).toContain("actorUserId: publicUser.id");
     expect(router).toContain("workerUserId: publicUser.id");

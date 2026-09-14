@@ -6,6 +6,11 @@ import { ENV } from "./env";
 import { checkPolicy } from "./policy";
 
 export type SessionUser = {
+  /**
+   * Unified domain subject: the caller's `public.users.id` once the session
+   * has passed through the session-load path (unifySessionUser). May be 0
+   * on a freshly verified but not-yet-unified external token.
+   */
   id: number;
   name: string;
   email?: string | null;
@@ -17,6 +22,10 @@ export type SessionUser = {
   assuranceLevel?: string | null;
   mfaAuthenticated?: boolean;
   sessionId?: string | null;
+  /** public.users.id carried on the signed session token (post-unification). */
+  publicUserId?: number | null;
+  /** operator_credentials.id for operator-scoped stores and audit/attribution. */
+  operatorCredentialId?: number | null;
 };
 
 export type TrpcContext = {

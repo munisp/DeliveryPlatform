@@ -21,6 +21,8 @@ type SessionClaims = {
   assuranceLevel?: string | null;
   mfaAuthenticated?: boolean;
   sessionId?: string | null;
+  publicUserId?: number | null;
+  operatorCredentialId?: number | null;
 };
 
 type DiscoveryDocument = {
@@ -96,16 +98,21 @@ function normalizeRole(payload: Record<string, unknown>) {
   return "viewer";
 }
 
+function toPositiveInteger(value: unknown): number | null {
+  if (typeof value !== "string" && typeof value !== "number") return null;
+  const num = typeof value === "string" ? Number(value.trim()) : value;
+  return Number.isSafeInteger(num) && num > 0 ? num : null;
+}
+
+function parseOperatorCredentialOpenId(openId: string | null): number | null {
+  if (!openId) return null;
+  const match = /^operator:(\d{1,15})$/.exec(openId.trim());
+  return match ? toPositiveInteger(match[1]) : null;
+}
+
 function toSessionUser(payload: Record<string, unknown>): SessionUser | null {
   const subject = payload.sub;
   if (typeof subject !== "string" || subject.trim().length === 0) {
-    return null;
-  }
-
-  const numericId = Number(subject);
-  const fallbackId = Number.parseInt(subject.replace(/\D/g, "").slice(0, 9) || "0", 10);
-  const resolvedId = Number.isFinite(numericId) && numericId > 0 ? numericId : fallbackId;
-  if (!Number.isFinite(resolvedId) || resolvedId <= 0) {
     return null;
   }
 
@@ -113,9 +120,35 @@ function toSessionUser(payload: Record<string, unknown>): SessionUser | null {
   const explicitScopes = normalizeScopes(payload.scopes ?? payload.scope);
   const authenticationMethods = normalizeAuthenticationMethods(payload.amr);
   const assuranceLevel = typeof payload.acr === "string" ? payload.acr.trim() || null : null;
+  const openId = typeof payload.openId === "string"
+    ? payload.openId
+    : typeof payload.preferred_username === "string"
+      ? payload.preferred_username
+      : subject;
+
+  // H-4: never derive a numeric identity by stripping digits out of the OIDC
+  // sub — distinct subjects ("user-1a2b", "user-12ab") collapsed onto the
+  // same munged id. Numeric identity comes only from claims that are
+  // collision-free by construction:
+  //   1. the signed publicUserId / operatorCredentialId claims we mint,
+  //   2. a fully numeric sub (legacy local session tokens: sub = credential
+  //      id), or the `operator:<id>` openId namespace.
+  // Anything else keeps the FULL sub string as openId and gets id 0 as an
+  // unresolved placeholder until the session-load path resolves the
+  // public.users row keyed on that openId (lookup is always by the original
+  // open_id string, never by a derived number), so pre-existing users keep
+  // logging in.
+  const operatorCredentialId =
+    toPositiveInteger(payload.operatorCredentialId) ??
+    (/^\d{1,15}$/.test(subject.trim()) ? toPositiveInteger(subject) : null) ??
+    parseOperatorCredentialOpenId(openId);
+  const publicUserId = toPositiveInteger(payload.publicUserId);
+  const resolvedId = publicUserId ?? operatorCredentialId ?? 0;
 
   return {
     id: resolvedId,
+    publicUserId,
+    operatorCredentialId,
     name: typeof payload.name === "string" && payload.name.trim().length > 0
       ? payload.name
       : typeof payload.preferred_username === "string" && payload.preferred_username.trim().length > 0
@@ -123,11 +156,7 @@ function toSessionUser(payload: Record<string, unknown>): SessionUser | null {
         : "Operator",
     email: typeof payload.email === "string" ? payload.email : null,
     role,
-    openId: typeof payload.openId === "string"
-      ? payload.openId
-      : typeof payload.preferred_username === "string"
-        ? payload.preferred_username
-        : subject,
+    openId,
     tenantId: typeof payload.tenantId === "string"
       ? payload.tenantId
       : typeof payload.azp === "string"
@@ -287,6 +316,12 @@ export async function createSessionToken(user: SessionClaims) {
     authenticationMethods: user.authenticationMethods ?? [],
     assuranceLevel: user.assuranceLevel ?? null,
     mfaAuthenticated: Boolean(user.mfaAuthenticated),
+    publicUserId:
+      user.publicUserId && user.publicUserId > 0 ? user.publicUserId : null,
+    operatorCredentialId:
+      user.operatorCredentialId && user.operatorCredentialId > 0
+        ? user.operatorCredentialId
+        : null,
   })
     .setProtectedHeader({ alg: "HS256", typ: "JWT" })
     .setIssuer(ENV.sessionIssuer)
@@ -298,13 +333,37 @@ export async function createSessionToken(user: SessionClaims) {
     .sign(getSessionKey());
 }
 
+export type VerifiedSession = {
+  user: SessionUser;
+  sessionId: string | null;
+  expiresAt: Date | null;
+};
+
+function toVerifiedSession(payload: Record<string, unknown>): VerifiedSession | null {
+  const user = toSessionUser(payload);
+  if (!user) return null;
+  return {
+    user,
+    sessionId: typeof payload.jti === "string" ? payload.jti : null,
+    expiresAt:
+      typeof payload.exp === "number" && Number.isFinite(payload.exp)
+        ? new Date(payload.exp * 1000)
+        : null,
+  };
+}
+
 export async function verifySessionToken(token: string): Promise<SessionUser | null> {
+  const session = await verifySessionTokenWithClaims(token);
+  return session?.user ?? null;
+}
+
+export async function verifySessionTokenWithClaims(token: string): Promise<VerifiedSession | null> {
   try {
     const { payload } = await jwtVerify(token, getSessionKey(), {
       issuer: ENV.sessionIssuer,
       audience: ENV.sessionAudience,
     });
-    return toSessionUser(payload as Record<string, unknown>);
+    return toVerifiedSession(payload as Record<string, unknown>);
   } catch {
     return null;
   }
@@ -331,6 +390,20 @@ export async function resolveUserFromExternalTokens(tokens: OidcTokens, expected
 }
 
 export async function getSessionUserFromRequest(headers: Record<string, string | string[] | undefined>) {
+  const session = await getSessionFromRequest(headers);
+  return session?.user ?? null;
+}
+
+/**
+ * Verify the request's session credential (external bearer JWT, local
+ * session bearer, or session cookie) and return the session user together
+ * with the token's jti/expiry so callers can enforce server-side
+ * revocation. The returned user is NOT yet unified onto public.users —
+ * callers must run it through the session-load path (unifySessionUser).
+ */
+export async function getSessionFromRequest(
+  headers: Record<string, string | string[] | undefined>,
+): Promise<VerifiedSession | null> {
   const authHeader = headers.authorization;
   const bearer = typeof authHeader === "string" && authHeader.startsWith("Bearer ")
     ? authHeader.slice("Bearer ".length).trim()
@@ -338,10 +411,16 @@ export async function getSessionUserFromRequest(headers: Record<string, string |
 
   if (bearer) {
     const externalUser = await verifyExternalAccessToken(bearer);
-    if (externalUser) return externalUser;
+    if (externalUser) {
+      return {
+        user: externalUser,
+        sessionId: externalUser.sessionId ?? null,
+        expiresAt: null,
+      };
+    }
 
-    const localUser = await verifySessionToken(bearer);
-    if (localUser) return localUser;
+    const localSession = await verifySessionTokenWithClaims(bearer);
+    if (localSession) return localSession;
   }
 
   const cookieHeader = typeof headers.cookie === "string" ? headers.cookie : undefined;
@@ -349,7 +428,7 @@ export async function getSessionUserFromRequest(headers: Record<string, string |
   const parsed = cookie.parse(cookieHeader);
   const raw = parsed[COOKIE_NAME];
   if (!raw) return null;
-  return verifySessionToken(raw);
+  return verifySessionTokenWithClaims(raw);
 }
 
 export async function getOidcDiscoveryDocument() {
