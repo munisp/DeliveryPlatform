@@ -20,9 +20,11 @@ import {
   createSessionToken,
   exchangeAuthorizationCode,
   getOidcDiscoveryDocument,
-  getSessionUserFromRequest,
+  getSessionFromRequest,
   resolveUserFromExternalTokens,
 } from "./auth";
+import { resolvePublicUser, unifySessionUser } from "./publicUsers";
+import { isSessionRevoked, revokeSession } from "./sessionRevocationStore";
 import {
   acceptInvitation,
   applyOrganizationSharedBrandingPreset,
@@ -375,10 +377,21 @@ async function issueOperatorSession(
   // collapsed all operators into one identity for anything keyed on openId
   // (public.users, drivers). The shared ownerOpenId is kept ONLY as the
   // bootstrap-owner fallback when no credential identity exists.
-  const credentialOpenId =
-    Number.isFinite(operator.id) && operator.id > 0
-      ? `operator:${operator.id}`
-      : ENV.ownerOpenId;
+  const hasCredentialIdentity = Number.isFinite(operator.id) && operator.id > 0;
+  const credentialOpenId = hasCredentialIdentity
+    ? `operator:${operator.id}`
+    : ENV.ownerOpenId;
+  // Unify the session subject onto public.users: resolve (or provision) the
+  // caller's users row — keyed on ownerOpenId for the bootstrap-owner
+  // fallback — and carry it on the signed token so the session-load path
+  // can set ctx.user.id = publicUserId without a per-request lookup.
+  const publicUser = await resolvePublicUser({
+    id: hasCredentialIdentity ? operator.id : null,
+    operatorCredentialId: hasCredentialIdentity ? operator.id : null,
+    openId: credentialOpenId,
+    email: operator.email,
+    name: operator.name,
+  });
   const token = await createSessionToken({
     sub: String(operator.id),
     name: operator.name,
@@ -393,6 +406,8 @@ async function issueOperatorSession(
     sessionId,
     mfaAuthenticated,
     assuranceLevel: options.assuranceLevel ?? null,
+    publicUserId: publicUser.id,
+    operatorCredentialId: hasCredentialIdentity ? operator.id : null,
   });
 
   await createOperatorSecuritySession({
@@ -938,39 +953,98 @@ app.post("/api/auth/login", rateLimit(15), async (req, res) => {
 });
 
 app.post("/api/auth/logout", rateLimit(20), async (req, res) => {
-  const request = req as AppRequest;
-  await recordOperationalEvent({
-    eventType: "auth.logout",
-    actorId: request.user ? `${request.user.id}` : null,
-    actorRole: request.user?.role ?? null,
-    tenantId: request.user?.tenantId ?? null,
-    route: req.path,
-    outcome: "info",
-  });
+  // Server-side revocation (M-2): clearing the cookie alone left the signed
+  // JWT valid until expiry. Insert the session's jti into the revocation
+  // list (and mark the operator security session revoked) so the
+  // session-validation middleware rejects replays of the logged-out token.
+  // This route is registered before the session middleware, so it resolves
+  // the session itself; failures are logged but never block logout.
+  try {
+    const session = await getSessionFromRequest(req.headers);
+    if (session?.sessionId) {
+      await revokeSession({
+        sessionId: session.sessionId,
+        expiresAt:
+          session.expiresAt ?? new Date(Date.now() + 12 * 60 * 60 * 1000),
+        reason: "logout",
+      });
+      const operatorId = session.user.operatorCredentialId ?? null;
+      if (operatorId) {
+        try {
+          await revokeOperatorSecuritySession(operatorId, session.sessionId);
+        } catch (securityError) {
+          console.warn(
+            "[SwitchOS] Failed to revoke operator security session on logout",
+            securityError,
+          );
+        }
+      }
+    }
+    await recordOperationalEvent({
+      eventType: "auth.logout",
+      actorId: session?.user
+        ? `${session.user.operatorCredentialId ?? session.user.id}`
+        : null,
+      actorRole: session?.user?.role ?? null,
+      tenantId: session?.user?.tenantId ?? null,
+      route: req.path,
+      outcome: "info",
+    });
+  } catch (error) {
+    console.warn("[SwitchOS] Session revocation on logout failed", error);
+  }
   clearOidcFlowCookies(res);
   res.clearCookie(COOKIE_NAME, getCookieOptions());
   res.status(200).json({ ok: true });
 });
 
+/**
+ * Single session-load path: verify the token, reject server-side revoked
+ * sessions (M-2) and revoked/expired operator security sessions, then unify
+ * the identity onto public.users so `user.id` is the platform-wide domain
+ * subject while `user.operatorCredentialId` / `user.openId` stay available
+ * for operator-scoped stores and audit attribution.
+ */
+async function resolveRequestSessionUser(
+  headers: express.Request["headers"],
+): Promise<SessionUser | null> {
+  const session = await getSessionFromRequest(headers);
+  let user = session?.user ?? null;
+  if (user?.sessionId && (await isSessionRevoked(user.sessionId))) {
+    user = null;
+  }
+  if (
+    user?.sessionId &&
+    !(await isOperatorSecuritySessionActive(
+      user.operatorCredentialId ?? user.id,
+      user.sessionId,
+    ))
+  ) {
+    user = null;
+  }
+  return unifySessionUser(user);
+}
+
 app.use(async (req, _res, next) => {
   const request = req as AppRequest;
   try {
-    request.user = await getSessionUserFromRequest(req.headers);
-    if (
-      request.user?.sessionId &&
-      !(await isOperatorSecuritySessionActive(
-        request.user.id,
-        request.user.sessionId,
-      ))
-    ) {
-      request.user = null;
-    }
+    request.user = await resolveRequestSessionUser(req.headers);
   } catch (error) {
     console.warn("[SwitchOS] Failed to resolve session user", error);
     request.user = null;
   }
   next();
 });
+
+/**
+ * Identity helper for operator-scoped stores. After session unification
+ * `user.id` is the public.users domain subject; stores keyed on
+ * `operator_credentials.id` (operator security sessions, account lifecycle,
+ * tenant branding/invitations) must use the credential id instead.
+ */
+function operatorCredentialIdOf(user: SessionUser): number {
+  return Number(user.operatorCredentialId ?? user.id);
+}
 
 function requireAuthenticatedOperator(
   req: express.Request,
@@ -990,6 +1064,9 @@ app.get("/api/auth/session-profile", rateLimit(60), (req, res) => {
   res.status(200).json({
     user: {
       id: user.id,
+      publicUserId: user.publicUserId ?? user.id,
+      operatorCredentialId: user.operatorCredentialId ?? null,
+      openId: user.openId ?? null,
       name: user.name,
       role: user.role ?? null,
       tenantId: user.tenantId ?? null,
@@ -1260,11 +1337,11 @@ app.get("/api/operations/snapshot", rateLimit(60), async (req, res) => {
   await operationsRoute(req, res, (actor) => listOperationsSnapshot(actor));
 });
 app.get("/api/tracking/live/:scope/snapshot", rateLimit(30), async (req, res) => {
-  await handleRoleScopedTrackingSnapshot(req, res, getSessionUserFromRequest);
+  await handleRoleScopedTrackingSnapshot(req, res, resolveRequestSessionUser);
 });
 
 app.get("/api/tracking/live/:scope", rateLimit(12), async (req, res) => {
-  await handleRoleScopedTrackingStream(req, res, getSessionUserFromRequest);
+  await handleRoleScopedTrackingStream(req, res, resolveRequestSessionUser);
 });
 app.post("/api/operations/zones", rateLimit(20), async (req, res) => {
   await operationsRoute(req, res, (actor) =>
@@ -3252,8 +3329,8 @@ app.get("/api/auth/security", async (req, res) => {
   if (!user) return;
   try {
     const [sessions, recentLoginActivity] = await Promise.all([
-      listOperatorSecuritySessions(Number(user.id)),
-      listOperatorSecurityLoginActivity(Number(user.id)),
+      listOperatorSecuritySessions(operatorCredentialIdOf(user)),
+      listOperatorSecurityLoginActivity(operatorCredentialIdOf(user)),
     ]);
     res.status(200).json({
       mfa: {
@@ -3288,7 +3365,7 @@ app.delete(
     }
     try {
       const revoked = await revokeOperatorSecuritySession(
-        Number(user.id),
+        operatorCredentialIdOf(user),
         sessionId,
       );
       if (!revoked) {
@@ -3331,7 +3408,7 @@ app.get(
     const user = requireAuthenticatedOperator(req, res);
     if (!user) return;
     try {
-      const activity = await listOperatorSecurityLoginActivity(Number(user.id));
+      const activity = await listOperatorSecurityLoginActivity(operatorCredentialIdOf(user));
       const csv = [
         [
           "auth_source",
@@ -3393,7 +3470,7 @@ app.post(
     }
     try {
       const revokedSessions = await revokeOtherOperatorSecuritySessions(
-        Number(user.id),
+        operatorCredentialIdOf(user),
         user.sessionId,
       );
       await recordOperationalEvent({
@@ -3450,7 +3527,7 @@ app.get("/api/auth/onboarding", async (req, res) => {
   const user = requireAuthenticatedOperator(req, res);
   if (!user) return;
   try {
-    const state = await getOnboardingState(Number(user.id));
+    const state = await getOnboardingState(operatorCredentialIdOf(user));
     res.status(200).json(state);
   } catch (error) {
     const mapped = lifecycleErrorStatus(error);
@@ -3466,12 +3543,12 @@ app.post(
     if (!user) return;
     try {
       const result = await createOrganizationAndTenant({
-        operatorId: Number(user.id),
+        operatorId: operatorCredentialIdOf(user),
         organizationName: `${req.body?.organizationName ?? ""}`,
         organizationSlug: `${req.body?.organizationSlug ?? ""}`,
         tenantName: `${req.body?.tenantName ?? ""}`,
       });
-      const state = await getOnboardingState(Number(user.id));
+      const state = await getOnboardingState(operatorCredentialIdOf(user));
       await issueOperatorSession(req, res, state.operator, {
         authSource: "managed",
         mfaAuthenticated: Boolean(user.mfaAuthenticated),
@@ -3500,7 +3577,7 @@ app.post("/api/auth/invitations", rateLimit(20), async (req, res) => {
   if (!user) return;
   try {
     const result = await createInvitation({
-      inviterId: Number(user.id),
+      inviterId: operatorCredentialIdOf(user),
       email: `${req.body?.email ?? ""}`,
       role: `${req.body?.role ?? "operator"}` as
         | "admin"
@@ -3528,7 +3605,7 @@ app.get("/api/auth/invitations/status", async (req, res) => {
   try {
     res
       .status(200)
-      .json({ invitations: await listInvitationStatuses(Number(user.id)) });
+      .json({ invitations: await listInvitationStatuses(operatorCredentialIdOf(user)) });
   } catch (error) {
     const mapped = lifecycleErrorStatus(error);
     res
@@ -3555,7 +3632,7 @@ app.get(
           ? req.query.columns.split(",")
           : [];
       const exported = await exportInvitationActivityCsv({
-        operatorId: Number(user.id),
+        operatorId: operatorCredentialIdOf(user),
         status,
         startDate,
         endDate,
@@ -3600,7 +3677,7 @@ app.post(
     if (!user) return;
     try {
       const result = await resendInvitation({
-        inviterId: Number(user.id),
+        inviterId: operatorCredentialIdOf(user),
         invitationId: `${req.params.id ?? ""}`,
       });
       await recordOperationalEvent({
@@ -3629,7 +3706,7 @@ app.post(
     if (!user) return;
     try {
       const result = await revokeInvitation({
-        inviterId: Number(user.id),
+        inviterId: operatorCredentialIdOf(user),
         invitationId: `${req.params.id ?? ""}`,
       });
       await recordOperationalEvent({
@@ -3658,7 +3735,7 @@ app.post(
     if (!user) return;
     try {
       const result = await bulkResendInvitations({
-        inviterId: Number(user.id),
+        inviterId: operatorCredentialIdOf(user),
         invitationIds: Array.isArray(req.body?.invitationIds)
           ? req.body.invitationIds.filter(
               (id: unknown): id is string => typeof id === "string",
@@ -3696,7 +3773,7 @@ app.post(
     if (!user) return;
     try {
       const result = await bulkRevokeInvitations({
-        inviterId: Number(user.id),
+        inviterId: operatorCredentialIdOf(user),
         invitationIds: Array.isArray(req.body?.invitationIds)
           ? req.body.invitationIds.filter(
               (id: unknown): id is string => typeof id === "string",
@@ -3739,7 +3816,7 @@ app.post(
           )
         : [];
       const result = await bulkChangeMemberRoles({
-        operatorId: Number(user.id),
+        operatorId: operatorCredentialIdOf(user),
         memberIds,
         role: `${req.body?.role ?? ""}` as "admin" | "operator" | "viewer",
       });
@@ -3766,7 +3843,7 @@ app.get("/api/auth/members", async (req, res) => {
   const user = requireAuthenticatedOperator(req, res);
   if (!user) return;
   try {
-    res.status(200).json({ members: await listTenantMembers(Number(user.id)) });
+    res.status(200).json({ members: await listTenantMembers(operatorCredentialIdOf(user)) });
   } catch (error) {
     const mapped = lifecycleErrorStatus(error);
     res
@@ -3779,7 +3856,7 @@ app.get("/api/auth/tenant-branding", async (req, res) => {
   const user = requireAuthenticatedOperator(req, res);
   if (!user) return;
   try {
-    res.status(200).json(await getTenantBranding(Number(user.id)));
+    res.status(200).json(await getTenantBranding(operatorCredentialIdOf(user)));
   } catch (error) {
     const mapped = lifecycleErrorStatus(error);
     res.status(mapped.status).json({ error: mapped.code });
@@ -3792,7 +3869,7 @@ app.get("/api/auth/tenant-branding/presets", async (req, res) => {
   try {
     res
       .status(200)
-      .json({ presets: await listTenantBrandingPresets(Number(user.id)) });
+      .json({ presets: await listTenantBrandingPresets(operatorCredentialIdOf(user)) });
   } catch (error) {
     const mapped = lifecycleErrorStatus(error);
     res
@@ -3806,7 +3883,7 @@ app.get("/api/auth/tenant-branding/presets/shared", async (req, res) => {
   if (!user) return;
   try {
     res.status(200).json({
-      presets: await listOrganizationSharedBrandingPresets(Number(user.id)),
+      presets: await listOrganizationSharedBrandingPresets(operatorCredentialIdOf(user)),
     });
   } catch (error) {
     const mapped = lifecycleErrorStatus(error);
@@ -3826,7 +3903,7 @@ app.get("/api/auth/tenant-branding/presets/audit-history", async (req, res) => {
       typeof req.query.endDate === "string" ? req.query.endDate : null;
     res.status(200).json({
       history: await listTenantBrandingPresetOwnershipAudit({
-        operatorId: Number(user.id),
+        operatorId: operatorCredentialIdOf(user),
         startDate,
         endDate,
       }),
@@ -3845,7 +3922,7 @@ app.get("/api/auth/tenant/notification-preferences", async (req, res) => {
   try {
     res
       .status(200)
-      .json(await getTenantAdminNotificationPreferences(Number(user.id)));
+      .json(await getTenantAdminNotificationPreferences(operatorCredentialIdOf(user)));
   } catch (error) {
     const mapped = lifecycleErrorStatus(error);
     res
@@ -3866,7 +3943,7 @@ app.get("/api/auth/tenant/notification-delivery-history", async (req, res) => {
       typeof req.query.endDate === "string" ? req.query.endDate : null;
     res.status(200).json({
       history: await listTenantAdminNotificationDeliveryHistory({
-        operatorId: Number(user.id),
+        operatorId: operatorCredentialIdOf(user),
         status,
         startDate,
         endDate,
@@ -3894,7 +3971,7 @@ app.get(
       const endDate =
         typeof req.query.endDate === "string" ? req.query.endDate : null;
       const exported = await exportTenantAdminNotificationDeliveryHistoryCsv({
-        operatorId: Number(user.id),
+        operatorId: operatorCredentialIdOf(user),
         status,
         startDate,
         endDate,
@@ -3933,7 +4010,7 @@ app.get(
       res
         .status(200)
         .json(
-          await getTenantAdminNotificationDeliveryRetention(Number(user.id)),
+          await getTenantAdminNotificationDeliveryRetention(operatorCredentialIdOf(user)),
         );
     } catch (error) {
       const mapped = lifecycleErrorStatus(error);
@@ -3952,7 +4029,7 @@ app.post(
     if (!user) return;
     try {
       const retention = await updateTenantAdminNotificationDeliveryRetention({
-        operatorId: Number(user.id),
+        operatorId: operatorCredentialIdOf(user),
         retentionDays: Number(req.body?.retentionDays),
       });
       await recordOperationalEvent({
@@ -3985,7 +4062,7 @@ app.post(
     if (!user) return;
     try {
       const preferences = await updateTenantAdminNotificationPreferences({
-        operatorId: Number(user.id),
+        operatorId: operatorCredentialIdOf(user),
         roleUpdateEmail: Boolean(req.body?.roleUpdateEmail),
         presetOwnershipTransferEmail: Boolean(
           req.body?.presetOwnershipTransferEmail,
@@ -4017,7 +4094,7 @@ app.post(
     if (!user) return;
     try {
       const preset = await saveTenantBrandingPreset({
-        operatorId: Number(user.id),
+        operatorId: operatorCredentialIdOf(user),
         name: `${req.body?.name ?? ""}`,
         logoDataUrl:
           typeof req.body?.logoDataUrl === "string"
@@ -4045,7 +4122,7 @@ app.post(
     try {
       res.status(200).json(
         await applyTenantBrandingPreset({
-          operatorId: Number(user.id),
+          operatorId: operatorCredentialIdOf(user),
           presetId: `${req.params.id ?? ""}`,
         }),
       );
@@ -4067,7 +4144,7 @@ app.post(
     try {
       res.status(200).json(
         await applyOrganizationSharedBrandingPreset({
-          operatorId: Number(user.id),
+          operatorId: operatorCredentialIdOf(user),
           presetId: `${req.params.id ?? ""}`,
         }),
       );
@@ -4088,7 +4165,7 @@ app.post(
     if (!user) return;
     try {
       const result = await setTenantBrandingPresetOrganizationSharing({
-        operatorId: Number(user.id),
+        operatorId: operatorCredentialIdOf(user),
         presetId: `${req.params.id ?? ""}`,
         shared: Boolean(req.body?.shared),
       });
@@ -4120,7 +4197,7 @@ app.post(
     if (!user) return;
     try {
       const result = await transferTenantBrandingPresetOwnership({
-        operatorId: Number(user.id),
+        operatorId: operatorCredentialIdOf(user),
         presetId: `${req.params.id ?? ""}`,
         recipientEmail: `${req.body?.recipientEmail ?? ""}`,
       });
@@ -4155,7 +4232,7 @@ app.delete(
     try {
       res.status(200).json(
         await deleteTenantBrandingPreset({
-          operatorId: Number(user.id),
+          operatorId: operatorCredentialIdOf(user),
           presetId: `${req.params.id ?? ""}`,
         }),
       );
@@ -4173,7 +4250,7 @@ app.post("/api/auth/tenant-branding", rateLimit(20), async (req, res) => {
   if (!user) return;
   try {
     const branding = await updateTenantBranding({
-      operatorId: Number(user.id),
+      operatorId: operatorCredentialIdOf(user),
       logoDataUrl:
         typeof req.body?.logoDataUrl === "string" ? req.body.logoDataUrl : null,
       primaryColor: `${req.body?.primaryColor ?? ""}`,
@@ -4202,10 +4279,14 @@ app.use(
     router: appRouter,
     createContext({ req, res }) {
       const request = req as typeof req & { user?: SessionUser | null };
+      const user = request.user ?? null;
       return {
         req,
         res,
-        user: request.user ?? null,
+        // Unified identity contract: ctx.user.id is the public.users domain
+        // subject; the session middleware already unified the identity, and
+        // this pins it defensively for any path that skipped unification.
+        user: user ? { ...user, id: user.publicUserId ?? user.id } : null,
       };
     },
     onError({ error, path }) {
