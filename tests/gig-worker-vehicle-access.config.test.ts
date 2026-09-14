@@ -56,11 +56,11 @@ describe("gig-worker vehicle-access implementation", () => {
   it("registers worker and operator routes with bounded input validation", () => {
     expect(router).toContain("vehicleAccess: router({");
     expect(router).toContain("requestContract: authenticatedProcedure");
-    expect(router).toContain("operateTransition: protectedProcedure");
+    expect(router).toContain("operateTransition: operatorMutationProcedure(\"operate\")");
     expect(router).toMatch(
       /z\.enum\(\[\s*"approve",\s*"handover",\s*"close",\s*"suspend",\s*"begin_safe_return",\s*\]\)/,
     );
-    expect(router).toContain("verifyWorkerEligibility: protectedProcedure");
+    expect(router).toContain("verifyWorkerEligibility: operatorMutationProcedure(\"operate\")");
     expect(router).toContain("allowedWorkCategories");
     expect(router).toContain("sha256Hex");
   });

@@ -46,9 +46,9 @@ describe("stakeholder verification cross-language contracts", () => {
     const page = read("client/src/pages/StakeholderVerification.tsx");
     expect(router).toContain("stakeholderVerification: router");
     expect(router).toContain("startCase: authenticatedProcedure");
-    expect(router).toContain("recordProviderCheck: protectedProcedure");
+    expect(router).toContain("recordProviderCheck: operatorMutationProcedure(\"operate\")");
     expect(router).toContain('"document_forensics"');
-    expect(router).toContain("decideCase: protectedProcedure");
+    expect(router).toContain("decideCase: operatorMutationProcedure(\"operate\")");
     expect(service).toContain("verification.record_evidence");
     expect(service).toContain("verification.decide_case");
     expect(app).toContain('path="/verification"');

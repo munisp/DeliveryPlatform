@@ -120,13 +120,13 @@ describe("vehicle tracker, geofence, and safe control authority", () => {
     for (const route of [
       "trackerOperationsSnapshot: authenticatedProcedure",
       "recordTrackerControlConsent: authenticatedProcedure",
-      "createTrackerProvider: protectedProcedure",
-      "registerAssetTracker: protectedProcedure",
-      "createRentalAssetGeofence: protectedProcedure",
-      "recordRentalPaymentTrackingSignal: protectedProcedure",
-      "requestPreventNextStart: protectedProcedure",
-      "authorizePreventNextStart: protectedProcedure",
-      "cancelPreventNextStart: protectedProcedure",
+      "createTrackerProvider: operatorMutationProcedure(\"operate\")",
+      "registerAssetTracker: operatorMutationProcedure(\"operate\")",
+      "createRentalAssetGeofence: operatorMutationProcedure(\"operate\")",
+      "recordRentalPaymentTrackingSignal: operatorMutationProcedure(\"operate\")",
+      "requestPreventNextStart: operatorMutationProcedure(\"operate\")",
+      "authorizePreventNextStart: operatorMutationProcedure(\"operate\")",
+      "cancelPreventNextStart: operatorMutationProcedure(\"operate\")",
     ]) {
       expect(vehicleAccessRouter).toContain(route);
     }

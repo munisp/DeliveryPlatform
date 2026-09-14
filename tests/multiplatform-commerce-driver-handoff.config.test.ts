@@ -38,8 +38,8 @@ describe("multi-platform commerce driver handoff contracts", () => {
   });
 
   it("exposes typed protected registration and assignment operations", () => {
-    expect(router).toContain("registerExternalPlatform: protectedProcedure");
-    expect(router).toContain("assignDriver: protectedProcedure");
+    expect(router).toContain("registerExternalPlatform: operatorMutationProcedure(\"operate\")");
+    expect(router).toContain("assignDriver: operatorMutationProcedure(\"operate\")");
     expect(router).toContain("at least one sync direction is required");
   });
 });

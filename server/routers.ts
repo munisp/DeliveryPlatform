@@ -4,6 +4,7 @@ import { TRPCError } from "@trpc/server";
 import {
   analyticsReadProcedure,
   authenticatedProcedure,
+  operatorMutationProcedure,
   protectedProcedure,
   publicProcedure,
   router,
@@ -290,7 +291,7 @@ export const appRouter = router({
           forceRefresh: input?.forceRefresh,
         }),
       ),
-    queueReplenishment: protectedProcedure
+    queueReplenishment: operatorMutationProcedure("operate")
       .input(
         z.object({
           city: z.string().trim().min(2).max(128),
@@ -337,7 +338,7 @@ export const appRouter = router({
         }),
       )
       .mutation(({ input }) => queueReplenishmentWorkflow(input)),
-    loyaltyIntervention: protectedProcedure
+    loyaltyIntervention: operatorMutationProcedure("write_platform")
       .input(
         z.object({
           userId: z.number().int().positive(),
@@ -350,7 +351,7 @@ export const appRouter = router({
         }),
       )
       .mutation(({ input }) => applyLoyaltyIntervention(input)),
-    merchantGrowthCampaign: protectedProcedure
+    merchantGrowthCampaign: operatorMutationProcedure("write_platform")
       .input(
         z.object({
           campaignId: z.number().int().positive().optional(),
@@ -460,7 +461,7 @@ export const appRouter = router({
           workOrderId: input.workOrderId,
         }),
       ),
-    upsertServiceArea: protectedProcedure
+    upsertServiceArea: operatorMutationProcedure("operate")
       .input(
         z.object({
           providerId: z.number().int().positive(),
@@ -483,7 +484,7 @@ export const appRouter = router({
       .mutation(({ ctx, input }) =>
         upsertServiceArea({ actorUserId: ctx.user!.id, ...input }),
       ),
-    upsertTechnician: protectedProcedure
+    upsertTechnician: operatorMutationProcedure("operate")
       .input(
         z.object({
           userId: z.number().int().positive(),
@@ -497,7 +498,7 @@ export const appRouter = router({
       .mutation(({ ctx, input }) =>
         upsertTechnician({ actorUserId: ctx.user!.id, ...input }),
       ),
-    setTechnicianServiceArea: protectedProcedure
+    setTechnicianServiceArea: operatorMutationProcedure("operate")
       .input(
         z.object({
           technicianUserId: z.number().int().positive(),
@@ -508,7 +509,7 @@ export const appRouter = router({
       .mutation(({ ctx, input }) =>
         setTechnicianServiceArea({ actorUserId: ctx.user!.id, ...input }),
       ),
-    createWorkOrder: protectedProcedure
+    createWorkOrder: operatorMutationProcedure("operate")
       .input(
         z.object({
           customerId: z.number().int().positive(),
@@ -534,7 +535,7 @@ export const appRouter = router({
       .mutation(({ ctx, input }) =>
         createWorkOrder({ actorUserId: ctx.user!.id, ...input }),
       ),
-    scheduleWorkOrder: protectedProcedure
+    scheduleWorkOrder: operatorMutationProcedure("operate")
       .input(
         z.object({
           workOrderId: z.string().uuid(),
@@ -549,7 +550,7 @@ export const appRouter = router({
       .mutation(({ ctx, input }) =>
         scheduleWorkOrder({ actorUserId: ctx.user!.id, ...input }),
       ),
-    assignWorkOrder: protectedProcedure
+    assignWorkOrder: operatorMutationProcedure("operate")
       .input(
         z.object({
           workOrderId: z.string().uuid(),
@@ -622,7 +623,7 @@ export const appRouter = router({
       .mutation(({ ctx, input }) =>
         completeWorkOrder({ technicianUserId: ctx.user!.id, ...input }),
       ),
-    cancelWorkOrder: protectedProcedure
+    cancelWorkOrder: operatorMutationProcedure("operate")
       .input(
         z.object({
           workOrderId: z.string().uuid(),
@@ -663,7 +664,7 @@ export const appRouter = router({
       .mutation(({ ctx, input }) =>
         declineTransparentDriverOffer({ driverUserId: ctx.user!.id, ...input }),
       ),
-    setEconomicsPolicy: protectedProcedure
+    setEconomicsPolicy: operatorMutationProcedure("write_platform")
       .input(
         z.object({
           zoneId: z.string().uuid(),
@@ -686,7 +687,7 @@ export const appRouter = router({
       .mutation(({ ctx, input }) =>
         setDriverOfferEconomicsPolicy({ actorUserId: ctx.user!.id, ...input }),
       ),
-    setPolicy: protectedProcedure
+    setPolicy: operatorMutationProcedure("write_platform")
       .input(
         z.object({
           zoneId: z.string().uuid(),
@@ -818,7 +819,7 @@ export const appRouter = router({
       .mutation(({ ctx, input }) =>
         enqueueVerificationProcessing({ actorUserId: ctx.user!.id, ...input }),
       ),
-    recordProviderCheck: protectedProcedure
+    recordProviderCheck: operatorMutationProcedure("operate")
       .input(
         z.object({
           caseId: z.string().uuid(),
@@ -865,7 +866,7 @@ export const appRouter = router({
           ...input,
         }),
       ),
-    decideCase: protectedProcedure
+    decideCase: operatorMutationProcedure("operate")
       .input(
         z.object({
           caseId: z.string().uuid(),
@@ -1038,7 +1039,7 @@ export const appRouter = router({
           ...input,
         }),
       ),
-    createProvider: protectedProcedure
+    createProvider: operatorMutationProcedure("operate")
       .input(
         z.object({
           displayName: z.string().trim().min(2).max(160),
@@ -1048,7 +1049,7 @@ export const appRouter = router({
       .mutation(({ ctx, input }) =>
         createFleetProvider({ actorUserId: ctx.user!.id, ...input }),
       ),
-    verifyWorkerEligibility: protectedProcedure
+    verifyWorkerEligibility: operatorMutationProcedure("operate")
       .input(
         z.object({
           workerUserId: z.number().int().positive(),
@@ -1064,7 +1065,7 @@ export const appRouter = router({
       .mutation(({ ctx, input }) =>
         upsertWorkerVehicleEligibility({ actorUserId: ctx.user!.id, ...input }),
       ),
-    registerAsset: protectedProcedure
+    registerAsset: operatorMutationProcedure("operate")
       .input(
         z.object({
           providerId: z.string().uuid(),
@@ -1086,7 +1087,7 @@ export const appRouter = router({
       .mutation(({ ctx, input }) =>
         registerVehicleAsset({ actorUserId: ctx.user!.id, ...input }),
       ),
-    recordAssetEvidence: protectedProcedure
+    recordAssetEvidence: operatorMutationProcedure("operate")
       .input(
         z.object({
           assetId: z.string().uuid(),
@@ -1109,7 +1110,7 @@ export const appRouter = router({
       .mutation(({ ctx, input }) =>
         recordAssetEvidence({ actorUserId: ctx.user!.id, ...input }),
       ),
-    activateAsset: protectedProcedure
+    activateAsset: operatorMutationProcedure("operate")
       .input(
         z.object({
           assetId: z.string().uuid(),
@@ -1122,7 +1123,7 @@ export const appRouter = router({
       .mutation(({ ctx, input }) =>
         activateVehicleAsset({ actorUserId: ctx.user!.id, ...input }),
       ),
-    createOffer: protectedProcedure
+    createOffer: operatorMutationProcedure("operate")
       .input(
         z.object({
           providerId: z.string().uuid(),
@@ -1138,7 +1139,7 @@ export const appRouter = router({
       .mutation(({ ctx, input }) =>
         createVehicleOffer({ actorUserId: ctx.user!.id, ...input }),
       ),
-    createProviderLocation: protectedProcedure
+    createProviderLocation: operatorMutationProcedure("operate")
       .input(
         z.object({
           providerId: z.string().uuid(),
@@ -1161,7 +1162,7 @@ export const appRouter = router({
       .mutation(({ ctx, input }) =>
         createVehicleProviderLocation({ actorUserId: ctx.user!.id, ...input }),
       ),
-    assignAssetLocation: protectedProcedure
+    assignAssetLocation: operatorMutationProcedure("operate")
       .input(
         z.object({
           assetId: z.string().uuid(),
@@ -1175,7 +1176,7 @@ export const appRouter = router({
       .mutation(({ ctx, input }) =>
         assignVehicleAssetLocation({ actorUserId: ctx.user!.id, ...input }),
       ),
-    createAvailabilityBlock: protectedProcedure
+    createAvailabilityBlock: operatorMutationProcedure("operate")
       .input(
         z.object({
           assetId: z.string().uuid(),
@@ -1198,7 +1199,7 @@ export const appRouter = router({
       .mutation(({ ctx, input }) =>
         createVehicleAvailabilityBlock({ actorUserId: ctx.user!.id, ...input }),
       ),
-    cancelAvailabilityBlock: protectedProcedure
+    cancelAvailabilityBlock: operatorMutationProcedure("operate")
       .input(
         z.object({
           availabilityBlockId: z.string().uuid(),
@@ -1212,7 +1213,7 @@ export const appRouter = router({
       .mutation(({ ctx, input }) =>
         cancelVehicleAvailabilityBlock({ actorUserId: ctx.user!.id, ...input }),
       ),
-    createRentalAddOn: protectedProcedure
+    createRentalAddOn: operatorMutationProcedure("operate")
       .input(
         z.object({
           providerId: z.string().uuid(),
@@ -1242,7 +1243,7 @@ export const appRouter = router({
       .mutation(({ ctx, input }) =>
         createVehicleRentalAddOn({ actorUserId: ctx.user!.id, ...input }),
       ),
-    decideExtension: protectedProcedure
+    decideExtension: operatorMutationProcedure("operate")
       .input(
         z.object({
           extensionRequestId: z.string().uuid(),
@@ -1281,7 +1282,7 @@ export const appRouter = router({
           ...input,
         }),
       ),
-    createTrackerProvider: protectedProcedure
+    createTrackerProvider: operatorMutationProcedure("operate")
       .input(
         z.object({
           fleetProviderId: z.string().uuid(),
@@ -1308,7 +1309,7 @@ export const appRouter = router({
       .mutation(({ ctx, input }) =>
         createVehicleTrackerProvider({ actorUserId: ctx.user!.id, ...input }),
       ),
-    registerAssetTracker: protectedProcedure
+    registerAssetTracker: operatorMutationProcedure("operate")
       .input(
         z.object({
           assetId: z.string().uuid(),
@@ -1325,7 +1326,7 @@ export const appRouter = router({
       .mutation(({ ctx, input }) =>
         registerVehicleAssetTracker({ actorUserId: ctx.user!.id, ...input }),
       ),
-    createRentalAssetGeofence: protectedProcedure
+    createRentalAssetGeofence: operatorMutationProcedure("operate")
       .input(
         z.object({
           assetId: z.string().uuid(),
@@ -1373,7 +1374,7 @@ export const appRouter = router({
       .mutation(({ ctx, input }) =>
         createVehicleRentalGeofence({ actorUserId: ctx.user!.id, ...input }),
       ),
-    recordRentalPaymentTrackingSignal: protectedProcedure
+    recordRentalPaymentTrackingSignal: operatorMutationProcedure("operate")
       .input(
         z.object({
           contractId: z.string().uuid(),
@@ -1398,7 +1399,7 @@ export const appRouter = router({
           ...input,
         }),
       ),
-    requestPreventNextStart: protectedProcedure
+    requestPreventNextStart: operatorMutationProcedure("operate")
       .input(
         z.object({
           contractId: z.string().uuid(),
@@ -1416,7 +1417,7 @@ export const appRouter = router({
       .mutation(({ ctx, input }) =>
         requestVehiclePreventNextStart({ actorUserId: ctx.user!.id, ...input }),
       ),
-    authorizePreventNextStart: protectedProcedure
+    authorizePreventNextStart: operatorMutationProcedure("operate")
       .input(
         z.object({
           controlCaseId: z.string().uuid(),
@@ -1432,7 +1433,7 @@ export const appRouter = router({
           ...input,
         }),
       ),
-    cancelPreventNextStart: protectedProcedure
+    cancelPreventNextStart: operatorMutationProcedure("operate")
       .input(
         z.object({
           controlCaseId: z.string().uuid(),
@@ -1446,7 +1447,7 @@ export const appRouter = router({
       .mutation(({ ctx, input }) =>
         cancelVehiclePreventNextStart({ actorUserId: ctx.user!.id, ...input }),
       ),
-    operateTransition: protectedProcedure
+    operateTransition: operatorMutationProcedure("operate")
       .input(
         z.object({
           contractId: z.string().uuid(),
@@ -1491,7 +1492,7 @@ export const appRouter = router({
       .query(({ ctx, input }) =>
         getMerchantCommerceProfile({ actorUserId: ctx.user!.id, ...input }),
       ),
-    decideOnboarding: protectedProcedure
+    decideOnboarding: operatorMutationProcedure("operate")
       .input(
         z.object({
           providerId: z.number().int().positive(),
@@ -1568,7 +1569,7 @@ export const appRouter = router({
           limit: input?.limit,
         }),
       ),
-    transition: protectedProcedure
+    transition: operatorMutationProcedure("operate")
       .input(
         z.object({
           fulfillmentId: z.string().uuid(),
@@ -1590,7 +1591,7 @@ export const appRouter = router({
       .mutation(({ ctx, input }) =>
         transitionCommerceFulfillment({ actorUserId: ctx.user!.id, ...input }),
       ),
-    assignDriver: protectedProcedure
+    assignDriver: operatorMutationProcedure("operate")
       .input(
         z.object({
           fulfillmentId: z.string().uuid(),
@@ -1602,7 +1603,7 @@ export const appRouter = router({
       .mutation(({ ctx, input }) =>
         assignCommerceFulfillmentDriver({ actorUserId: ctx.user!.id, ...input }),
       ),
-    registerExternalPlatform: protectedProcedure
+    registerExternalPlatform: operatorMutationProcedure("operate")
       .input(
         z.object({
           providerId: z.number().int().positive(),
@@ -1616,7 +1617,7 @@ export const appRouter = router({
       .mutation(({ ctx, input }) =>
         registerExternalCommerceConnection({ actorUserId: ctx.user!.id, ...input }),
       ),
-    upsertMedusaStore: protectedProcedure
+    upsertMedusaStore: operatorMutationProcedure("operate")
       .input(
         z.object({
           providerId: z.number().int().positive(),
@@ -1645,7 +1646,7 @@ export const appRouter = router({
       .query(({ ctx, input }) =>
         listDeveloperWebhookEndpoints({ actorUserId: ctx.user!.id, ...input }),
       ),
-    createClient: protectedProcedure
+    createClient: operatorMutationProcedure("write_platform")
       .input(
         z.object({
           providerId: z.number().int().positive(),
@@ -1655,7 +1656,7 @@ export const appRouter = router({
       .mutation(({ ctx, input }) =>
         createDeveloperApiClient({ actorUserId: ctx.user!.id, ...input }),
       ),
-    createKey: protectedProcedure
+    createKey: operatorMutationProcedure("write_platform")
       .input(
         z.object({
           apiClientId: z.string().uuid(),
@@ -1679,12 +1680,12 @@ export const appRouter = router({
           expiresAt: input.expiresAt ?? null,
         }),
       ),
-    revokeKey: protectedProcedure
+    revokeKey: operatorMutationProcedure("write_platform")
       .input(z.object({ apiKeyId: z.string().uuid() }))
       .mutation(({ ctx, input }) =>
         revokeDeveloperApiKey({ actorUserId: ctx.user!.id, ...input }),
       ),
-    createWebhookEndpoint: protectedProcedure
+    createWebhookEndpoint: operatorMutationProcedure("write_platform")
       .input(
         z.object({
           apiClientId: z.string().uuid(),
@@ -1840,7 +1841,7 @@ export const appRouter = router({
           dispatchReply: input.dispatchReply,
         }),
       ),
-    executeAction: protectedProcedure
+    executeAction: operatorMutationProcedure("write_platform")
       .input(
         z.object({
           sessionId: z.string().uuid().optional(),
