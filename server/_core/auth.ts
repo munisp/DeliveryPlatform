@@ -4,6 +4,7 @@ import { createRemoteJWKSet, jwtVerify, SignJWT } from "jose";
 
 import { COOKIE_NAME } from "../../shared/const";
 import { ENV } from "./env";
+import { tokensEqual } from "./security";
 import type { SessionUser } from "./trpc";
 
 const encoder = new TextEncoder();
@@ -231,7 +232,11 @@ async function verifyExternalJwt(token: string, expectedNonce?: string): Promise
       audience: ENV.oidcAudience || ENV.oidcClientId,
     });
 
-    if (expectedNonce && payload.nonce !== expectedNonce) {
+    if (
+      expectedNonce &&
+      (typeof payload.nonce !== "string" ||
+        !tokensEqual(payload.nonce, expectedNonce))
+    ) {
       return null;
     }
     return toSessionUser(payload as Record<string, unknown>);

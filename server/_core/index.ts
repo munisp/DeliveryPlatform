@@ -1,7 +1,7 @@
 import cookieParser from "cookie-parser";
 import express from "express";
 import { createHTTPHandler } from "@trpc/server/adapters/standalone";
-import { randomUUID, timingSafeEqual } from "crypto";
+import { randomUUID } from "crypto";
 import { fileURLToPath } from "url";
 import path from "path";
 
@@ -13,6 +13,7 @@ import {
 } from "./longcatVoice";
 import { COOKIE_NAME } from "../../shared/const";
 import { ENV } from "./env";
+import { tokensEqual } from "./security";
 import { getCookieOptions } from "./cookies";
 import {
   buildOidcAuthorizationUrl,
@@ -304,19 +305,6 @@ function applyCors(req: express.Request, res: express.Response) {
     );
     res.setHeader("Vary", "Origin");
   }
-}
-
-// Constant-time token comparison. A length mismatch still burns a
-// timingSafeEqual against a same-length buffer so the early return does not
-// leak the expected token length.
-function tokensEqual(provided: string, expected: string): boolean {
-  const a = Buffer.from(provided, "utf8");
-  const b = Buffer.from(expected, "utf8");
-  if (a.length !== b.length) {
-    timingSafeEqual(a, a);
-    return false;
-  }
-  return timingSafeEqual(a, b);
 }
 
 function requireInternalServiceAccess(
@@ -825,7 +813,7 @@ app.get("/api/auth/oidc/callback", rateLimit(30), async (req, res) => {
     !code ||
     !state ||
     !storedState ||
-    state !== storedState ||
+    !tokensEqual(state, storedState) ||
     !storedNonce ||
     !storedVerifier
   ) {
