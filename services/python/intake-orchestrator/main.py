@@ -8,15 +8,29 @@ SERVICE_ROOT = Path(__file__).resolve().parents[1]
 if str(SERVICE_ROOT) not in sys.path:
     sys.path.insert(0, str(SERVICE_ROOT))
 
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Response
 from pydantic import BaseModel
 
 from durable_run_store import DurableRunStore
 from service import IntakeOrchestratorService, IntakeRequest
 
+_SHARED_DIR = Path(__file__).resolve().parent.parent / "shared"
+if str(_SHARED_DIR) not in sys.path:
+    sys.path.insert(0, str(_SHARED_DIR))
+
+from switchos_resilience import MetricsRegistry
+
 INTERNAL_SERVICE_TOKEN = os.getenv("INTERNAL_SERVICE_TOKEN", "").strip()
 
 app = FastAPI(title="SwitchOS Intake Orchestrator", version="1.0.0")
+_metrics = MetricsRegistry("intake-orchestrator", os.getenv("SERVICE_VERSION", "1.0.0"))
+app.middleware("http")(_metrics.fastapi_middleware())
+
+
+@app.get("/metrics")
+async def metrics() -> Response:
+    return Response(content=_metrics.render(), media_type="text/plain; version=0.0.4; charset=utf-8")
+
 service = IntakeOrchestratorService()
 execution_store = DurableRunStore("intake-orchestrator")
 

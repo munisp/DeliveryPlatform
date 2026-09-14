@@ -2,6 +2,7 @@ import { createHash, randomBytes, randomUUID } from "crypto";
 import { Pool } from "pg";
 
 import { ENV } from "./env";
+import { resilientFetch } from "./resilientFetch";
 
 let pool: Pool | null = null;
 
@@ -58,7 +59,7 @@ function medusaUrl(path: string) {
 }
 
 async function medusaRequest<T>(path: string, init: RequestInit): Promise<T> {
-  const response = await fetch(medusaUrl(path), {
+  const response = await resilientFetch(medusaUrl(path), {
     ...init,
     headers: {
       Authorization: `Basic ${ENV.medusaMerchantApiToken}`,

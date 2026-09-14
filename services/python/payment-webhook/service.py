@@ -18,6 +18,15 @@ import requests
 
 from correlation import begin_request_context, correlation_fields, restore_request_context
 
+import sys as _sys
+from pathlib import Path as _Path
+
+_SHARED_DIR = _Path(__file__).resolve().parents[1] / "shared"
+if str(_SHARED_DIR) not in _sys.path:
+    _sys.path.insert(0, str(_SHARED_DIR))
+
+from switchos_resilience import ResilientSession
+
 LOGGER = logging.getLogger("payment-webhook")
 
 
@@ -135,7 +144,16 @@ class ProviderClient:
     def __init__(self, config: PaymentConfig, request: Callable[..., requests.Response] = requests.request) -> None:
         self._config = config
         self._request = request
-        self._session = requests.Session() if request is requests.request else None
+        self._session = (
+            ResilientSession(
+                default_timeout=config.request_timeout_seconds,
+                max_attempts=3,
+                failure_threshold=5,
+                reset_timeout_seconds=30.0,
+            )
+            if request is requests.request
+            else None
+        )
 
     def verify_collection(self, reference: str) -> VerifiedCollection:
         body = self._verified_get(self._config.verify_url_template.format(reference=reference))

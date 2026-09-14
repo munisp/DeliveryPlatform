@@ -33,6 +33,13 @@ import {
   buildMerchantConsultant,
   buildDispatchIntelligence,
 } from "../server/_core/longcat";
+import { resetBreakers } from "../server/_core/resilientFetch";
+
+// Each test installs a fresh fetch mock against the same mock model host, so
+// the shared per-host circuit breakers must reset between tests.
+beforeEach(() => {
+  resetBreakers();
+});
 
 // --- Test Fixtures ---
 

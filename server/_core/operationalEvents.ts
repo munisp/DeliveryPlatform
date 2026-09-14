@@ -1,6 +1,7 @@
 import { Kafka, logLevel, type Producer } from "kafkajs";
 import { Pool } from "pg";
 import { ENV } from "./env";
+import { resilientFetch } from "./resilientFetch";
 
 type OperationalEvent = {
   eventType: string;
@@ -189,7 +190,7 @@ async function publishToDapr(event: OperationalEvent) {
     return { attempted: false };
   }
 
-  const response = await fetch(
+  const response = await resilientFetch(
     `http://127.0.0.1:${ENV.daprHttpPort}/v1.0/publish/${ENV.daprPubsubName}/${ENV.daprOperationalEventsTopic}`,
     {
       method: "POST",
@@ -214,7 +215,7 @@ async function indexInOpenSearch(event: OperationalEvent) {
   }
 
   const baseUrl = ENV.opensearchUrl.replace(/\/$/, "");
-  const response = await fetch(`${baseUrl}/${ENV.opensearchOperationalEventsIndex}/_doc`, {
+  const response = await resilientFetch(`${baseUrl}/${ENV.opensearchOperationalEventsIndex}/_doc`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",

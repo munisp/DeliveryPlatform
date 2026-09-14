@@ -21,6 +21,8 @@ use std::{
 use tokio_postgres::{Client, NoTls};
 use tracing::{info, info_span, Instrument, Level};
 
+mod metrics;
+
 const RESILIENCE_RUN_HEADER: &str = "x-resilience-run-id";
 const REQUEST_ID_HEADER: &str = "x-request-id";
 
@@ -379,9 +381,12 @@ async fn main() {
         .route("/supply-shock-rebalance", post(supply_shock_rebalance))
         .route("/operations/route-plans", post(create_route_plan))
         .route_layer(middleware::from_fn_with_state(state.clone(), require_internal_access_middleware));
+    metrics::init("switchos-dispatch-optimizer");
     let app = Router::new()
         .route("/health", get(health))
+        .route("/metrics", get(metrics::handler))
         .merge(protected_routes)
+        .layer(middleware::from_fn(metrics::track))
         .layer(middleware::from_fn_with_state(state.clone(), correlation_middleware))
         .with_state(state);
 

@@ -9,6 +9,15 @@ from contextlib import asynccontextmanager, suppress
 from fastapi import FastAPI, Header, HTTPException, Request, Response
 
 from correlation import begin_request_context, log_event, restore_request_context
+
+import sys
+from pathlib import Path
+
+_SHARED_DIR = Path(__file__).resolve().parent.parent / "shared"
+if str(_SHARED_DIR) not in sys.path:
+    sys.path.insert(0, str(_SHARED_DIR))
+
+from switchos_resilience import MetricsRegistry
 from service import (
     InvalidWebhookSignature,
     PaymentConfig,
@@ -46,6 +55,13 @@ def create_app(config: PaymentConfig) -> FastAPI:
             await asyncio.to_thread(service.close)
 
     app = FastAPI(title="SwitchOS Ride Payment Webhook", version="1.0.0", lifespan=lifespan)
+
+    metrics_registry = MetricsRegistry("payment-webhook", os.getenv("SERVICE_VERSION", "1.0.0"))
+    app.middleware("http")(metrics_registry.fastapi_middleware())
+
+    @app.get("/metrics")
+    async def metrics() -> Response:
+        return Response(content=metrics_registry.render(), media_type="text/plain; version=0.0.4; charset=utf-8")
 
     @app.get("/health")
     async def health() -> dict[str, str]:

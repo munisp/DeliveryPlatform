@@ -15,6 +15,7 @@ import (
 	"time"
 
 	_ "github.com/lib/pq"
+	sharedmetrics "switchos-metrics"
 )
 
 type ProvisioningRequest struct {
@@ -77,13 +78,15 @@ func main() {
 		log.Fatal(err)
 	}
 
+	httpMetrics := sharedmetrics.New("vertical-provisioning", getEnv("SERVICE_VERSION", ""))
 	mux := http.NewServeMux()
+	mux.Handle("/metrics", httpMetrics.Handler())
 	mux.HandleFunc("/health", service.healthHandler)
 	mux.HandleFunc("/assess-launch", service.readinessHandler)
 
 	server := &http.Server{
 		Addr:              bindHost + ":" + port,
-		Handler:           mux,
+		Handler:           httpMetrics.Middleware(mux),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 

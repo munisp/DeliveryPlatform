@@ -1,3 +1,5 @@
+import { resilientFetch } from "./resilientFetch";
+
 type PushPayload = {
   title: string;
   body: string;
@@ -35,7 +37,7 @@ async function deliverViaGateway(
   token: string,
   payload: PushPayload,
 ): Promise<PushAttemptResult> {
-  const response = await fetch(gatewayUrl, {
+  const response = await resilientFetch(gatewayUrl, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",

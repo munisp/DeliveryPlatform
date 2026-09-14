@@ -12,10 +12,15 @@ from loguru import logger
 
 class LakehouseService:
     def __init__(self) -> None:
-        self.database_url = os.getenv(
-            "DATABASE_URL",
-            "postgresql://ubuntu:ubuntu@127.0.0.1:5432/switchos?sslmode=disable",
-        )
+        # Fail fast with the named missing variable instead of falling back to
+        # an embedded credential.
+        database_url = os.getenv("DATABASE_URL", "").strip()
+        if not database_url:
+            raise RuntimeError(
+                "missing required environment variable: DATABASE_URL "
+                "(lakehouse database DSN must be explicitly configured)"
+            )
+        self.database_url = database_url
         self.schema_name = os.getenv("LAKEHOUSE_SCHEMA", "switchos_lakehouse")
 
     async def initialize(self) -> None:

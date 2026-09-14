@@ -20,10 +20,16 @@ SERVICE_ROOT = Path(__file__).resolve().parents[1]
 if str(SERVICE_ROOT) not in sys.path:
     sys.path.insert(0, str(SERVICE_ROOT))
 
-from fastapi import FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect, status
+from fastapi import FastAPI, Header, HTTPException, Response, WebSocket, WebSocketDisconnect, status
 from fastapi.middleware.cors import CORSMiddleware
 
 from durable_run_store import DurableRunStore
+
+_SHARED_DIR = Path(__file__).resolve().parent.parent / "shared"
+if str(_SHARED_DIR) not in sys.path:
+    sys.path.insert(0, str(_SHARED_DIR))
+
+from switchos_resilience import MetricsRegistry
 
 
 ALLOWED_ORIGINS = [
@@ -52,6 +58,15 @@ app = FastAPI(
     description="Self-hosted speech runtime for LongCat telephony ingress using open-source STT and TTS engines.",
     version="1.1.0",
 )
+
+_metrics = MetricsRegistry("speech-runtime", os.getenv("SERVICE_VERSION", "1.1.0"))
+app.middleware("http")(_metrics.fastapi_middleware())
+
+
+@app.get("/metrics")
+async def metrics() -> Response:
+    return Response(content=_metrics.render(), media_type="text/plain; version=0.0.4; charset=utf-8")
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,

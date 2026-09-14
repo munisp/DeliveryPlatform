@@ -25,6 +25,9 @@ import (
 	"time"
 
 	_ "github.com/lib/pq"
+
+	sharedmetrics "switchos-metrics"
+	"switchos-resilience"
 )
 
 type config struct {
@@ -372,10 +375,13 @@ func main() {
 		log.Fatal(err)
 	}
 	defer db.Close()
-	client := &http.Client{Timeout: 25 * time.Second}
+	client := resilience.NewClient(25*time.Second,
+		resilience.RetryPolicy{MaxAttempts: 3, BackoffBase: 100 * time.Millisecond, BackoffMax: 2 * time.Second},
+		resilience.BreakerConfig{FailureThreshold: 5, ResetTimeout: 30 * time.Second, HalfOpenMaxProbes: 1})
 	metrics := &orchestratorMetrics{}
+	httpMetrics := sharedmetrics.New("verification-orchestrator", os.Getenv("SERVICE_VERSION"))
 	mux := http.NewServeMux()
-	mux.HandleFunc("/metrics", metrics.serveHTTP)
+	mux.Handle("/metrics", httpMetrics.Handler(http.HandlerFunc(metrics.serveHTTP)))
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.NotFound(w, r)
@@ -427,7 +433,7 @@ func main() {
 	if address == "" {
 		address = "127.0.0.1:8121"
 	}
-	server := &http.Server{Addr: address, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	server := &http.Server{Addr: address, Handler: httpMetrics.Middleware(mux), ReadHeaderTimeout: 5 * time.Second}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
