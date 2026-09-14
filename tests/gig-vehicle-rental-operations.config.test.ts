@@ -118,22 +118,22 @@ describe("gig vehicle-rental operations", () => {
       "requestExtension: authenticatedProcedure",
     );
     expect(vehicleAccessRouter).toContain(
-      "createProviderLocation: protectedProcedure",
+      "createProviderLocation: operatorMutationProcedure(\"operate\")",
     );
     expect(vehicleAccessRouter).toContain(
-      "createAvailabilityBlock: protectedProcedure",
+      "createAvailabilityBlock: operatorMutationProcedure(\"operate\")",
     );
     expect(vehicleAccessRouter).toContain(
-      "assignAssetLocation: protectedProcedure",
+      "assignAssetLocation: operatorMutationProcedure(\"operate\")",
     );
     expect(vehicleAccessRouter).toContain(
-      "cancelAvailabilityBlock: protectedProcedure",
+      "cancelAvailabilityBlock: operatorMutationProcedure(\"operate\")",
     );
     expect(vehicleAccessRouter).toContain(
-      "createRentalAddOn: protectedProcedure",
+      "createRentalAddOn: operatorMutationProcedure(\"operate\")",
     );
     expect(vehicleAccessRouter).toContain(
-      "decideExtension: protectedProcedure",
+      "decideExtension: operatorMutationProcedure(\"operate\")",
     );
     expect(vehicleAccessRouter).toContain("agreementSha256Hex");
     expect(vehicleAccessRouter).toContain("acceptanceSha256Hex");

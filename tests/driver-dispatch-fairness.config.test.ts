@@ -68,8 +68,8 @@ describe("driver dispatch fairness controls", () => {
     expect(router).toContain("listMyOffers: authenticatedProcedure");
     expect(router).toContain("declineOffer: authenticatedProcedure");
     expect(router).toContain("driverUserId: ctx.user!.id");
-    expect(router).toContain("setPolicy: protectedProcedure");
-    expect(router).toContain("setEconomicsPolicy: protectedProcedure");
+    expect(router).toContain("setPolicy: operatorMutationProcedure(\"write_platform\")");
+    expect(router).toContain("setEconomicsPolicy: operatorMutationProcedure(\"write_platform\")");
     expect(router).toContain(
       "fuelCostIndexBp: z.number().int().min(5000).max(30000)",
     );

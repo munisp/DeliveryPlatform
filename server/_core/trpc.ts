@@ -138,3 +138,32 @@ export const protectedProcedure = authenticatedProcedure.use(requireOperator);
 export const platformReadProcedure = protectedProcedure.use(requirePolicy("read_platform", "tenant"));
 export const analyticsReadProcedure = protectedProcedure.use(requirePolicy("read_analytics", "tenant"));
 export const workspaceReadProcedure = protectedProcedure.use(requirePolicy("read", "workspace", () => "switchos-operator-workspaces"));
+
+/**
+ * Privileged policy keys available to operator-side mutating procedures.
+ * Both keys are classified as privileged by requirePolicy, so every
+ * operatorMutationProcedure enforces a fresh MFA assertion in addition to
+ * the operator-role check and the policy grant.
+ */
+export type OperatorMutationPolicyKey = "operate" | "write_platform";
+
+/**
+ * Tier for operator-side sensitive mutations (vehicle immobilizer/tracker
+ * safety controls, rental contract operator transitions, fulfillment/order
+ * admin, settlement/payout/finance admin, trust/experiment console actions).
+ *
+ * Composition: protectedProcedure (authenticated operator role)
+ *   + requirePolicy(policyKey) which adds the MFA assertion for privileged
+ *     permissions and the Permify/OPA (or scope-fallback) policy grant.
+ *
+ * - "operate"        -> workspace-scoped operational mutations
+ * - "write_platform" -> tenant/platform-wide admin and financial mutations
+ */
+export function operatorMutationProcedure(policyKey: OperatorMutationPolicyKey) {
+  if (policyKey === "write_platform") {
+    return protectedProcedure.use(requirePolicy("write_platform", "tenant"));
+  }
+  return protectedProcedure.use(
+    requirePolicy("operate", "workspace", () => "switchos-operator-workspaces"),
+  );
+}

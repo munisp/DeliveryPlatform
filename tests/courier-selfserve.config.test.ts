@@ -31,6 +31,7 @@ describe("courier self-serve portal", () => {
     expect(router).not.toContain("publicProcedure");
     expect(router).not.toContain("workspaceReadProcedure");
     expect(router).not.toContain("protectedProcedure");
+    expect(router).not.toContain("operatorMutationProcedure");
     // myDriverProfile, myIncentives, mySettlements, myPerformance,
     // myMarketplaceProfile, myVehicleOffers, myVehicleContracts,
     // myRentalAddOns, myRentalCharges, requestRental,
