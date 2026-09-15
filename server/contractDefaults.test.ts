@@ -1,0 +1,220 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const dbMocks = vi.hoisted(() => ({
+  getPool: vi.fn(),
+}));
+const councilMocks = vi.hoisted(() => ({
+  postConsultation: vi.fn(),
+  assertConsultationEligible: vi.fn(),
+}));
+
+vi.mock("../server/db", () => dbMocks);
+vi.mock("../server/_core/workerCouncil", () => councilMocks);
+
+import {
+  DEFAULT_DISPUTE_FORUM,
+  DEFAULT_GOVERNING_LAW,
+  getContractDefaults,
+  publishContractDefaults,
+  setContractDefaults,
+} from "./_core/contractDefaults";
+
+type QueryResult = { rows: unknown[]; rowCount?: number };
+
+function createPool(
+  handlers: Array<{ match: RegExp; result: QueryResult | (() => QueryResult) }>,
+) {
+  const calls: Array<{ text: string; values: unknown[] }> = [];
+  return {
+    calls,
+    query: vi.fn(async (text: string, values: unknown[] = []) => {
+      calls.push({ text, values });
+      const handler = handlers.find((candidate) => candidate.match.test(text));
+      if (!handler) return { rows: [], rowCount: 0 };
+      return typeof handler.result === "function"
+        ? handler.result()
+        : handler.result;
+    }),
+  };
+}
+
+const JURISDICTION = {
+  id: "jur-1",
+  market_id: "lagos",
+  governing_law: "Federal Republic of Nigeria",
+  dispute_forum: "Lagos, Nigeria courts",
+  consumer_protection_overrides: {},
+  effective_from: new Date().toISOString(),
+  published: false,
+  consultation_id: null,
+  created_at: new Date().toISOString(),
+  updated_at: new Date().toISOString(),
+};
+
+beforeEach(() => {
+  vi.resetAllMocks();
+});
+
+describe("Nigerian-law defaults (R15)", () => {
+  it("hard constants are Nigerian law and Lagos courts", () => {
+    expect(DEFAULT_GOVERNING_LAW).toBe("Federal Republic of Nigeria");
+    expect(DEFAULT_DISPUTE_FORUM).toBe("Lagos, Nigeria courts");
+  });
+
+  it("a market without a row resolves to the Nigerian defaults", async () => {
+    const pool = createPool([
+      {
+        match: /FROM public\.contract_jurisdictions WHERE market_id/,
+        result: { rows: [] },
+      },
+    ]);
+    dbMocks.getPool.mockResolvedValue(pool);
+    const defaults = await getContractDefaults("kano");
+    expect(defaults.governingLaw).toBe("Federal Republic of Nigeria");
+    expect(defaults.disputeForum).toBe("Lagos, Nigeria courts");
+    expect(defaults.isDefault).toBe(true);
+    expect(defaults.published).toBe(false);
+  });
+
+  it("returns the stored row when one exists", async () => {
+    const pool = createPool([
+      {
+        match: /FROM public\.contract_jurisdictions WHERE market_id/,
+        result: { rows: [{ ...JURISDICTION, published: true }] },
+      },
+    ]);
+    dbMocks.getPool.mockResolvedValue(pool);
+    const defaults = await getContractDefaults("lagos");
+    expect(defaults.isDefault).toBe(false);
+    expect(defaults.published).toBe(true);
+  });
+});
+
+describe("setContractDefaults", () => {
+  it("upserts with Nigerian defaults when fields are omitted and auto-posts a council consultation", async () => {
+    const pool = createPool([
+      {
+        match: /INSERT INTO public\.contract_jurisdictions/,
+        result: { rows: [JURISDICTION] },
+      },
+      {
+        match: /UPDATE public\.contract_jurisdictions/,
+        result: { rows: [{ ...JURISDICTION, consultation_id: "cons-1" }] },
+      },
+    ]);
+    dbMocks.getPool.mockResolvedValue(pool);
+    councilMocks.postConsultation.mockResolvedValue({ id: "cons-1" });
+
+    const result = await setContractDefaults(7, { marketId: "lagos" });
+    expect(result.consultationId).toBe("cons-1");
+
+    const upsert = pool.calls.find((call) =>
+      /INSERT INTO public\.contract_jurisdictions/.test(call.text),
+    );
+    expect(upsert!.values[0]).toBe("lagos");
+    expect(upsert!.values[1]).toBe("Federal Republic of Nigeria");
+    expect(upsert!.values[2]).toBe("Lagos, Nigeria courts");
+
+    expect(councilMocks.postConsultation).toHaveBeenCalledWith(
+      7,
+      expect.objectContaining({
+        kind: "other",
+        payload: expect.objectContaining({ market_id: "lagos" }),
+      }),
+    );
+  });
+
+  it("re-publication resets published to false until the gate clears again", async () => {
+    const pool = createPool([
+      {
+        match: /INSERT INTO public\.contract_jurisdictions/,
+        result: { rows: [JURISDICTION] },
+      },
+    ]);
+    dbMocks.getPool.mockResolvedValue(pool);
+    councilMocks.postConsultation.mockRejectedValue(new Error("council down"));
+
+    const result = await setContractDefaults(7, {
+      marketId: "lagos",
+      disputeForum: "Abuja, Nigeria courts",
+    });
+    expect(result.consultationId).toBeNull(); // fail-open
+    const upsert = pool.calls.find((call) =>
+      /INSERT INTO public\.contract_jurisdictions/.test(call.text),
+    );
+    expect(upsert!.text).toContain("published = false");
+    expect(upsert!.values[2]).toBe("Abuja, Nigeria courts");
+  });
+});
+
+describe("publishContractDefaults (consultation gate)", () => {
+  it("publishes once the consultation is activated/SLA-eligible", async () => {
+    councilMocks.assertConsultationEligible.mockResolvedValue({
+      id: "cons-1",
+      status: "activated",
+    });
+    const pool = createPool([
+      {
+        match: /UPDATE public\.contract_jurisdictions/,
+        result: {
+          rows: [
+            { ...JURISDICTION, published: true, consultation_id: "cons-1" },
+          ],
+        },
+      },
+    ]);
+    dbMocks.getPool.mockResolvedValue(pool);
+
+    const row = await publishContractDefaults(7, {
+      marketId: "lagos",
+      consultationId: "cons-1",
+    });
+    expect(row.published).toBe(true);
+    expect(councilMocks.assertConsultationEligible).toHaveBeenCalledWith(
+      "cons-1",
+      "other",
+    );
+  });
+
+  it("refuses to publish when the consultation gate is unmet", async () => {
+    councilMocks.assertConsultationEligible.mockRejectedValue(
+      Object.assign(new Error("consultation_gate_unmet"), {
+        code: "CONFLICT",
+      }),
+    );
+    const pool = createPool([]);
+    dbMocks.getPool.mockResolvedValue(pool);
+
+    await expect(
+      publishContractDefaults(7, {
+        marketId: "lagos",
+        consultationId: "cons-1",
+      }),
+    ).rejects.toThrowError(/consultation_gate_unmet/);
+    expect(
+      pool.calls.some((call) =>
+        /UPDATE public\.contract_jurisdictions/.test(call.text),
+      ),
+    ).toBe(false);
+  });
+
+  it("is NOT_FOUND for a market with no jurisdiction row", async () => {
+    councilMocks.assertConsultationEligible.mockResolvedValue({
+      id: "cons-1",
+      status: "activated",
+    });
+    const pool = createPool([
+      {
+        match: /UPDATE public\.contract_jurisdictions/,
+        result: { rows: [] },
+      },
+    ]);
+    dbMocks.getPool.mockResolvedValue(pool);
+    await expect(
+      publishContractDefaults(7, {
+        marketId: "nowhere",
+        consultationId: "cons-1",
+      }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+});

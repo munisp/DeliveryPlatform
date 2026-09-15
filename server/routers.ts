@@ -151,6 +151,9 @@ import { pricingTransparencyRouter } from "./_core/pricingTransparencyRouter";
 import { safetyRouter } from "./_core/safetyRouter";
 import { incentivesRouter } from "./_core/incentivesRouter";
 import { protectionRouter } from "./_core/protectionRouter";
+import { transitionRouter } from "./_core/transitionRouter";
+import { portabilityRouter } from "./_core/portabilityRouter";
+import { contractDefaultsRouter } from "./_core/contractDefaultsRouter";
 import { postConsultation } from "./_core/workerCouncil";
 
 /**
@@ -1963,6 +1966,12 @@ export const appRouter = router({
   incentives: incentivesRouter,
 
   protection: protectionRouter,
+
+  transition: transitionRouter,
+
+  portability: portabilityRouter,
+
+  contractDefaults: contractDefaultsRouter,
 });
 
 export type AppRouter = typeof appRouter;
