@@ -143,6 +143,9 @@ import {
 import { getMerchantOnboardingProgress } from "./_core/merchantOnboarding";
 import { selfserveRouter } from "./_core/selfserveRouter";
 import { consumerRouter } from "./_core/consumerRouter";
+import { riderVerificationRouter } from "./_core/riderVerificationRouter";
+import { deactivationRouter } from "./_core/deactivationRouter";
+import { councilRouter } from "./_core/councilRouter";
 
 const listInput = z
   .object({ limit: z.number().min(1).max(25).optional() })
@@ -1897,6 +1900,12 @@ export const appRouter = router({
   selfserve: selfserveRouter,
 
   consumer: consumerRouter,
+
+  riderVerification: riderVerificationRouter,
+
+  deactivation: deactivationRouter,
+
+  council: councilRouter,
 });
 
 export type AppRouter = typeof appRouter;
