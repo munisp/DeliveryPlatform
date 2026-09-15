@@ -77,6 +77,7 @@ import {
   createVehicleAvailabilityBlock,
   createVehicleProviderLocation,
   createVehicleRentalAddOn,
+  createVehicleOffer,
   createVehicleRentalGeofence,
   createVehicleTrackerProvider,
   decideVehicleContractExtension,
@@ -1223,7 +1224,7 @@ export const appRouter = router({
         }),
       )
       .mutation(({ ctx, input }) =>
-        assignAssetLocation({ actorUserId: ctx.user!.id, ...input }),
+        assignVehicleAssetLocation({ actorUserId: ctx.user!.id, ...input }),
       ),
     createAvailabilityBlock: operatorMutationProcedure("operate")
       .input(
