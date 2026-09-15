@@ -68,6 +68,24 @@ export default function TabLayout() {
         }}
       />
       <Tabs.Screen
+        name="safety"
+        options={{
+          title: "Safety",
+          tabBarIcon: ({ color }) => (
+            <IconSymbol size={24} name="sos" color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="trust"
+        options={{
+          title: "Trust",
+          tabBarIcon: ({ color }) => (
+            <IconSymbol size={24} name="checkmark.shield.fill" color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
         name="growth"
         options={{
           href: isAdministrator ? undefined : null,
