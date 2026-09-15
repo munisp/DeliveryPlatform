@@ -143,6 +143,9 @@ import {
 import { getMerchantOnboardingProgress } from "./_core/merchantOnboarding";
 import { selfserveRouter } from "./_core/selfserveRouter";
 import { consumerRouter } from "./_core/consumerRouter";
+import { riderVerificationRouter } from "./_core/riderVerificationRouter";
+import { deactivationRouter } from "./_core/deactivationRouter";
+import { councilRouter } from "./_core/councilRouter";
 
 const listInput = z
   .object({ limit: z.number().min(1).max(25).optional() })
@@ -306,11 +309,11 @@ export const appRouter = router({
             .array(
               z.object({
                 sku: z.string().trim().min(1).max(128),
-                label: z.string().trim().max(255).optional(),
-                category: z.string().trim().max(128).optional(),
+                label: z.string().trim().max(255),
+                category: z.string().trim().max(128),
                 warehouseId: z.number().int().positive(),
                 warehouseLabel: z.string().trim().min(1).max(255),
-                zoneKey: z.string().trim().max(128).optional(),
+                zoneKey: z.string().trim().max(64).optional(),
                 currentAvailableUnits: z.number().nonnegative(),
                 currentReservedUnits: z.number().nonnegative().optional(),
                 currentInboundUnits: z.number().nonnegative().optional(),
@@ -386,16 +389,27 @@ export const appRouter = router({
               z.object({
                 sku: z.string().trim().min(1).max(128),
                 quantity: z.number().positive(),
-                label: z.string().trim().min(1).max(255).optional(),
-                category: z.string().trim().min(1).max(128).optional(),
+                label: z.string().trim().min(1).max(255),
+                category: z.string().trim().min(2).max(64).optional(),
                 onHandUnits: z.number().min(0).optional(),
                 reservedUnits: z.number().min(0).optional(),
                 inboundUnits: z.number().min(0).optional(),
                 leadTimeHours: z.number().min(1).max(240).optional(),
                 eventMultiplier: z.number().min(0.5).max(3).optional(),
-                weatherMultiplier: z.number().min(0.5).max(2).optional(),
-                substitutionGroup: z.string().trim().min(1).max(128).optional(),
+                weatherMultiplier: z.number().min(0.5).max(3).optional(),
                 coldChainRequired: z.boolean().optional(),
+                coldChainReady: z.boolean().optional(),
+                stockAccuracy: z.number().min(0).max(1).optional(),
+                inventory: z
+                  .array(
+                    z.object({
+                      sku: z.string().trim().min(1).max(128),
+                      availableUnits: z.number().min(0),
+                      freshnessHours: z.number().min(0).max(720).optional(),
+                    }),
+                  )
+                  .max(50)
+                  .optional(),
               }),
             )
             .max(20)
@@ -405,8 +419,8 @@ export const appRouter = router({
               z.object({
                 warehouseId: z.number().int().positive(),
                 label: z.string().trim().min(1).max(255),
-                zoneKey: z.string().trim().min(1).max(128).optional(),
-                distanceKm: z.number().min(0).max(200),
+                zoneKey: z.string().trim().max(64).optional(),
+                distanceKm: z.number().min(0).max(200).optional(),
                 pickPackMinutes: z.number().min(0).max(240).optional(),
                 coldChainReady: z.boolean().optional(),
                 stockAccuracy: z.number().min(0).max(1).optional(),
@@ -418,7 +432,8 @@ export const appRouter = router({
                       freshnessHours: z.number().min(0).max(720).optional(),
                     }),
                   )
-                  .max(50),
+                  .max(50)
+                  .optional(),
               }),
             )
             .max(12)
@@ -782,6 +797,7 @@ export const appRouter = router({
           evidenceKind: z.string().regex(/^[a-z][a-z0-9_.-]{2,63}$/),
           objectKey: z
             .string()
+            .trim()
             .regex(/^[A-Za-z0-9][A-Za-z0-9._/-]+$/)
             .max(512),
           contentType: z.enum([
@@ -1604,7 +1620,7 @@ export const appRouter = router({
           fulfillmentId: z.string().uuid(),
           deliveryOrderId: z.number().int().positive(),
           driverId: z.number().int().positive(),
-          idempotencyKey: z.string().trim().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
+          idempotencyKey: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
         }),
       )
       .mutation(({ ctx, input }) =>
@@ -1794,7 +1810,6 @@ export const appRouter = router({
             .max(8)
             .optional(),
           idempotencyKey: z.string().trim().min(4).max(255).optional(),
-          triggerReason: z.string().trim().min(2).max(255).optional(),
         }),
       )
       .mutation(({ input }) =>
@@ -1805,7 +1820,6 @@ export const appRouter = router({
           voiceChannel: input.messageChannel ?? "sms_ordering",
           accessibilityFlags: input.accessibilityFlags ?? [],
           idempotencyKey: input.idempotencyKey ?? null,
-          triggerReason: input.triggerReason ?? null,
         }),
       ),
     appendVoiceTurn: protectedProcedure
@@ -1897,6 +1911,12 @@ export const appRouter = router({
   selfserve: selfserveRouter,
 
   consumer: consumerRouter,
+
+  riderVerification: riderVerificationRouter,
+
+  deactivation: deactivationRouter,
+
+  council: councilRouter,
 });
 
 export type AppRouter = typeof appRouter;
