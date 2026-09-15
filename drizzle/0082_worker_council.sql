@@ -45,3 +45,4 @@ CREATE TABLE IF NOT EXISTS public.consultation_responses (
 );
 CREATE INDEX IF NOT EXISTS consultation_responses_consultation_idx
   ON public.consultation_responses (consultation_id);
+
