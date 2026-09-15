@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 
 import DashboardLayout from "@/components/DashboardLayout";
+import VerifiedRiderBadge from "@/components/VerifiedRiderBadge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { trpc } from "@/lib/trpc";
 
@@ -416,8 +417,11 @@ export default function DriverOfferFairness() {
                         {offer.offerId}
                       </p>
                     </div>
-                    <div className="rounded-full border border-amber-400/40 px-3 py-1 text-sm text-amber-200">
-                      Expires in {expiresIn}s
+                    <div className="flex flex-wrap items-center gap-2">
+                      <VerifiedRiderBadge offerId={offer.offerId} />
+                      <div className="rounded-full border border-amber-400/40 px-3 py-1 text-sm text-amber-200">
+                        Expires in {expiresIn}s
+                      </div>
                     </div>
                   </div>
                 </CardHeader>
