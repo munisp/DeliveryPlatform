@@ -32,6 +32,8 @@ import MerchantHub from "@/pages/MerchantHub";
 import CheckoutInsights from "@/pages/CheckoutInsights";
 import CourierTripRadar from "@/pages/CourierTripRadar";
 import TrustConsole from "@/pages/TrustConsole";
+import WorkerCouncil from "@/pages/WorkerCouncil";
+import DeactivationAppeals from "@/pages/DeactivationAppeals";
 import ExperimentConsole from "@/pages/ExperimentConsole";
 import MerchantAdsStudio from "@/pages/MerchantAdsStudio";
 import MerchantCommercePortal from "@/pages/MerchantCommercePortal";
@@ -129,7 +131,19 @@ const quickLinks = [
     title: "Transparent Driver Offers",
     href: "/driver-offers",
     description:
-      "Review pickup burden, destination, platform commission, and expected proceeds before accepting or fairly declining a ride offer.",
+      "Review pickup burden, destination, platform commission, rider verification, and expected proceeds before accepting or fairly declining a ride offer.",
+  },
+  {
+    title: "Worker Council",
+    href: "/council",
+    description:
+      "Respond to tabled policy consultations within their SLA and track whether platform commitments were activated.",
+  },
+  {
+    title: "Deactivation Appeals",
+    href: "/appeals",
+    description:
+      "See your 14-day deactivation notice timeline, file an appeal, and (for operators) record decisions with rationale.",
   },
   {
     title: "Vehicle Access",
@@ -605,6 +619,8 @@ export default function App() {
       <Route path="/consoles/checkout" component={CheckoutInsights} />
       <Route path="/consoles/courier-radar" component={CourierTripRadar} />
       <Route path="/consoles/trust" component={TrustConsole} />
+      <Route path="/council" component={WorkerCouncil} />
+      <Route path="/appeals" component={DeactivationAppeals} />
       <Route path="/consoles/experiments" component={ExperimentConsole} />
       <Route path="/consoles/merchant-ads" component={MerchantAdsStudio} />
       <Route path="/phone-ordering-studio" component={PhoneOrderingStudio} />
