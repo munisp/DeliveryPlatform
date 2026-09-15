@@ -149,6 +149,8 @@ import { councilRouter } from "./_core/councilRouter";
 import { economicsRouter } from "./_core/economicsRouter";
 import { pricingTransparencyRouter } from "./_core/pricingTransparencyRouter";
 import { safetyRouter } from "./_core/safetyRouter";
+import { incentivesRouter } from "./_core/incentivesRouter";
+import { protectionRouter } from "./_core/protectionRouter";
 import { postConsultation } from "./_core/workerCouncil";
 
 /**
@@ -1957,6 +1959,10 @@ export const appRouter = router({
   pricingTransparency: pricingTransparencyRouter,
 
   safety: safetyRouter,
+
+  incentives: incentivesRouter,
+
+  protection: protectionRouter,
 });
 
 export type AppRouter = typeof appRouter;

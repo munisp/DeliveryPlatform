@@ -376,6 +376,8 @@ export const ENV = {
     process.env.LONGCAT_SPEECH_SERVICE_URL ?? "http://127.0.0.1:8105",
   verificationIntelligenceUrl:
     process.env.VERIFICATION_INTELLIGENCE_URL ?? "http://127.0.0.1:8106",
+  incentivesWorkerUrl:
+    process.env.INCENTIVES_WORKER_URL ?? "http://127.0.0.1:8108",
   localCommerceGatewayUrl:
     process.env.LOCAL_COMMERCE_GATEWAY_URL ?? "http://127.0.0.1:8114",
   retailForecastServiceUrl:
