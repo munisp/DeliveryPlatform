@@ -356,7 +356,7 @@ mod tests {
         if let Some(value) = original_token {
             env::set_var("WORK_RECORD_SIGNER_TOKEN", value);
         }
-        let message = result.expect_err("missing env must fail boot");
+        let message = result.err().expect("missing env must fail boot");
         assert!(message.contains("WORK_RECORD_SIGNER_SEED is required"));
         assert!(message.contains("WORK_RECORD_SIGNER_TOKEN is required"));
     }
