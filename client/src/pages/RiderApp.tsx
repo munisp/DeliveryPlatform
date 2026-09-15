@@ -1,6 +1,7 @@
-import { Clock, MapPin, Ticket, UserRound } from "lucide-react";
+import { Clock, MapPin, Ticket, UserRound, UsersRound } from "lucide-react";
 
 import DashboardLayout from "@/components/DashboardLayout";
+import PassengerManifestForm from "@/components/PassengerManifestForm";
 import { QueryErrorState } from "@/components/QueryState";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { trpc } from "@/lib/trpc";
@@ -95,6 +96,23 @@ export default function RiderApp() {
                     </p>
                   </div>
                 ))}
+              </CardContent>
+            </Card>
+
+            <Card className="border-slate-800 bg-slate-950/60">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2 text-base text-slate-100">
+                  <UsersRound className="h-5 w-5 text-cyan-300" />
+                  Passenger manifest
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <p className="mb-3 text-sm text-slate-400">
+                  Name everyone riding before dispatch — each passenger is
+                  screened, and the driver sees the verified manifest before
+                  pickup.
+                </p>
+                <PassengerManifestForm />
               </CardContent>
             </Card>
 

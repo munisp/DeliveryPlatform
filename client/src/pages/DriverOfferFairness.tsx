@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 
 import DashboardLayout from "@/components/DashboardLayout";
+import FareBreakdown from "@/components/FareBreakdown";
 import VerifiedRiderBadge from "@/components/VerifiedRiderBadge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { trpc } from "@/lib/trpc";
@@ -520,6 +521,7 @@ export default function DriverOfferFairness() {
                       </p>
                     </div>
                   </div>
+                  <FareBreakdown offerId={offer.offerId} />
                   <div className="flex flex-col justify-between gap-4 border-t border-slate-800 pt-4 lg:flex-row lg:items-center">
                     <p className="flex max-w-xl gap-2 text-xs leading-5 text-slate-500">
                       <CircleAlert className="mt-0.5 h-4 w-4 shrink-0" />

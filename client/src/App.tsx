@@ -34,6 +34,8 @@ import CourierTripRadar from "@/pages/CourierTripRadar";
 import TrustConsole from "@/pages/TrustConsole";
 import WorkerCouncil from "@/pages/WorkerCouncil";
 import DeactivationAppeals from "@/pages/DeactivationAppeals";
+import DriverSafetyCenter from "@/pages/DriverSafetyCenter";
+import MarketEconomics from "@/pages/MarketEconomics";
 import ExperimentConsole from "@/pages/ExperimentConsole";
 import MerchantAdsStudio from "@/pages/MerchantAdsStudio";
 import MerchantCommercePortal from "@/pages/MerchantCommercePortal";
@@ -621,6 +623,8 @@ export default function App() {
       <Route path="/consoles/trust" component={TrustConsole} />
       <Route path="/council" component={WorkerCouncil} />
       <Route path="/appeals" component={DeactivationAppeals} />
+      <Route path="/safety" component={DriverSafetyCenter} />
+      <Route path="/market-economics" component={MarketEconomics} />
       <Route path="/consoles/experiments" component={ExperimentConsole} />
       <Route path="/consoles/merchant-ads" component={MerchantAdsStudio} />
       <Route path="/phone-ordering-studio" component={PhoneOrderingStudio} />
