@@ -41,4 +41,3 @@ CREATE TABLE IF NOT EXISTS public.rider_name_screenings (
 );
 CREATE INDEX IF NOT EXISTS rider_name_screenings_user_idx
   ON public.rider_name_screenings (user_id, created_at DESC);
-

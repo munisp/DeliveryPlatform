@@ -72,4 +72,3 @@ CREATE INDEX IF NOT EXISTS backpay_credits_user_idx
   ON public.backpay_credits (user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS backpay_credits_status_idx
   ON public.backpay_credits (status);
-
