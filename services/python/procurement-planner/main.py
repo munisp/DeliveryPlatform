@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 
 from config_validation import validate_boot_configuration
 from durable_run_store import DurableRunStore
+import maintenance
 
 _SHARED_DIR = Path(__file__).resolve().parent.parent / "shared"
 if str(_SHARED_DIR) not in sys.path:
@@ -316,10 +317,122 @@ def supplier_health(
     return response
 
 
+class MaintenanceDemandPoint(BaseModel):
+    point_id: str = Field(min_length=1, max_length=128)
+    lat: float = Field(ge=-90.0, le=90.0)
+    lon: float = Field(ge=-180.0, le=180.0)
+    vehicles: int = Field(default=1, ge=1, le=10000)
+
+
+class MaintenanceCandidate(BaseModel):
+    provider_id: str = Field(min_length=1, max_length=128)
+    name: str = Field(min_length=1, max_length=255)
+    lat: float = Field(ge=-90.0, le=90.0)
+    lon: float = Field(ge=-180.0, le=180.0)
+    vetted: bool = False
+    capacity: int = Field(default=0, ge=0, le=100000)
+    cost_minor: int = Field(default=0, ge=0)
+
+
+class MaintenancePlanRequest(BaseModel):
+    city: str = Field(min_length=2, max_length=128)
+    max_travel_km: float = Field(default=10.0, gt=0, le=500)
+    budget_minor: int | None = Field(default=None, ge=0)
+    demand_points: list[MaintenanceDemandPoint] = Field(min_length=1, max_length=500)
+    candidates: list[MaintenanceCandidate] = Field(min_length=1, max_length=200)
+
+
+class MaintenancePlanResponse(BaseModel):
+    service: str
+    generated_at: datetime
+    city: str
+    max_travel_km: float
+    selected: list[dict[str, Any]]
+    coverage_pct: float
+    uncovered: list[dict[str, Any]]
+    total_vehicles: int
+    covered_vehicles: int
+    budget_minor: int | None
+    budget_spent_minor: int
+    summary: str
+    metrics: dict[str, Any]
+
+
+@app.get("/healthz")
+def healthz() -> dict[str, Any]:
+    return {
+        "status": "ok",
+        "service": "switchos-procurement-planner",
+        "version": APP_VERSION,
+        "modes": ["replenishment", "transfer", "supplier-health", "maintenance-network"],
+    }
+
+
+@app.post("/maintenance/plan", response_model=MaintenancePlanResponse)
+def maintenance_plan(
+    request: MaintenancePlanRequest,
+    x_internal_service_token: str | None = Header(default=None),
+    x_trace_id: str | None = Header(default=None),
+) -> MaintenancePlanResponse:
+    _require_internal_token(x_internal_service_token)
+    if not isinstance(x_trace_id, str):  # Header default when invoked directly
+        x_trace_id = None
+    trace_id = (x_trace_id or _trace_id()).strip()
+    started = time.perf_counter()
+
+    try:
+        plan = maintenance.plan_maintenance_network(
+            [point.model_dump() for point in request.demand_points],
+            [candidate.model_dump() for candidate in request.candidates],
+            max_travel_km=request.max_travel_km,
+            budget_minor=request.budget_minor,
+        )
+    except maintenance.MaintenancePlanError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+    summary = (
+        f"Planned maintenance coverage for {request.city}: "
+        f"{plan['covered_vehicles']}/{plan['total_vehicles']} vehicles covered "
+        f"({plan['coverage_pct']}%) by {len(plan['selected'])} providers; "
+        f"{len(plan['uncovered'])} demand points remain uncovered."
+    )
+    metrics = {
+        "trace_id": trace_id,
+        "request_duration_ms": round((time.perf_counter() - started) * 1000, 2),
+        "demand_point_count": len(request.demand_points),
+        "candidate_count": len(request.candidates),
+        "selected_count": len(plan["selected"]),
+        "uncovered_count": len(plan["uncovered"]),
+    }
+    _trace("procurement.maintenance_plan_complete", metrics)
+    response = MaintenancePlanResponse(
+        service="switchos-procurement-planner",
+        generated_at=datetime.now(timezone.utc),
+        city=request.city,
+        max_travel_km=request.max_travel_km,
+        selected=plan["selected"],
+        coverage_pct=plan["coverage_pct"],
+        uncovered=plan["uncovered"],
+        total_vehicles=plan["total_vehicles"],
+        covered_vehicles=plan["covered_vehicles"],
+        budget_minor=plan["budget_minor"],
+        budget_spent_minor=plan["budget_spent_minor"],
+        summary=summary,
+        metrics=metrics,
+    )
+    execution_store.record(
+        "maintenance_plan",
+        trace_id,
+        {"city": request.city, "demand_point_count": len(request.demand_points), "candidate_count": len(request.candidates)},
+        {"coverage_pct": response.coverage_pct, "selected_count": len(response.selected)},
+    )
+    return response
+
+
 def _require_internal_token(provided: str | None) -> None:
     if not INTERNAL_SERVICE_TOKEN:
         raise HTTPException(status_code=503, detail="internal authentication is not configured")
-    if not provided or not hmac.compare_digest(provided, INTERNAL_SERVICE_TOKEN):
+    if not isinstance(provided, str) or not provided or not hmac.compare_digest(provided, INTERNAL_SERVICE_TOKEN):
         raise HTTPException(status_code=401, detail="Unauthorized internal access")
 
 
