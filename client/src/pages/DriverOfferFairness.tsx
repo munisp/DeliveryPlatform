@@ -255,10 +255,7 @@ export default function DriverOfferFairness() {
                 inputMode="numeric"
                 value={policy.maxPickupEtaS}
                 onChange={(event) =>
-                  setPolicy({
-                    ...policy,
-                    maxPickupEtaS: event.target.value,
-                  })
+                  setPolicy({ ...policy, maxPickupEtaS: event.target.value })
                 }
                 placeholder="Maximum pickup seconds"
                 className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100"
