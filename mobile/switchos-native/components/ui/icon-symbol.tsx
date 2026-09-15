@@ -18,6 +18,13 @@ const MAPPING = {
   "checkmark.circle.fill": "check-circle",
   "exclamationmark.triangle.fill": "warning",
   "arrow.clockwise": "autorenew",
+  sos: "sos",
+  "checkmark.shield.fill": "verified-user",
+  "person.2.fill": "people",
+  "doc.text.fill": "description",
+  "chart.line.uptrend.xyaxis": "trending-up",
+  receipt: "receipt-long",
+  "person.badge.shield.checkmark.fill": "how-to-reg",
 } as const satisfies Record<
   string,
   ComponentProps<typeof MaterialIcons>["name"]
