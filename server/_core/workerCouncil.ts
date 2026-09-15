@@ -316,6 +316,46 @@ export async function addCouncilMember(input: {
 }
 
 /**
+ * Wave B1 gate: validate that a caller-supplied consultation is an
+ * activation-eligible consultation object of the expected kind — i.e. it is
+ * already `activated`, or it is still `open` but its response SLA has elapsed
+ * (same eligibility rule as activateConsultation). Used by the economics
+ * mutations that must reference a consulted change before they apply.
+ */
+export async function assertConsultationEligible(
+  consultationId: string,
+  kind: ConsultationKind,
+): Promise<ConsultationRow> {
+  const pool = await getPool();
+  const result = await pool.query<ConsultationRow>(
+    `SELECT * FROM public.consultation_objects WHERE id = $1`,
+    [consultationId],
+  );
+  const row = result.rows[0];
+  if (!row) {
+    throw new TRPCError({
+      code: "NOT_FOUND",
+      message: "consultation_not_found",
+    });
+  }
+  if (row.kind !== kind) {
+    throw new TRPCError({
+      code: "CONFLICT",
+      message: `consultation_kind_mismatch:expected_${kind}`,
+    });
+  }
+  const slaElapsed = new Date(row.response_sla_at).getTime() <= Date.now();
+  const eligible = row.status === "activated" || (row.status === "open" && slaElapsed);
+  if (!eligible) {
+    throw new TRPCError({
+      code: "CONFLICT",
+      message: "consultation_gate_unmet:not_activated_and_response_sla_open",
+    });
+  }
+  return row;
+}
+
+/**
  * Wave B hook: economics/policy mutation paths call this before applying a
  * worker-affecting change. v1 returns the latest open consultation of the
  * given kind, or null when none is open.

@@ -146,6 +146,36 @@ import { consumerRouter } from "./_core/consumerRouter";
 import { riderVerificationRouter } from "./_core/riderVerificationRouter";
 import { deactivationRouter } from "./_core/deactivationRouter";
 import { councilRouter } from "./_core/councilRouter";
+import { economicsRouter } from "./_core/economicsRouter";
+import { pricingTransparencyRouter } from "./_core/pricingTransparencyRouter";
+import { safetyRouter } from "./_core/safetyRouter";
+import { postConsultation } from "./_core/workerCouncil";
+
+/**
+ * Wave B1 (R5): worker-affecting economics mutations auto-post a worker
+ * council consultation object before proceeding. Advisory and additive —
+ * a consultation-post failure is logged and never blocks the mutation.
+ */
+async function autoPostEconomicsConsultation(input: {
+  actorUserId: number;
+  kind: "pricing" | "commission";
+  title: string;
+  payload: Record<string, unknown>;
+}): Promise<void> {
+  try {
+    await postConsultation(input.actorUserId, {
+      kind: input.kind,
+      title: input.title,
+      payload: input.payload,
+      responseSlaHours: 72,
+    });
+  } catch (error) {
+    console.warn(
+      "[economics] worker-council consultation auto-post failed; proceeding",
+      error,
+    );
+  }
+}
 
 const listInput = z
   .object({ limit: z.number().min(1).max(25).optional() })
@@ -689,9 +719,18 @@ export const appRouter = router({
           effectiveFrom: z.string().datetime(),
         }),
       )
-      .mutation(({ ctx, input }) =>
-        setDriverOfferEconomicsPolicy({ actorUserId: ctx.user!.id, ...input }),
-      ),
+      .mutation(async ({ ctx, input }) => {
+        await autoPostEconomicsConsultation({
+          actorUserId: ctx.user!.id,
+          kind: "pricing",
+          title: `Driver offer economics policy ${input.version} (zone ${input.zoneId})`,
+          payload: { ...input },
+        });
+        return setDriverOfferEconomicsPolicy({
+          actorUserId: ctx.user!.id,
+          ...input,
+        });
+      }),
     setPolicy: operatorMutationProcedure("write_platform")
       .input(
         z.object({
@@ -703,12 +742,18 @@ export const appRouter = router({
           effectiveFrom: z.string().datetime(),
         }),
       )
-      .mutation(({ ctx, input }) =>
-        setDriverDispatchFairnessPolicy({
+      .mutation(async ({ ctx, input }) => {
+        await autoPostEconomicsConsultation({
+          actorUserId: ctx.user!.id,
+          kind: "commission",
+          title: `Dispatch fairness/commission policy ${input.version} (zone ${input.zoneId})`,
+          payload: { ...input },
+        });
+        return setDriverDispatchFairnessPolicy({
           actorUserId: ctx.user!.id,
           ...input,
-        }),
-      ),
+        });
+      }),
   }),
   stakeholderVerification: router({
     listCases: authenticatedProcedure
@@ -1906,6 +1951,12 @@ export const appRouter = router({
   deactivation: deactivationRouter,
 
   council: councilRouter,
+
+  economics: economicsRouter,
+
+  pricingTransparency: pricingTransparencyRouter,
+
+  safety: safetyRouter,
 });
 
 export type AppRouter = typeof appRouter;
