@@ -378,6 +378,8 @@ export const ENV = {
     process.env.VERIFICATION_INTELLIGENCE_URL ?? "http://127.0.0.1:8106",
   incentivesWorkerUrl:
     process.env.INCENTIVES_WORKER_URL ?? "http://127.0.0.1:8108",
+  workRecordSignerUrl:
+    process.env.WORK_RECORD_SIGNER_URL ?? "http://127.0.0.1:8109",
   localCommerceGatewayUrl:
     process.env.LOCAL_COMMERCE_GATEWAY_URL ?? "http://127.0.0.1:8114",
   retailForecastServiceUrl:
