@@ -34,6 +34,8 @@ import CourierTripRadar from "@/pages/CourierTripRadar";
 import TrustConsole from "@/pages/TrustConsole";
 import WorkerCouncil from "@/pages/WorkerCouncil";
 import DeactivationAppeals from "@/pages/DeactivationAppeals";
+import DriverSafetyCenter from "@/pages/DriverSafetyCenter";
+import MarketEconomics from "@/pages/MarketEconomics";
 import ExperimentConsole from "@/pages/ExperimentConsole";
 import MerchantAdsStudio from "@/pages/MerchantAdsStudio";
 import MerchantCommercePortal from "@/pages/MerchantCommercePortal";
@@ -537,7 +539,7 @@ function DashboardPage() {
           <CardContent>
             <Link
               href="/team/invite"
-              className="inline-flex rounded-full border border-cyan-400/30 bg-cyan-500/10 px-4 py-2 text-sm font-medium text-cyan-100 transition hover:bg-cyan-500/20"
+              className="inline-flex rounded-full border border-cyan-400/30 bg-cyan-500/10 px-5 py-3 text-sm font-medium text-cyan-100 transition hover:bg-cyan-500/20"
             >
               Invite team member
             </Link>
@@ -560,7 +562,7 @@ function NotFoundPage() {
         </p>
         <Link
           href="/dashboard"
-          className="inline-flex rounded-full border border-cyan-400/30 bg-cyan-500/10 px-4 py-2 text-sm font-medium text-cyan-100"
+          className="inline-flex rounded-full border border-cyan-400/30 bg-cyan-500/10 px-5 py-3 text-sm font-medium text-cyan-100"
         >
           Return to dashboard
         </Link>
@@ -621,6 +623,8 @@ export default function App() {
       <Route path="/consoles/trust" component={TrustConsole} />
       <Route path="/council" component={WorkerCouncil} />
       <Route path="/appeals" component={DeactivationAppeals} />
+      <Route path="/safety" component={DriverSafetyCenter} />
+      <Route path="/market-economics" component={MarketEconomics} />
       <Route path="/consoles/experiments" component={ExperimentConsole} />
       <Route path="/consoles/merchant-ads" component={MerchantAdsStudio} />
       <Route path="/phone-ordering-studio" component={PhoneOrderingStudio} />
