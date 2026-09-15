@@ -1,0 +1,20 @@
+[package]
+name = "work-record-signer"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ed25519-dalek = "2"
+sha2 = "0.10"
+hex = "0.4"
+base64 = "0.22"
+tiny_http = "0.12"
+serde_json = "1"
+
+[features]
+# DEVIATION FALLBACK ONLY: if no crates.io mirror is reachable, the service
+# can be built with --no-default-features --features hmac-fallback to use a
+# hand-rolled std-only HMAC-SHA256 construction instead of ed25519. This is
+# NOT signature-verifiable by third parties and must never ship to production.
+default = []
+hmac-fallback = []
