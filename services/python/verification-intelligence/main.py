@@ -23,6 +23,7 @@ if str(_SHARED_DIR) not in _sys.path:
 
 from switchos_resilience import CircuitBreaker, MetricsRegistry, request_with_resilience
 from config_validation import validate_boot_configuration
+import screening
 
 validate_boot_configuration()
 
@@ -82,6 +83,36 @@ class ProcessResponse(BaseModel):
     outcome_code: str
     output_digest_hex: str | None
     output: dict[str, Any]
+
+
+class ScreenNameRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+
+
+class ScreenNameResponse(BaseModel):
+    score: float = Field(ge=0.0, le=1.0)
+    flags: list[str]
+    plausible: bool
+
+
+class ManifestPassenger(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    nin: str | None = Field(default=None, max_length=32)
+
+
+class ManifestPassengerResult(BaseModel):
+    name: str
+    name_ok: bool
+    nin_format_ok: bool | None
+    flags: list[str]
+
+
+class ManifestVerifyRequest(BaseModel):
+    passengers: list[ManifestPassenger] = Field(min_length=1, max_length=50)
+
+
+class ManifestVerifyResponse(BaseModel):
+    results: list[ManifestPassengerResult]
 
 
 def require_internal(token: str | None) -> None:
@@ -411,7 +442,31 @@ def health() -> dict[str, Any]:
         "docling_enabled": bool(os.environ.get("ENABLE_DOCLING")),
         "vlm_enabled": bool(VLM_DOCUMENT_URL and VLM_DOCUMENT_TOKEN),
         "document_forensics_enabled": True,
+        "rider_screening_enabled": True,
     }
+
+
+@app.post("/screen-name", response_model=ScreenNameResponse)
+def screen_rider_name(
+    request: ScreenNameRequest,
+    x_internal_service_token: str | None = Header(default=None),
+) -> ScreenNameResponse:
+    require_internal(x_internal_service_token)
+    result = screening.screen_name(request.name)
+    return ScreenNameResponse(**result)
+
+
+@app.post("/manifest/verify", response_model=ManifestVerifyResponse)
+def verify_passenger_manifest(
+    request: ManifestVerifyRequest,
+    x_internal_service_token: str | None = Header(default=None),
+) -> ManifestVerifyResponse:
+    require_internal(x_internal_service_token)
+    results = [
+        screening.verify_passenger(passenger.name, passenger.nin)
+        for passenger in request.passengers
+    ]
+    return ManifestVerifyResponse(results=[ManifestPassengerResult(**r) for r in results])
 
 
 @app.post("/v1/documents/process", response_model=ProcessResponse)
