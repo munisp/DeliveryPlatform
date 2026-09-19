@@ -1034,6 +1034,444 @@ spec:
         type: Utilization
         averageUtilization: 70
 ---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: verification-intelligence
+  namespace: switchos
+  labels: &id001
+    app.kubernetes.io/name: verification-intelligence
+    app.kubernetes.io/component: python-service
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  replicas: 2
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: verification-intelligence
+  template:
+    metadata:
+      labels: *id001
+      annotations: {}
+    spec:
+      serviceAccountName: python-services
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+      - maxSkew: 1
+        minDomains: 2
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: DoNotSchedule
+        labelSelector:
+          matchLabels:
+            app.kubernetes.io/name: verification-intelligence
+      containers:
+      - name: verification-intelligence
+        image: ghcr.io/munisp/deliveryplatform-verification-intelligence:REPLACE_WITH_IMMUTABLE_TAG
+        imagePullPolicy: IfNotPresent
+        ports:
+        - name: http
+          containerPort: 8106
+        envFrom:
+        - configMapRef:
+            name: python-services-runtime-config
+        - secretRef:
+            name: python-services-secrets
+        env:
+        - name: PORT
+          value: '8106'
+        resources:
+          requests:
+            cpu: 500m
+            memory: 512Mi
+          limits:
+            cpu: '2'
+            memory: 1Gi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+        startupProbe:
+          httpGet:
+            path: /health
+            port: http
+          failureThreshold: 36
+          periodSeconds: 5
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: http
+          periodSeconds: 10
+          timeoutSeconds: 3
+          failureThreshold: 3
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 20
+          periodSeconds: 20
+          timeoutSeconds: 3
+          failureThreshold: 3
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: verification-intelligence
+  namespace: switchos
+  labels:
+    app.kubernetes.io/name: verification-intelligence
+    app.kubernetes.io/component: python-service
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  selector:
+    app.kubernetes.io/name: verification-intelligence
+  ports:
+  - name: http
+    port: 8106
+    targetPort: http
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: verification-intelligence
+  namespace: switchos
+  labels:
+    app.kubernetes.io/name: verification-intelligence
+    app.kubernetes.io/component: python-service
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: verification-intelligence
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: verification-intelligence
+  namespace: switchos
+  labels:
+    app.kubernetes.io/name: verification-intelligence
+    app.kubernetes.io/component: python-service
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: verification-intelligence
+  minReplicas: 2
+  maxReplicas: 5
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: incentives-worker
+  namespace: switchos
+  labels: &id001
+    app.kubernetes.io/name: incentives-worker
+    app.kubernetes.io/component: python-service
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  replicas: 2
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: incentives-worker
+  template:
+    metadata:
+      labels: *id001
+      annotations: {}
+    spec:
+      serviceAccountName: python-services
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+      - maxSkew: 1
+        minDomains: 2
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: DoNotSchedule
+        labelSelector:
+          matchLabels:
+            app.kubernetes.io/name: incentives-worker
+      containers:
+      - name: incentives-worker
+        image: ghcr.io/munisp/deliveryplatform-incentives-worker:REPLACE_WITH_IMMUTABLE_TAG
+        imagePullPolicy: IfNotPresent
+        ports:
+        - name: http
+          containerPort: 8108
+        envFrom:
+        - configMapRef:
+            name: python-services-runtime-config
+        - secretRef:
+            name: python-services-secrets
+        env:
+        - name: PORT
+          value: '8108'
+        resources:
+          requests:
+            cpu: 250m
+            memory: 256Mi
+          limits:
+            cpu: '1'
+            memory: 512Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+        startupProbe:
+          httpGet:
+            path: /healthz
+            port: http
+          failureThreshold: 36
+          periodSeconds: 5
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: http
+          periodSeconds: 10
+          timeoutSeconds: 3
+          failureThreshold: 3
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: http
+          initialDelaySeconds: 20
+          periodSeconds: 20
+          timeoutSeconds: 3
+          failureThreshold: 3
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: incentives-worker
+  namespace: switchos
+  labels:
+    app.kubernetes.io/name: incentives-worker
+    app.kubernetes.io/component: python-service
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  selector:
+    app.kubernetes.io/name: incentives-worker
+  ports:
+  - name: http
+    port: 8108
+    targetPort: http
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: incentives-worker
+  namespace: switchos
+  labels:
+    app.kubernetes.io/name: incentives-worker
+    app.kubernetes.io/component: python-service
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: incentives-worker
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: incentives-worker
+  namespace: switchos
+  labels:
+    app.kubernetes.io/name: incentives-worker
+    app.kubernetes.io/component: python-service
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: incentives-worker
+  minReplicas: 2
+  maxReplicas: 5
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: market-economics
+  namespace: switchos
+  labels: &id001
+    app.kubernetes.io/name: market-economics
+    app.kubernetes.io/component: python-service
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  replicas: 2
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: market-economics
+  template:
+    metadata:
+      labels: *id001
+      annotations: {}
+    spec:
+      serviceAccountName: python-services
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+      - maxSkew: 1
+        minDomains: 2
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: DoNotSchedule
+        labelSelector:
+          matchLabels:
+            app.kubernetes.io/name: market-economics
+      containers:
+      - name: market-economics
+        image: ghcr.io/munisp/deliveryplatform-market-economics:REPLACE_WITH_IMMUTABLE_TAG
+        imagePullPolicy: IfNotPresent
+        ports:
+        - name: http
+          containerPort: 8110
+        envFrom:
+        - configMapRef:
+            name: python-services-runtime-config
+        - secretRef:
+            name: python-services-secrets
+        env:
+        - name: PORT
+          value: '8110'
+        resources:
+          requests:
+            cpu: 250m
+            memory: 256Mi
+          limits:
+            cpu: '1'
+            memory: 512Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+        startupProbe:
+          httpGet:
+            path: /healthz
+            port: http
+          failureThreshold: 36
+          periodSeconds: 5
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: http
+          periodSeconds: 10
+          timeoutSeconds: 3
+          failureThreshold: 3
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: http
+          initialDelaySeconds: 20
+          periodSeconds: 20
+          timeoutSeconds: 3
+          failureThreshold: 3
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: market-economics
+  namespace: switchos
+  labels:
+    app.kubernetes.io/name: market-economics
+    app.kubernetes.io/component: python-service
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  selector:
+    app.kubernetes.io/name: market-economics
+  ports:
+  - name: http
+    port: 8110
+    targetPort: http
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: market-economics
+  namespace: switchos
+  labels:
+    app.kubernetes.io/name: market-economics
+    app.kubernetes.io/component: python-service
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: market-economics
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: market-economics
+  namespace: switchos
+  labels:
+    app.kubernetes.io/name: market-economics
+    app.kubernetes.io/component: python-service
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: market-economics
+  minReplicas: 2
+  maxReplicas: 5
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -1065,6 +1503,12 @@ spec:
       port: 8007
     - protocol: TCP
       port: 8105
+    - protocol: TCP
+      port: 8106
+    - protocol: TCP
+      port: 8108
+    - protocol: TCP
+      port: 8110
     - protocol: TCP
       port: 8113
     - protocol: TCP
