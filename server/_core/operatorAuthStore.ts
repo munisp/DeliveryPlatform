@@ -192,7 +192,7 @@ export async function revokeOperatorSecuritySession(operatorId: number, sessionI
 
 export async function revokeOtherOperatorSecuritySessions(operatorId: number, currentSessionId: string) {
   await ensureOperatorAuthStore();
-  const result = await getOperatorAuthPool().query<{ id: number }>(
+  const result = await getOperatorAuthPool().query<{ id: string }>(
     `UPDATE operator_security_sessions SET revoked_at = NOW()
      WHERE operator_id = $1 AND id <> $2 AND revoked_at IS NULL AND expires_at > NOW()
      RETURNING id`,
