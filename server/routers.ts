@@ -464,7 +464,7 @@ export const appRouter = router({
               z.object({
                 warehouseId: z.number().int().positive(),
                 label: z.string().trim().min(1).max(255),
-                zoneKey: z.string().trim().max(128).optional(),
+                zoneKey: z.string().trim().min(1).max(128).optional(),
                 distanceKm: z.number().min(0).max(200),
                 pickPackMinutes: z.number().min(0).max(240).optional(),
                 coldChainReady: z.boolean().optional(),
