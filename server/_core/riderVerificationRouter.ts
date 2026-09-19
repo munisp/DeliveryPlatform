@@ -20,6 +20,9 @@ export const riderVerificationRouter = router({
       z.object({
         idType: z.string().trim().min(2).max(64),
         idRef: z.string().trim().min(1).max(128),
+        // Optional at the wire level so older clients degrade to 'pending'
+        // instead of erroring — but auto-verification REQUIRES it (fail-closed).
+        consentVersion: z.string().trim().min(1).max(64).optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -28,6 +31,7 @@ export const riderVerificationRouter = router({
         idType: input.idType,
         idRef: input.idRef,
         name: ctx.user.name ?? "",
+        consentVersion: input.consentVersion ?? null,
       });
     }),
 

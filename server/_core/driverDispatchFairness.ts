@@ -1,6 +1,7 @@
 import { Pool } from "pg";
 
 import { ENV } from "./env";
+import { getVerifiedDriverAccess } from "./driverOnboarding";
 
 let pool: Pool | null = null;
 
@@ -77,6 +78,12 @@ type OfferRow = {
 };
 
 export async function listTransparentDriverOffers(driverUserId: number) {
+  // Fail-closed dispatch gate (Audit A P0-1): drivers without an APPROVED
+  // onboarding application bound to a VERIFIED KYC case are excluded from
+  // the offer stream entirely. Fail-safe = no offers (never a silent
+  // pass-through for legacy email/open_id-linked or seeded driver rows).
+  const access = await getVerifiedDriverAccess(driverUserId);
+  if (!access) return [];
   const [offersResult, economicsResult] = await Promise.all([
     database().query<OfferRow>(
       `SELECT * FROM mobility.list_driver_offer_disclosures($1)`,
