@@ -178,6 +178,16 @@ spec:
         - protocol: TCP
           port: 8105
         - protocol: TCP
+          port: 8106
+        - protocol: TCP
+          port: 8107
+        - protocol: TCP
+          port: 8108
+        - protocol: TCP
+          port: 8109
+        - protocol: TCP
+          port: 8110
+        - protocol: TCP
           port: 8112
         - protocol: TCP
           port: 8113

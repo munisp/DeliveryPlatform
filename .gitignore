@@ -8,6 +8,7 @@ services/go/*/switchos-*
 *.test
 .env
 .env.*
+!.env.example
 *.log
 .financial-rehearsal/
 __pycache__/

@@ -26,6 +26,11 @@ EXPECTED_RUNTIME_SAS = {
     "speech-runtime": "python-services",
     "ride-payment-webhook": "python-services",
     "compliance-review": "python-services",
+    "safety-engine": "go-services",
+    "verification-intelligence": "python-services",
+    "incentives-worker": "python-services",
+    "market-economics": "python-services",
+    "work-record-signer": "pricing-dispatch",
 }
 EXPECTED_EXTERNAL_SECRETS = {
     "switchos-runtime-secrets",

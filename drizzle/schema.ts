@@ -1,3 +1,13 @@
+/**
+ * DECORATIVE DRIZZLE ORM SCHEMA — NOT A SOURCE OF TRUTH.
+ *
+ * The server executes raw SQL migrations (drizzle/*.sql) and hand-written
+ * queries; nothing at runtime reads the table definitions below. This file
+ * exists only because drizzle.config.ts imports it so the drizzle-kit CLI
+ * can inspect the schema. Do not extend it to "fix" drift with the SQL
+ * migrations — update the SQL migrations instead. Do not delete this file
+ * without removing the drizzle.config.ts reference first.
+ */
 import {
   boolean,
   integer,

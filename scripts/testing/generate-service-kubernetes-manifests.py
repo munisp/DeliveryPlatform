@@ -18,16 +18,23 @@ GO_SERVICES = [
     ("vertical-provisioning", 8112, "PORT", False, "250m", "256Mi", "1", "512Mi"),
     ("voice-gateway", 8104, "PORT", False, "500m", "512Mi", "2", "1Gi"),
     ("ride-matching-worker", 8121, "PORT", False, "500m", "512Mi", "2", "1Gi"),
+    ("safety-engine", 8107, "PORT", False, "250m", "256Mi", "1", "512Mi"),
 ]
 
+# (name, port, request cpu, request memory, limit cpu, limit memory, health
+# path) — most services expose /health; the worker-style FastAPI services
+# expose /healthz instead.
 PYTHON_SERVICES = [
-    ("intake-orchestrator", 8113, "250m", "256Mi", "1", "512Mi"),
-    ("lakehouse", 8007, "250m", "256Mi", "1", "512Mi"),
-    ("procurement-planner", 8116, "250m", "256Mi", "1", "512Mi"),
-    ("retail-forecast", 8115, "250m", "256Mi", "1", "512Mi"),
-    ("speech-runtime", 8105, "500m", "512Mi", "2", "1Gi"),
-    ("ride-payment-webhook", 8122, "250m", "256Mi", "1", "512Mi"),
-    ("compliance-review", 8125, "250m", "256Mi", "1", "512Mi"),
+    ("intake-orchestrator", 8113, "250m", "256Mi", "1", "512Mi", "/health"),
+    ("lakehouse", 8007, "250m", "256Mi", "1", "512Mi", "/health"),
+    ("procurement-planner", 8116, "250m", "256Mi", "1", "512Mi", "/health"),
+    ("retail-forecast", 8115, "250m", "256Mi", "1", "512Mi", "/health"),
+    ("speech-runtime", 8105, "500m", "512Mi", "2", "1Gi", "/health"),
+    ("ride-payment-webhook", 8122, "250m", "256Mi", "1", "512Mi", "/health"),
+    ("compliance-review", 8125, "250m", "256Mi", "1", "512Mi", "/health"),
+    ("verification-intelligence", 8106, "500m", "512Mi", "2", "1Gi", "/health"),
+    ("incentives-worker", 8108, "250m", "256Mi", "1", "512Mi", "/healthz"),
+    ("market-economics", 8110, "250m", "256Mi", "1", "512Mi", "/healthz"),
 ]
 
 
@@ -39,15 +46,15 @@ def labels(name: str, component: str) -> dict[str, str]:
     }
 
 
-def probes() -> dict[str, Any]:
+def probes(health_path: str = "/health") -> dict[str, Any]:
     return {
-        "startupProbe": {"httpGet": {"path": "/health", "port": "http"}, "failureThreshold": 36, "periodSeconds": 5},
-        "readinessProbe": {"httpGet": {"path": "/health", "port": "http"}, "periodSeconds": 10, "timeoutSeconds": 3, "failureThreshold": 3},
-        "livenessProbe": {"httpGet": {"path": "/health", "port": "http"}, "initialDelaySeconds": 20, "periodSeconds": 20, "timeoutSeconds": 3, "failureThreshold": 3},
+        "startupProbe": {"httpGet": {"path": health_path, "port": "http"}, "failureThreshold": 36, "periodSeconds": 5},
+        "readinessProbe": {"httpGet": {"path": health_path, "port": "http"}, "periodSeconds": 10, "timeoutSeconds": 3, "failureThreshold": 3},
+        "livenessProbe": {"httpGet": {"path": health_path, "port": "http"}, "initialDelaySeconds": 20, "periodSeconds": 20, "timeoutSeconds": 3, "failureThreshold": 3},
     }
 
 
-def workload(name: str, component: str, port: int, config: str, secret: str, request_cpu: str, request_memory: str, limit_cpu: str, limit_memory: str, port_env: str, dapr: bool = False, speech: bool = False) -> list[dict[str, Any]]:
+def workload(name: str, component: str, port: int, config: str, secret: str, request_cpu: str, request_memory: str, limit_cpu: str, limit_memory: str, port_env: str, dapr: bool = False, speech: bool = False, health_path: str = "/health") -> list[dict[str, Any]]:
     app_labels = labels(name, component)
     annotations: dict[str, str] = {}
     if dapr:
@@ -70,7 +77,7 @@ def workload(name: str, component: str, port: int, config: str, secret: str, req
         },
         "securityContext": {"allowPrivilegeEscalation": False, "readOnlyRootFilesystem": True, "capabilities": {"drop": ["ALL"]}},
     }
-    container.update(probes())
+    container.update(probes(health_path))
     pod_spec: dict[str, Any] = {
         "serviceAccountName": "go-services" if component == "go-service" else "python-services",
         "automountServiceAccountToken": False,
@@ -113,11 +120,11 @@ def peer(labels: dict[str, str]) -> dict[str, Any]:
 def policy(component: str) -> dict[str, Any]:
     if component == "go-service":
         ingress_sources = [peer({"app.kubernetes.io/name": "central-app"}), peer({"app.kubernetes.io/component": "go-service"})]
-        ingress_ports = [8086, 8099, 8104, 8112, 8114, 8117, 8121]
-        internal_egress_ports = [3000, 3005, 4001, 5432, 6379, 7233, 8007, 8090, 8105, 9092, 8112, 8113, 8114, 8115, 8116, 8117, 8121, 8122]
+        ingress_ports = [8086, 8099, 8104, 8107, 8112, 8114, 8117, 8121]
+        internal_egress_ports = [3000, 3005, 4001, 5432, 6379, 7233, 8007, 8090, 8105, 8106, 9092, 8112, 8113, 8114, 8115, 8116, 8117, 8121, 8122]
     else:
         ingress_sources = [peer({"app.kubernetes.io/name": "central-app"}), peer({"app.kubernetes.io/component": "go-service"})]
-        ingress_ports = [8007, 8105, 8113, 8115, 8116, 8122, 8125]
+        ingress_ports = [8007, 8105, 8106, 8108, 8110, 8113, 8115, 8116, 8122, 8125]
         internal_egress_ports = [5432, 8121, 8125]
     return {
         "apiVersion": "networking.k8s.io/v1",
@@ -165,8 +172,8 @@ def main() -> None:
     dump(ROOT / "deploy/kubernetes/go-services/workloads.yaml", go_docs)
 
     python_docs: list[dict[str, Any]] = []
-    for name, port, req_cpu, req_mem, lim_cpu, lim_mem in PYTHON_SERVICES:
-        python_docs.extend(workload(name, "python-service", port, "python-services-runtime-config", "python-services-secrets", req_cpu, req_mem, lim_cpu, lim_mem, "PORT", speech=name == "speech-runtime"))
+    for name, port, req_cpu, req_mem, lim_cpu, lim_mem, health_path in PYTHON_SERVICES:
+        python_docs.extend(workload(name, "python-service", port, "python-services-runtime-config", "python-services-secrets", req_cpu, req_mem, lim_cpu, lim_mem, "PORT", speech=name == "speech-runtime", health_path=health_path))
     python_docs.append(policy("python-service"))
     python_docs.append(payment_webhook_ingress_policy())
     dump(ROOT / "deploy/kubernetes/python-services/workloads.yaml", python_docs)
