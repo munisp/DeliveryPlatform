@@ -446,7 +446,7 @@ export const ENV = {
     false,
   ),
   vehicleTrackerConsumerEmbedded: parseBoolean(
-    process.env.ENABLE_VEHICLE_TRACKER_CONSUMER_EMBEDDED,
+    process.env.VEHICLE_TRACKER_CONSUMER_EMBEDDED,
     false,
   ),
   vehicleTrackerWorkerMetricsPort: parseBoundedInteger(
