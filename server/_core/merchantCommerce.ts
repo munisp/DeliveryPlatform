@@ -2,6 +2,7 @@ import { createHash, randomBytes, randomUUID } from "crypto";
 import { Pool } from "pg";
 
 import { ENV } from "./env";
+import { sendEmail, sendSMS } from "./notificationGateway";
 import { resilientFetch } from "./resilientFetch";
 
 let pool: Pool | null = null;
@@ -113,6 +114,7 @@ export async function decideMerchantOnboarding(input: {
   providerId: number;
   decision: "activate" | "suspend" | "reject";
   verificationCaseId?: string | null;
+  rejectionReason?: string | null;
   idempotencyKey: string;
 }) {
   const result = await database().query<{ state: string }>(
@@ -125,7 +127,73 @@ export async function decideMerchantOnboarding(input: {
       input.idempotencyKey,
     ],
   );
-  return { state: result.rows[0]?.state ?? "unknown" };
+  const state = result.rows[0]?.state ?? "unknown";
+  // Persist the operator-supplied rejection reason (drizzle/0092 column) so
+  // a rejected merchant can see why; the DB function signature is unchanged.
+  if (input.decision === "reject" && input.rejectionReason?.trim()) {
+    await database().query(
+      `UPDATE commerce.merchant_portal
+       SET rejection_reason = $2, updated_at = now()
+       WHERE provider_id = $1`,
+      [input.providerId, input.rejectionReason.trim()],
+    );
+  }
+  // Notify the merchant owner of the onboarding decision. Fail-open: a
+  // notification outage never blocks the decision (Audit A P1-8).
+  await notifyMerchantOnboardingDecision(
+    input.providerId,
+    input.decision,
+    state,
+    input.rejectionReason ?? null,
+  );
+  return { state };
+}
+
+async function notifyMerchantOnboardingDecision(
+  providerId: number,
+  decision: "activate" | "suspend" | "reject",
+  state: string,
+  rejectionReason: string | null,
+): Promise<void> {
+  try {
+    const owner = await database().query<{ owner_user_id: number }>(
+      `SELECT owner_user_id FROM commerce.merchant_portal WHERE provider_id = $1`,
+      [providerId],
+    );
+    const ownerUserId = owner.rows[0]?.owner_user_id;
+    if (ownerUserId == null) return;
+    const contact = await database().query<{
+      email: string | null;
+      phone: string | null;
+    }>(`SELECT email, phone FROM public.users WHERE id = $1`, [ownerUserId]);
+    const user = contact.rows[0];
+    const reasonSuffix =
+      decision === "reject" && rejectionReason?.trim()
+        ? ` Reason: ${rejectionReason.trim()}`
+        : "";
+    const message = `Your merchant onboarding (provider ${providerId}) was decided: ${state}.${reasonSuffix}`;
+    const metadata = {
+      notificationType: "merchant.onboarding.decided",
+      providerId: `${providerId}`,
+      decision,
+      state,
+    };
+    if (user?.email) {
+      await sendEmail(
+        user.email,
+        "SwitchOS merchant onboarding decision",
+        message,
+        metadata,
+      );
+    } else if (user?.phone) {
+      await sendSMS(user.phone, message, metadata);
+    }
+  } catch (error) {
+    console.warn(
+      "[merchantCommerce] onboarding decision notification failed; continuing",
+      error,
+    );
+  }
 }
 
 export async function getMerchantCommerceProfile(input: {

@@ -81,6 +81,91 @@ type ManifestVerifyPassengerResult = {
   flags?: unknown;
 };
 
+export type TripRiskScore = {
+  score: number;
+  factors: Array<{ factor: string; weight: number }>;
+};
+
+/**
+ * Score a trip's risk via the safety-engine service
+ * (GET /trip/{trip_id}/risk, 0-100 + factors). Fail-open per module doc:
+ * returns null on any outage — risk scoring is advisory and must never
+ * block manifest intake or SOS handling.
+ */
+export async function scoreTripRisk(tripId: string): Promise<TripRiskScore | null> {
+  const base = ENV.safetyEngineUrl.replace(/\/$/, "");
+  try {
+    const response = await resilientFetch(
+      `${base}/trip/${encodeURIComponent(tripId)}/risk`,
+      {
+        method: "GET",
+        headers: { "X-Internal-Service-Token": ENV.internalServiceToken },
+        timeoutMs: 5_000,
+        maxAttempts: 1,
+      },
+    );
+    if (!response.ok) {
+      throw new Error(`trip risk returned status ${response.status}`);
+    }
+    const body = (await response.json()) as {
+      score?: number;
+      factors?: Array<{ factor?: string; weight?: number }>;
+    };
+    if (typeof body.score !== "number" || !Number.isFinite(body.score)) {
+      throw new Error("trip risk response invalid");
+    }
+    return {
+      score: body.score,
+      factors: Array.isArray(body.factors)
+        ? body.factors.map((f) => ({
+            factor: `${f?.factor ?? ""}`,
+            weight: Number(f?.weight ?? 0),
+          }))
+        : [],
+    };
+  } catch (error) {
+    console.warn(
+      "[tripSafety] safety-engine trip risk unavailable; failing open",
+      error,
+    );
+    return null;
+  }
+}
+
+/**
+ * Persist an advisory risk score as a trip_safety_signals row. Fail-open:
+ * a missing score (service outage) records an 'unavailable' signal so the
+ * gap is observable instead of silently absent. Never throws.
+ */
+async function recordTripRiskSignal(
+  tripId: string,
+  trigger: "manifest_attached" | "sos_triggered",
+): Promise<void> {
+  try {
+    const risk = await scoreTripRisk(tripId);
+    const pool = await getPool();
+    await pool.query(
+      `INSERT INTO public.trip_safety_signals (trip_id, signal_type, payload)
+       VALUES ($1, 'trip_risk_scored', $2::jsonb)`,
+      [
+        tripId,
+        JSON.stringify({
+          trip_id: tripId,
+          trigger,
+          risk_score: risk?.score ?? null,
+          risk_factors: risk?.factors ?? [],
+          scored_via: risk ? "safety-engine" : "service_unavailable",
+        }),
+      ],
+    );
+  } catch (error) {
+    console.warn(
+      "[tripSafety] recording trip risk signal failed; continuing",
+      error,
+    );
+  }
+}
+
 /**
  * Screen manifest passenger names via verification-intelligence
  * POST /manifest/verify. Raw NINs are never sent. Fail-open per module doc.
@@ -186,6 +271,8 @@ export async function attachManifest(
       message: "manifest_store_failed",
     });
   }
+  // Advisory risk scoring via safety-engine (fail-open, never blocks intake).
+  await recordTripRiskSignal(input.tripId, "manifest_attached");
   return { ...row, passengers };
 }
 
@@ -281,6 +368,8 @@ export async function triggerSOS(
         }),
       ],
     );
+    // Advisory risk scoring via safety-engine (fail-open, never blocks SOS).
+    await recordTripRiskSignal(row.trip_id, "sos_triggered");
   }
   return row;
 }

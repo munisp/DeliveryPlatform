@@ -1,6 +1,7 @@
 import { TRPCError } from "@trpc/server";
 
 import { getPool } from "../db";
+import { sendEmail, sendSMS } from "./notificationGateway";
 
 /**
  * Worker council consultation (R5).
@@ -200,7 +201,69 @@ export async function postConsultation(
       message: "consultation_creation_failed",
     });
   }
+  // Notify every active council member that a new consultation needs their
+  // response (Audit A P1-8: members were never notified). Fail-open: a
+  // notification outage never blocks posting the consultation.
+  await notifyActiveMembersOfConsultation(row).catch((error) =>
+    console.warn(
+      "[workerCouncil] consultation member notification failed; continuing",
+      error,
+    ),
+  );
   return row;
+}
+
+/**
+ * Dispatch the new-consultation notice to all active council members
+ * (email preferred, SMS fallback). Never throws into the posting path.
+ */
+async function notifyActiveMembersOfConsultation(
+  consultation: ConsultationRow,
+): Promise<void> {
+  try {
+    const pool = await getPool();
+    const members = await pool.query<{
+      user_id: number | string;
+      email: string | null;
+      phone: string | null;
+    }>(
+      `SELECT m.user_id, u.email, u.phone
+       FROM public.council_members m
+       JOIN public.users u ON u.id = m.user_id
+       WHERE m.active = true
+       LIMIT 200`,
+    );
+    const message = `A new worker-council consultation "${consultation.title}" (kind: ${consultation.kind}) was posted and awaits your response by ${new Date(consultation.response_sla_at).toISOString()}.`;
+    for (const member of members.rows) {
+      const metadata = {
+        notificationType: "council.consultation.posted",
+        consultationId: consultation.id,
+        kind: consultation.kind,
+      };
+      try {
+        if (member.email) {
+          await sendEmail(
+            member.email,
+            "SwitchOS worker council consultation",
+            message,
+            metadata,
+          );
+        } else if (member.phone) {
+          await sendSMS(member.phone, message, metadata);
+        }
+      } catch (error) {
+        console.warn(
+          `[workerCouncil] consultation notice to member ${member.user_id} failed; continuing`,
+          error,
+        );
+      }
+    }
+  } catch (error) {
+    console.warn(
+      "[workerCouncil] consultation member notification unavailable; continuing",
+      error,
+    );
+  }
 }
 
 export async function closeConsultation(input: {

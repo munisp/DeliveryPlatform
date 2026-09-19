@@ -4,7 +4,13 @@ const dbMocks = vi.hoisted(() => ({
   getPool: vi.fn(),
 }));
 
+const gatewayMocks = vi.hoisted(() => ({
+  sendEmail: vi.fn(async () => ({ accepted: true })),
+  sendSMS: vi.fn(async () => ({ accepted: true })),
+}));
+
 vi.mock("../server/db", () => dbMocks);
+vi.mock("./_core/notificationGateway", () => gatewayMocks);
 
 import {
   assignReviewer,
@@ -62,6 +68,14 @@ describe("initiateCase", () => {
         match: /INSERT INTO public\.deactivation_cases/,
         result: { rows: [{ id: "case-1", status: "notice" }], rowCount: 1 },
       },
+      {
+        match: /SELECT email, phone, name FROM public\.users/,
+        result: { rows: [{ email: "driver@example.com", phone: null, name: "D" }] },
+      },
+      {
+        match: /SET notice_sent_at = now\(\)/,
+        result: { rows: [{ notice_sent_at: new Date() }], rowCount: 1 },
+      },
     ]);
     dbMocks.getPool.mockResolvedValue(pool);
 
@@ -80,11 +94,19 @@ describe("initiateCase", () => {
     expect(insert).toBeDefined();
     const values = insert!.values;
     expect(values[5]).toBe("notice");
-    const noticeSentAt = (values[6] as Date).getTime();
-    const effectiveAt = (values[7] as Date).getTime();
-    expect(effectiveAt - noticeSentAt).toBe(NOTICE_PERIOD_DAYS * DAY_MS);
+    const effectiveAt = (values[6] as Date).getTime();
     expect(effectiveAt).toBeGreaterThanOrEqual(before + NOTICE_PERIOD_DAYS * DAY_MS);
     expect(effectiveAt).toBeLessThanOrEqual(after + NOTICE_PERIOD_DAYS * DAY_MS);
+    // The notice was actually dispatched before notice_sent_at was stamped.
+    expect(gatewayMocks.sendEmail).toHaveBeenCalledWith(
+      "driver@example.com",
+      "SwitchOS deactivation notice",
+      expect.stringContaining("case-1"),
+      expect.objectContaining({ notificationType: "deactivation.notice" }),
+    );
+    expect(
+      pool.calls.some((call) => /SET notice_sent_at = now\(\)/.test(call.text)),
+    ).toBe(true);
   });
 
   it("takes egregious cases into effect immediately", async () => {
@@ -96,18 +118,81 @@ describe("initiateCase", () => {
     ]);
     dbMocks.getPool.mockResolvedValue(pool);
 
+    const before = Date.now();
     await initiateCase(1, {
       subjectUserId: 10,
       subjectRole: "courier",
       causeCode: "SAFETY",
       egregious: true,
     });
+    const after = Date.now();
     const insert = pool.calls.find((call) =>
       /INSERT INTO public\.deactivation_cases/.test(call.text),
     );
     const values = insert!.values;
     expect(values[5]).toBe("active");
-    expect(values[7]).toEqual(values[6]); // effective_at === notice_sent_at
+    const effectiveAt = (values[6] as Date).getTime();
+    expect(effectiveAt).toBeGreaterThanOrEqual(before);
+    expect(effectiveAt).toBeLessThanOrEqual(after);
+  });
+
+  it("is fail-open: a gateway outage never blocks the case and notice_sent_at stays NULL", async () => {
+    gatewayMocks.sendEmail.mockRejectedValueOnce(new Error("dispatcher down"));
+    const pool = createPool([
+      {
+        match: /INSERT INTO public\.deactivation_cases/,
+        result: {
+          rows: [{ id: "case-9", status: "notice", notice_sent_at: null }],
+          rowCount: 1,
+        },
+      },
+      {
+        match: /SELECT email, phone, name FROM public\.users/,
+        result: { rows: [{ email: "d@example.com", phone: null, name: "D" }] },
+      },
+    ]);
+    dbMocks.getPool.mockResolvedValue(pool);
+
+    const row = await initiateCase(1, {
+      subjectUserId: 10,
+      subjectRole: "driver",
+      causeCode: "POLICY",
+    });
+    expect(row.id).toBe("case-9");
+    expect(row.notice_sent_at).toBeNull();
+    // Honest audit trail: no notice_sent_at stamp when nothing was sent.
+    expect(
+      pool.calls.some((call) => /SET notice_sent_at = now\(\)/.test(call.text)),
+    ).toBe(false);
+  });
+
+  it("falls back to SMS when the subject has no email", async () => {
+    const pool = createPool([
+      {
+        match: /INSERT INTO public\.deactivation_cases/,
+        result: { rows: [{ id: "case-10", status: "notice" }], rowCount: 1 },
+      },
+      {
+        match: /SELECT email, phone, name FROM public\.users/,
+        result: { rows: [{ email: null, phone: "+2348000000000", name: "D" }] },
+      },
+      {
+        match: /SET notice_sent_at = now\(\)/,
+        result: { rows: [{ notice_sent_at: new Date() }], rowCount: 1 },
+      },
+    ]);
+    dbMocks.getPool.mockResolvedValue(pool);
+
+    await initiateCase(1, {
+      subjectUserId: 10,
+      subjectRole: "rider",
+      causeCode: "DOCUMENTS",
+    });
+    expect(gatewayMocks.sendSMS).toHaveBeenCalledWith(
+      "+2348000000000",
+      expect.stringContaining("case-10"),
+      expect.objectContaining({ notificationType: "deactivation.notice" }),
+    );
   });
 
   it("requires elevated justification for protected-activity cases", async () => {

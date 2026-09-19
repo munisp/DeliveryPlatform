@@ -146,6 +146,7 @@ import { driverOnboardingRouter } from "./_core/driverOnboardingRouter";
 import { approveExternalOperator } from "./_core/operatorAuthStore";
 import { consumerRouter } from "./_core/consumerRouter";
 import { riderVerificationRouter } from "./_core/riderVerificationRouter";
+import { verificationRouter } from "./_core/verificationRouter";
 import { deactivationRouter } from "./_core/deactivationRouter";
 import { councilRouter } from "./_core/councilRouter";
 import { economicsRouter } from "./_core/economicsRouter";
@@ -1578,6 +1579,7 @@ export const appRouter = router({
           providerId: z.number().int().positive(),
           decision: z.enum(["activate", "suspend", "reject"]),
           verificationCaseId: z.string().uuid().nullable(),
+          rejectionReason: z.string().trim().min(3).max(1000).optional(),
           idempotencyKey: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
         }),
       )
@@ -1974,6 +1976,8 @@ export const appRouter = router({
   consumer: consumerRouter,
 
   riderVerification: riderVerificationRouter,
+
+  verification: verificationRouter,
 
   deactivation: deactivationRouter,
 

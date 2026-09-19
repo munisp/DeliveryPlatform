@@ -1,6 +1,7 @@
 import { TRPCError } from "@trpc/server";
 
 import { getPool } from "../db";
+import { sendEmail, sendSMS } from "./notificationGateway";
 
 /**
  * Just-cause deactivation due process (R4).
@@ -130,11 +131,14 @@ export async function initiateCase(
   const status = egregious ? "active" : "notice";
 
   const pool = await getPool();
+  // notice_sent_at is written only AFTER the notice is actually dispatched
+  // (see below) — stamping it at insert time without sending anything was
+  // dishonest (Audit A P1-8 / cross-cutting 1).
   const inserted = await pool.query<DeactivationCaseRow>(
     `INSERT INTO public.deactivation_cases
        (subject_user_id, subject_role, cause_code, egregious, evidence,
         status, notice_sent_at, effective_at, decided_by, protected_activity)
-     VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9, $10)
+     VALUES ($1, $2, $3, $4, $5::jsonb, $6, NULL, $7, $8, $9)
      RETURNING *`,
     [
       input.subjectUserId,
@@ -143,7 +147,6 @@ export async function initiateCase(
       egregious,
       JSON.stringify(input.evidence ?? []),
       status,
-      now,
       effectiveAt,
       actorUserId,
       protectedActivity,
@@ -156,7 +159,90 @@ export async function initiateCase(
       message: "deactivation_case_creation_failed",
     });
   }
+
+  // Send the actual deactivation notice. Fail-open: a notification outage
+  // never blocks the case; notice_sent_at simply stays NULL (honest "not
+  // sent") so operators can see delivery did not happen.
+  const noticeSent = await sendDeactivationNotice(pool, {
+    subjectUserId: input.subjectUserId,
+    subjectRole,
+    causeCode,
+    egregious,
+    effectiveAt,
+    caseId: row.id,
+  });
+  if (noticeSent) {
+    const stamped = await pool.query<{ notice_sent_at: string | Date }>(
+      `UPDATE public.deactivation_cases
+       SET notice_sent_at = now(), updated_at = now()
+       WHERE id = $1
+       RETURNING notice_sent_at`,
+      [row.id],
+    );
+    row.notice_sent_at = stamped.rows[0]?.notice_sent_at ?? new Date();
+  }
   return row;
+}
+
+type NoticePool = { query: (text: string, values?: unknown[]) => Promise<{ rows: Array<Record<string, unknown>> }> };
+
+/**
+ * Dispatch the deactivation notice to the subject (email preferred, SMS
+ * fallback) via the notification gateway. Returns true when the gateway
+ * accepted the notice; false on any failure or missing contact — never
+ * throws into the mutation path.
+ */
+async function sendDeactivationNotice(
+  pool: NoticePool,
+  input: {
+    subjectUserId: number;
+    subjectRole: DeactivationSubjectRole;
+    causeCode: DeactivationCause;
+    egregious: boolean;
+    effectiveAt: Date;
+    caseId: string;
+  },
+): Promise<boolean> {
+  try {
+    const contact = await pool.query(
+      `SELECT email, phone, name FROM public.users WHERE id = $1`,
+      [input.subjectUserId],
+    );
+    const user = contact.rows[0] as
+      | { email?: string | null; phone?: string | null; name?: string | null }
+      | undefined;
+    const message = input.egregious
+      ? `Your ${input.subjectRole} account has been deactivated with immediate effect (cause: ${input.causeCode}, case ${input.caseId}). You may appeal within 14 days.`
+      : `Your ${input.subjectRole} account is scheduled for deactivation on ${input.effectiveAt.toISOString()} (cause: ${input.causeCode}, case ${input.caseId}). You may appeal within 14 days.`;
+    const metadata = {
+      notificationType: "deactivation.notice",
+      caseId: input.caseId,
+      causeCode: input.causeCode,
+    };
+    if (user?.email) {
+      await sendEmail(
+        user.email,
+        "SwitchOS deactivation notice",
+        message,
+        metadata,
+      );
+      return true;
+    }
+    if (user?.phone) {
+      await sendSMS(user.phone, message, metadata);
+      return true;
+    }
+    console.warn(
+      `[deactivationDueProcess] no contact channel for user ${input.subjectUserId}; notice not sent`,
+    );
+    return false;
+  } catch (error) {
+    console.warn(
+      "[deactivationDueProcess] notice dispatch failed; continuing without blocking the case",
+      error,
+    );
+    return false;
+  }
 }
 
 export async function getMyCase(subjectUserId: number): Promise<{

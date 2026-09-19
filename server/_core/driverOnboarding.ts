@@ -1,6 +1,7 @@
 import { TRPCError } from "@trpc/server";
 
 import { getPool } from "../db";
+import { sendEmail, sendSMS } from "./notificationGateway";
 import { startVerificationCase } from "./stakeholderVerification";
 
 /**
@@ -410,5 +411,60 @@ export async function decideDriverApplication(input: {
     `${APPLICATION_SELECT} WHERE a.id = $1 LIMIT 1`,
     [input.applicationId],
   );
-  return toApplication(finalRow.rows[0]!);
+  const decided = toApplication(finalRow.rows[0]!);
+  // Notify the applicant of the decision. Fail-open (Audit A P1-8): a
+  // notification outage never blocks the operator decision.
+  await notifyDriverApplicationDecision(decided).catch((error) =>
+    console.warn(
+      "[driverOnboarding] decision notification failed; continuing",
+      error,
+    ),
+  );
+  return decided;
+}
+
+/**
+ * Dispatch the application decision notice to the applicant (email
+ * preferred, SMS fallback). Never throws into the decision path.
+ */
+async function notifyDriverApplicationDecision(
+  application: DriverApplication,
+): Promise<void> {
+  try {
+    const pool = await getPool();
+    const contact = await pool.query<{
+      email: string | null;
+      phone: string | null;
+    }>(`SELECT email, phone FROM public.users WHERE id = $1`, [
+      application.userId,
+    ]);
+    const user = contact.rows[0];
+    const reasonSuffix =
+      application.status === "rejected" && application.rejectionReason
+        ? ` Reason: ${application.rejectionReason}`
+        : "";
+    const message = `Your driver application was ${application.status}.${reasonSuffix}`;
+    const metadata = {
+      notificationType: "driver.application.decided",
+      applicationId: application.id,
+      status: application.status,
+    };
+    const email = user?.email ?? null;
+    const phone = application.phone ?? user?.phone ?? null;
+    if (email) {
+      await sendEmail(
+        email,
+        "SwitchOS driver application decision",
+        message,
+        metadata,
+      );
+    } else if (phone) {
+      await sendSMS(phone, message, metadata);
+    }
+  } catch (error) {
+    console.warn(
+      "[driverOnboarding] decision notification unavailable; continuing",
+      error,
+    );
+  }
 }

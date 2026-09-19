@@ -1,5 +1,6 @@
 import { Pool } from "pg";
 import { ENV } from "./env";
+import { sendEmail, sendSMS } from "./notificationGateway";
 
 let pool: Pool | null = null;
 function database() {
@@ -269,5 +270,68 @@ export async function decideVerificationCase(input: {
       input.idempotencyKey,
     ],
   );
-  return one(result.rows, "verification_case_decision").state;
+  const state = one(result.rows, "verification_case_decision").state;
+  // Notify the case subject of the decision. Fail-open (Audit A P1-8): a
+  // notification outage must never block or roll back the decision.
+  await notifyVerificationDecision(input.caseId, input.decision, state).catch(
+    (error) =>
+      console.warn(
+        "[stakeholderVerification] decision notification failed; continuing",
+        error,
+      ),
+  );
+  return state;
+}
+
+/**
+ * Look up the case subject's contact and dispatch the decision notice.
+ * Never throws into the decision path.
+ */
+async function notifyVerificationDecision(
+  caseId: string,
+  decision: Decision,
+  state: string,
+): Promise<void> {
+  try {
+    const found = await database().query<{
+      subject_user_id: number | null;
+      subject_type: string;
+      subject_key: string;
+    }>(
+      `SELECT subject_user_id, subject_type::text AS subject_type, subject_key
+       FROM verification.verification_case WHERE id = $1::uuid`,
+      [caseId],
+    );
+    const subject = found.rows[0];
+    if (!subject?.subject_user_id) return;
+    const contact = await database().query<{
+      email: string | null;
+      phone: string | null;
+    }>(`SELECT email, phone FROM public.users WHERE id = $1`, [
+      subject.subject_user_id,
+    ]);
+    const user = contact.rows[0];
+    const message = `Your ${subject.subject_type} verification case ${caseId} was decided: ${state} (${decision}). If rejected or suspended you may file an appeal within 14 days.`;
+    const metadata = {
+      notificationType: "verification.case.decided",
+      caseId,
+      decision,
+      state,
+    };
+    if (user?.email) {
+      await sendEmail(
+        user.email,
+        "SwitchOS verification decision",
+        message,
+        metadata,
+      );
+    } else if (user?.phone) {
+      await sendSMS(user.phone, message, metadata);
+    }
+  } catch (error) {
+    console.warn(
+      "[stakeholderVerification] decision notification unavailable; continuing",
+      error,
+    );
+  }
 }

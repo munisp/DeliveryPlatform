@@ -8,6 +8,7 @@ import {
 import { resolvePublicUser } from "./publicUsers";
 import {
   checkFareAgainstFloor,
+  generateMarketEconomicsReport,
   getFareFloorPolicy,
   getLatestTakeRate,
   publishTakeRate,
@@ -80,5 +81,21 @@ export const economicsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const actor = await resolvePublicUser(ctx.user);
       return recordFloorOverride(actor.id, input);
+    }),
+
+  // Publishes a market economics report via the market-economics service
+  // and persists it (Audit B orphan-service wiring, 8110). Fail-open: an
+  // outage returns { persisted: false, unavailable: true }.
+  generateMarketReport: operatorMutationProcedure("write_platform")
+    .input(
+      z.object({
+        marketId: z.string().trim().min(1).max(64),
+        periodStart: z.string().trim().min(4).max(40),
+        periodEnd: z.string().trim().min(4).max(40),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const actor = await resolvePublicUser(ctx.user);
+      return generateMarketEconomicsReport(actor.id, input);
     }),
 });
