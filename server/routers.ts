@@ -1520,7 +1520,7 @@ export const appRouter = router({
         }),
       )
       .mutation(({ ctx, input }) =>
-        cancelPreventNextStart({ actorUserId: ctx.user!.id, ...input }),
+        cancelVehiclePreventNextStart({ actorUserId: ctx.user!.id, ...input }),
       ),
     operateTransition: operatorMutationProcedure("operate")
       .input(
