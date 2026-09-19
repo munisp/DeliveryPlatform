@@ -170,7 +170,7 @@ export async function listOperatorSecuritySessions(operatorId: number): Promise<
 
 export async function isOperatorSecuritySessionActive(operatorId: number, sessionId: string) {
   await ensureOperatorAuthStore();
-  const result = await getOperatorAuthPool().query<{ id: number }>(
+  const result = await getOperatorAuthPool().query<{ id: string }>(
     `UPDATE operator_security_sessions SET last_seen_at = NOW()
      WHERE id = $1 AND operator_id = $2 AND session_hash = $3 AND revoked_at IS NULL AND expires_at > NOW()
      RETURNING id`,
@@ -181,7 +181,7 @@ export async function isOperatorSecuritySessionActive(operatorId: number, sessio
 
 export async function revokeOperatorSecuritySession(operatorId: number, sessionId: string) {
   await ensureOperatorAuthStore();
-  const result = await getOperatorAuthPool().query<{ id: number }>(
+  const result = await getOperatorAuthPool().query<{ id: string }>(
     `UPDATE operator_security_sessions SET revoked_at = NOW()
      WHERE id = $1 AND operator_id = $2 AND revoked_at IS NULL
      RETURNING id`,
