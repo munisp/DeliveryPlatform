@@ -170,7 +170,7 @@ export async function listOperatorSecuritySessions(operatorId: number): Promise<
 
 export async function isOperatorSecuritySessionActive(operatorId: number, sessionId: string) {
   await ensureOperatorAuthStore();
-  const result = await getOperatorAuthPool().query<{ id: string }>(
+  const result = await getOperatorAuthPool().query<{ id: number }>(
     `UPDATE operator_security_sessions SET last_seen_at = NOW()
      WHERE id = $1 AND operator_id = $2 AND session_hash = $3 AND revoked_at IS NULL AND expires_at > NOW()
      RETURNING id`,
@@ -181,7 +181,7 @@ export async function isOperatorSecuritySessionActive(operatorId: number, sessio
 
 export async function revokeOperatorSecuritySession(operatorId: number, sessionId: string) {
   await ensureOperatorAuthStore();
-  const result = await getOperatorAuthPool().query<{ id: string }>(
+  const result = await getOperatorAuthPool().query<{ id: number }>(
     `UPDATE operator_security_sessions SET revoked_at = NOW()
      WHERE id = $1 AND operator_id = $2 AND revoked_at IS NULL
      RETURNING id`,
@@ -192,7 +192,7 @@ export async function revokeOperatorSecuritySession(operatorId: number, sessionI
 
 export async function revokeOtherOperatorSecuritySessions(operatorId: number, currentSessionId: string) {
   await ensureOperatorAuthStore();
-  const result = await getOperatorAuthPool().query<{ id: string }>(
+  const result = await getOperatorAuthPool().query<{ id: number }>(
     `UPDATE operator_security_sessions SET revoked_at = NOW()
      WHERE operator_id = $1 AND id <> $2 AND revoked_at IS NULL AND expires_at > NOW()
      RETURNING id`,
@@ -243,18 +243,29 @@ export async function authenticateOperator(email: string, password: string) {
   };
 }
 
+/**
+ * Provision (or refresh) an operator row for an EXTERNAL OIDC identity.
+ *
+ * Fail-closed provisioning (Audit A P0-3): a brand-new external identity is
+ * provisioned with `is_active = false` and NO `email_verified_at` — the
+ * upstream IdP assertion alone is no longer enough to enter the operator
+ * console. Access is granted only after an existing operator approves the
+ * account via approveExternalOperator (operatorMutationProcedure
+ * "write_platform"). The conflict path deliberately does NOT flip is_active
+ * or stamp email_verified_at, so re-login can neither re-activate a
+ * deactivated account nor self-verify an email; accounts already active
+ * (bootstrap/managed/previously approved) keep their state.
+ */
 export async function ensureExternalOperator(input: { email: string; name: string; tenantId: string | null }) {
   const email = input.email.trim().toLowerCase();
   if (!email) throw new Error("external_identity_missing_email");
   await ensureOperatorAuthStore();
   const result = await getOperatorAuthPool().query<OperatorRecord>(
-    `INSERT INTO operator_credentials (email, name, role, tenant_id, password_hash, is_active, email_verified_at)
-     VALUES ($1, $2, 'operator', $3, $4, true, NOW())
+    `INSERT INTO operator_credentials (email, name, role, tenant_id, password_hash, is_active)
+     VALUES ($1, $2, 'operator', $3, $4, false)
      ON CONFLICT (email) DO UPDATE SET
        name = EXCLUDED.name,
        tenant_id = COALESCE(operator_credentials.tenant_id, EXCLUDED.tenant_id),
-       is_active = true,
-       email_verified_at = COALESCE(operator_credentials.email_verified_at, NOW()),
        updated_at = NOW()
      RETURNING id, email, name, role, tenant_id, password_hash, is_active`,
     [email, input.name.trim() || email, input.tenantId, buildOperatorPasswordHash(randomUUID())],
@@ -266,5 +277,35 @@ export async function ensureExternalOperator(input: { email: string; name: strin
     name: operator.name,
     role: operator.role,
     tenantId: operator.tenant_id,
+    isActive: operator.is_active,
+  };
+}
+
+/**
+ * Approve an externally-provisioned operator. Flips is_active and stamps
+ * email_verified_at (approval IS the verification event for OIDC accounts —
+ * the platform never sent its own verification email). Returns null when the
+ * operator id does not exist.
+ */
+export async function approveExternalOperator(operatorId: number) {
+  await ensureOperatorAuthStore();
+  const result = await getOperatorAuthPool().query<OperatorRecord>(
+    `UPDATE operator_credentials
+     SET is_active = true,
+         email_verified_at = COALESCE(email_verified_at, NOW()),
+         updated_at = NOW()
+     WHERE id = $1
+     RETURNING id, email, name, role, tenant_id, is_active`,
+    [operatorId],
+  );
+  const operator = result.rows[0];
+  if (!operator) return null;
+  return {
+    id: operator.id,
+    email: operator.email,
+    name: operator.name,
+    role: operator.role,
+    tenantId: operator.tenant_id,
+    isActive: operator.is_active,
   };
 }

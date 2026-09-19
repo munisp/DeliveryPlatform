@@ -13,9 +13,9 @@ import { resilientFetch } from "./resilientFetch";
  * database — only their sha256 hex digest is stored (`id_ref_hash`).
  *
  * Name plausibility is screened by the Python verification-intelligence
- * service (`POST /screen-name`). The service is fail-open for v1: on
- * outage/timeout the name is treated as plausible with a
- * `service_unavailable` flag, and the failure is logged. The screening
+ * service (`POST /screen-name`). The service is FAIL-CLOSED (Audit A P0-2):
+ * on outage/timeout the screening is marked `unavailable` and treated as
+ * NOT plausible, so an outage can never auto-verify anyone. The screening
  * service never throws into the request path.
  */
 
@@ -30,6 +30,8 @@ export type NameScreeningResult = {
   score: number | null;
   flags: string[];
   plausible: boolean;
+  /** true when the screening service could not be reached (fail-closed). */
+  unavailable: boolean;
 };
 
 const NAME_PLAUSIBILITY_THRESHOLD = 0.6;
@@ -64,8 +66,9 @@ function parseFlags(raw: unknown): string[] {
 
 /**
  * Screen a rider-supplied name for plausibility ("Snake", "Mr. Dot" style
- * pseudonyms score low). Fail-open: on any service failure returns
- * {score: null, flags: ['service_unavailable'], plausible: true} and logs.
+ * pseudonyms score low). FAIL-CLOSED: on any service failure returns
+ * {score: null, flags: ['service_unavailable'], plausible: false,
+ * unavailable: true} and logs — an outage must never auto-verify a rider.
  */
 export async function screenName(name: string): Promise<NameScreeningResult> {
   const base = ENV.verificationIntelligenceUrl.replace(/\/$/, "");
@@ -95,14 +98,19 @@ export async function screenName(name: string): Promise<NameScreeningResult> {
         ? body.plausible
         : score !== null
           ? score >= NAME_PLAUSIBILITY_THRESHOLD
-          : true;
-    return { score, flags, plausible };
+          : false;
+    return { score, flags, plausible, unavailable: false };
   } catch (error) {
     console.warn(
-      "[riderVerification] verification-intelligence screen-name unavailable; failing open",
+      "[riderVerification] verification-intelligence screen-name unavailable; failing closed",
       error,
     );
-    return { score: null, flags: ["service_unavailable"], plausible: true };
+    return {
+      score: null,
+      flags: ["service_unavailable"],
+      plausible: false,
+      unavailable: true,
+    };
   }
 }
 
@@ -150,26 +158,64 @@ export async function getMyVerificationStatus(userId: number): Promise<{
   };
 }
 
+export type RiderAutoDecision = "verified" | "pending" | "rejected";
+
+/**
+ * Fail-closed auto-decision (Audit A P0-2). Auto-VERIFY only when ALL of:
+ *   1. the ID reference format is valid,
+ *   2. the name screening completed successfully (no outage) AND passed, and
+ *   3. consent was captured (consentVersion supplied at submission).
+ * A screening outage or ANY screening flags leave the submission 'pending'
+ * for human review — never verified. A deterministically invalid ID format
+ * is the only auto-reject.
+ */
+export function decideRiderVerificationOutcome(input: {
+  formatValid: boolean;
+  screening: Pick<NameScreeningResult, "plausible" | "unavailable">;
+  consentCaptured: boolean;
+}): RiderAutoDecision {
+  if (!input.formatValid) return "rejected";
+  if (input.screening.unavailable || !input.screening.plausible) {
+    return "pending";
+  }
+  if (!input.consentCaptured) return "pending";
+  return "verified";
+}
+
 /**
  * Submit an ID reference for verification. Only the sha256 digest is stored.
- * v1 auto-transition: idRef format valid (>= 5 chars) AND screenName
- * plausible => 'verified'; otherwise 'rejected' with flags recorded.
+ * Fail-closed auto-transition (see decideRiderVerificationOutcome): the v1
+ * fail-open behavior (outage => everyone verified) is removed. Consent is
+ * stamped (consent_captured_at / consent_version, drizzle/0091) whenever a
+ * consentVersion is supplied, and is REQUIRED for auto-verification.
  */
 export async function submitVerification(
   userId: number,
-  input: { idType: string; idRef: string; name: string },
+  input: {
+    idType: string;
+    idRef: string;
+    name: string;
+    consentVersion?: string | null;
+  },
 ): Promise<{ status: RiderVerificationStatus }> {
   const pool = await getPool();
   await ensureVerificationRow(userId);
 
   const idRefHash = hashIdReference(input.idRef);
-  // Record the submission as pending before the v1 auto-decision so a crash
-  // between submission and decision never loses the intake.
+  const consentVersion = input.consentVersion?.trim() || null;
+  // Record the submission as pending before the auto-decision so a crash
+  // between submission and decision never loses the intake. Consent is
+  // stamped at the same time (a later consent version supersedes).
   await pool.query(
     `UPDATE public.rider_verifications
-     SET status = 'pending', id_type = $2, id_ref_hash = $3, updated_at = now()
+     SET status = 'pending',
+         id_type = $2,
+         id_ref_hash = $3,
+         consent_captured_at = CASE WHEN $4::text IS NOT NULL THEN now() ELSE consent_captured_at END,
+         consent_version = COALESCE($4, consent_version),
+         updated_at = now()
      WHERE user_id = $1`,
-    [userId, input.idType, idRefHash],
+    [userId, input.idType, idRefHash, consentVersion],
   );
   const formatValid = input.idRef.trim().length >= 5;
   const screening = await screenName(input.name);
@@ -180,11 +226,24 @@ export async function submitVerification(
     [userId, input.name, screening.score, JSON.stringify(screening.flags)],
   );
 
-  const verified = formatValid && screening.plausible;
-  const status: RiderVerificationStatus = verified ? "verified" : "rejected";
+  const status = decideRiderVerificationOutcome({
+    formatValid,
+    screening,
+    consentCaptured: consentVersion !== null,
+  });
   const flags = [...screening.flags];
   if (!formatValid) flags.push("id_ref_format_invalid");
-  if (!screening.plausible) flags.push("name_implausible");
+  if (!screening.unavailable && !screening.plausible) {
+    flags.push("name_implausible");
+  }
+  if (
+    formatValid &&
+    !screening.unavailable &&
+    screening.plausible &&
+    consentVersion === null
+  ) {
+    flags.push("consent_required");
+  }
 
   await pool.query(
     `UPDATE public.rider_verifications

@@ -14,6 +14,7 @@ import {
   declineTransparentDriverOffer,
   listTransparentDriverOffers,
 } from "./driverDispatchFairness";
+import { getVerifiedDriverAccess } from "./driverOnboarding";
 import { resolvePublicUser } from "./publicUsers";
 import { authenticatedProcedure, router, type SessionUser } from "./trpc";
 
@@ -46,6 +47,15 @@ import {
  * through the same identity flow) and an `email`. We resolve the caller's
  * driver row by open_id first and fall back to a case-insensitive email
  * match, preferring the open_id row when both match.
+ *
+ * Access rule (Audit A P0-1): a resolved driver row is NOT sufficient for the
+ * earnings/settlements/performance/offer surfaces. Those additionally require
+ * getVerifiedDriverAccess — an APPROVED driver_applications row whose bound
+ * verification case is VERIFIED (see driverOnboarding.ts). A silent
+ * open_id/email match against a (possibly seeded) drivers row no longer
+ * grants access on its own. The legacy read (myDriverProfile) still returns
+ * the linked row so pre-existing couriers can see their profile, but marks
+ * it with `verifiedAccess: false` until onboarding completes.
  */
 
 export type LinkedDriver = {
@@ -90,6 +100,18 @@ async function requireLinkedDriver(user: SessionUser): Promise<LinkedDriver> {
       code: "NOT_FOUND",
       message:
         "no_driver_profile_linked: this account is not linked to a courier profile yet",
+    });
+  }
+  // Fail-closed: silent open_id/email linkage alone never grants the driver
+  // surface. Requires an approved application + verified KYC case
+  // (driverOnboarding.getVerifiedDriverAccess).
+  const publicUser = await resolvePublicUser(user);
+  const access = await getVerifiedDriverAccess(publicUser.id);
+  if (!access) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message:
+        "driver_verification_required: an approved driver application with a verified KYC case is required",
     });
   }
   return driver;
@@ -255,8 +277,16 @@ type ContractAction = Parameters<
 
 export const selfserveRouter = router({
   myDriverProfile: authenticatedProcedure.query(async ({ ctx }) => {
+    // Legacy read: still returns the linked driver row (open_id/email match)
+    // so pre-existing couriers keep visibility of their profile, but marks
+    // whether the account also holds a verified driver-onboarding linkage.
+    // Every earning/settlement/offer path goes through requireLinkedDriver,
+    // which hard-requires verifiedAccess.
     const driver = await resolveDriverForUser(ctx.user);
-    return driver;
+    if (!driver) return null;
+    const publicUser = await resolvePublicUser(ctx.user);
+    const access = await getVerifiedDriverAccess(publicUser.id);
+    return { ...driver, verifiedAccess: access !== null };
   }),
 
   myIncentives: authenticatedProcedure

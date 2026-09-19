@@ -64,14 +64,19 @@ describe("screenName", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const result = await screenName("Snake");
-    expect(result).toEqual({ score: 0.12, flags: ["pseudonym"], plausible: false });
+    expect(result).toEqual({
+      score: 0.12,
+      flags: ["pseudonym"],
+      plausible: false,
+      unavailable: false,
+    });
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toContain("/screen-name");
     expect(init.method).toBe("POST");
   });
 
-  it("fails open with service_unavailable flag when the service is down", async () => {
+  it("fails closed with service_unavailable flag when the service is down", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => {
@@ -84,7 +89,8 @@ describe("screenName", () => {
     expect(result).toEqual({
       score: null,
       flags: ["service_unavailable"],
-      plausible: true,
+      plausible: false,
+      unavailable: true,
     });
     expect(warn).toHaveBeenCalled();
   });
@@ -157,7 +163,7 @@ describe("submitVerification", () => {
     ]);
   }
 
-  it("auto-verifies a valid ID reference with a plausible name and stores only the hash", async () => {
+  it("auto-verifies a valid ID reference with a plausible name and captured consent, storing only the hash", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => jsonResponse({ score: 0.95, flags: [], plausible: true })),
@@ -169,6 +175,7 @@ describe("submitVerification", () => {
       idType: "nin",
       idRef: "12345678901",
       name: "Adaeze Okafor",
+      consentVersion: "rider-id-consent-v1",
     });
     expect(result.status).toBe("verified");
 
@@ -178,6 +185,9 @@ describe("submitVerification", () => {
         call.text.includes("status = 'pending'"),
     );
     expect(pendingWrite).toBeDefined();
+    // consent receipt is stamped with the submission
+    expect(pendingWrite?.text).toContain("consent_captured_at");
+    expect(pendingWrite?.values).toContain("rider-id-consent-v1");
 
     const finalWrite = pool.calls.find(
       (call) =>
@@ -195,7 +205,7 @@ describe("submitVerification", () => {
     }
   });
 
-  it("rejects an implausible name with flags recorded", async () => {
+  it("leaves an implausible name pending for human review with flags recorded (fail-closed, never auto-verified)", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async () =>
@@ -209,16 +219,74 @@ describe("submitVerification", () => {
       idType: "nin",
       idRef: "12345678901",
       name: "Mr. Dot",
+      consentVersion: "rider-id-consent-v1",
     });
-    expect(result.status).toBe("rejected");
+    expect(result.status).toBe("pending");
     const finalWrite = pool.calls.find(
       (call) =>
         /UPDATE public\.rider_verifications/.test(call.text) &&
-        call.values.includes("rejected"),
+        call.values.includes("pending"),
     );
     expect(finalWrite).toBeDefined();
     const flagsParam = finalWrite?.values.find(
       (value) => typeof value === "string" && value.includes("name_implausible"),
+    );
+    expect(flagsParam).toBeDefined();
+  });
+
+  it("stays pending on screening outage even with a valid ID and consent", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error("connection refused");
+      }),
+    );
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const pool = submissionPool();
+    dbMocks.getPool.mockResolvedValue(pool);
+
+    const result = await submitVerification(42, {
+      idType: "nin",
+      idRef: "12345678901",
+      name: "Adaeze Okafor",
+      consentVersion: "rider-id-consent-v1",
+    });
+    expect(result.status).toBe("pending");
+    const finalWrite = pool.calls.find(
+      (call) =>
+        /UPDATE public\.rider_verifications/.test(call.text) &&
+        call.values.includes("pending"),
+    );
+    expect(finalWrite).toBeDefined();
+    const flagsParam = finalWrite?.values.find(
+      (value) =>
+        typeof value === "string" && value.includes("service_unavailable"),
+    );
+    expect(flagsParam).toBeDefined();
+  });
+
+  it("stays pending without consent even when format and screening pass", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse({ score: 0.95, flags: [], plausible: true })),
+    );
+    const pool = submissionPool();
+    dbMocks.getPool.mockResolvedValue(pool);
+
+    const result = await submitVerification(42, {
+      idType: "nin",
+      idRef: "12345678901",
+      name: "Adaeze Okafor",
+    });
+    expect(result.status).toBe("pending");
+    const finalWrite = pool.calls.find(
+      (call) =>
+        /UPDATE public\.rider_verifications/.test(call.text) &&
+        call.values.includes("pending"),
+    );
+    expect(finalWrite).toBeDefined();
+    const flagsParam = finalWrite?.values.find(
+      (value) => typeof value === "string" && value.includes("consent_required"),
     );
     expect(flagsParam).toBeDefined();
   });
