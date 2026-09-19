@@ -870,6 +870,26 @@ app.get("/api/auth/oidc/callback", rateLimit(30), async (req, res) => {
       name: identity.name,
       tenantId: identity.tenantId,
     });
+    // External OIDC identities are provisioned INACTIVE (Audit A P0-3): no
+    // session is issued until an existing operator approves the account via
+    // operatorOnboarding.approveExternalOperator.
+    if (!operator.isActive) {
+      await recordOperationalEvent({
+        eventType: "auth.oidc.callback",
+        actorId: `${operator.id}`,
+        actorRole: operator.role,
+        tenantId: operator.tenantId,
+        route: req.path,
+        outcome: "failure",
+        payload: {
+          email: operator.email,
+          reason: "operator_pending_approval",
+        },
+      });
+      clearOidcFlowCookies(res);
+      res.status(403).json({ error: "operator_pending_approval" });
+      return;
+    }
     await issueOperatorSession(req, res, operator, {
       authSource: "oidc",
       mfaAuthenticated: Boolean(identity.mfaAuthenticated),
