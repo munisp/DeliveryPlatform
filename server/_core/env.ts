@@ -376,6 +376,9 @@ export const ENV = {
     process.env.LONGCAT_SPEECH_SERVICE_URL ?? "http://127.0.0.1:8105",
   verificationIntelligenceUrl:
     process.env.VERIFICATION_INTELLIGENCE_URL ?? "http://127.0.0.1:8106",
+  safetyEngineUrl: process.env.SAFETY_ENGINE_URL ?? "http://127.0.0.1:8107",
+  marketEconomicsUrl:
+    process.env.MARKET_ECONOMICS_URL ?? "http://127.0.0.1:8110",
   incentivesWorkerUrl:
     process.env.INCENTIVES_WORKER_URL ?? "http://127.0.0.1:8108",
   workRecordSignerUrl:
@@ -443,7 +446,7 @@ export const ENV = {
     false,
   ),
   vehicleTrackerConsumerEmbedded: parseBoolean(
-    process.env.VEHICLE_TRACKER_CONSUMER_EMBEDDED,
+    process.env.ENABLE_VEHICLE_TRACKER_CONSUMER_EMBEDDED,
     false,
   ),
   vehicleTrackerWorkerMetricsPort: parseBoundedInteger(
