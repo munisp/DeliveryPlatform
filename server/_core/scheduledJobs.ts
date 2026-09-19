@@ -7,6 +7,8 @@ import {
   markDigestAsSent,
   selectWinningVariant,
 } from "../db";
+import { dispatchDeveloperWebhooks } from "./developerWebhookDispatcher";
+import { sendEmail, sendSMS } from "./notificationGateway";
 
 async function getPoolOrNull(): Promise<Pool | null> {
   return getPool().catch(() => null);
@@ -233,9 +235,219 @@ export async function weeklyDigestJob() {
   };
 }
 
+/**
+ * Verification outbox consumer sweep (Audit A cross-cutting 2): the
+ * verification engine appends case lifecycle events to
+ * verification.outbox_event but nothing consumed them. This sweep claims a
+ * batch (consumed_at marker + FOR UPDATE SKIP LOCKED, idempotent under
+ * concurrent sweeps), notifies each case subject of the event (fail-open per
+ * event — a notification outage never loses the consumed marker), and then
+ * flushes pending developer webhook deliveries through the existing
+ * dispatcher.
+ */
+export async function verificationOutboxSweepJob(limit = 50) {
+  const pool = await getPoolOrNull();
+  if (!pool) {
+    return {
+      success: false,
+      message: "Database unavailable; verification outbox sweep was not executed.",
+    };
+  }
+
+  const bounded = Math.min(200, Math.max(1, Math.trunc(limit)));
+  const claimed = await pool.query<{
+    id: string;
+    case_id: string;
+    event_type: string;
+    payload: unknown;
+    created_at: string | Date;
+  }>(
+    `UPDATE verification.outbox_event
+     SET consumed_at = now()
+     WHERE id IN (
+       SELECT id FROM verification.outbox_event
+       WHERE consumed_at IS NULL
+       ORDER BY created_at
+       LIMIT $1
+       FOR UPDATE SKIP LOCKED
+     )
+     RETURNING id, case_id, event_type, payload, created_at`,
+    [bounded],
+  );
+
+  let notified = 0;
+  for (const event of claimed.rows ?? []) {
+    try {
+      const subject = await pool.query<{
+        subject_user_id: number | null;
+        subject_type: string;
+        subject_key: string;
+      }>(
+        `SELECT subject_user_id, subject_type::text AS subject_type, subject_key
+         FROM verification.verification_case WHERE id = $1`,
+        [event.case_id],
+      );
+      const subjectUserId = subject.rows[0]?.subject_user_id;
+      if (subjectUserId == null) continue;
+      const contact = await pool.query<{
+        email: string | null;
+        phone: string | null;
+      }>(`SELECT email, phone FROM public.users WHERE id = $1`, [
+        subjectUserId,
+      ]);
+      const user = contact.rows[0];
+      const message = `Verification update (${event.event_type}) for your ${subject.rows[0]?.subject_type} verification case ${event.case_id}.`;
+      const metadata = {
+        notificationType: event.event_type,
+        caseId: event.case_id,
+      };
+      if (user?.email) {
+        await sendEmail(user.email, "SwitchOS verification update", message, metadata);
+        notified += 1;
+      } else if (user?.phone) {
+        await sendSMS(user.phone, message, metadata);
+        notified += 1;
+      }
+    } catch (error) {
+      console.warn(
+        `[scheduledJobs] verification outbox notification for case ${event.case_id} failed; continuing`,
+        error,
+      );
+    }
+  }
+
+  let webhookResult: unknown = null;
+  try {
+    webhookResult = await dispatchDeveloperWebhooks(bounded);
+  } catch (error) {
+    console.warn(
+      "[scheduledJobs] developer webhook dispatch after verification sweep failed; continuing",
+      error,
+    );
+  }
+
+  const consumed = claimed.rowCount ?? claimed.rows?.length ?? 0;
+  return {
+    success: true,
+    message: `Consumed ${consumed} verification outbox events (notified ${notified} subjects).`,
+    consumed,
+    notified,
+    webhooks: webhookResult,
+  };
+}
+
+export const VERIFICATION_MANUAL_REVIEW_SLA_HOURS = 72;
+
+/**
+ * Verification SLA sweep (Audit A P1-9 / cross-cutting 5): cases stuck in
+ * manual_review beyond the SLA get an escalation outbox event (idempotent —
+ * one per case via a deterministic idempotency key) and operators are
+ * notified (fail-open). Without this, cases could stall in manual_review
+ * forever with no aging signal.
+ */
+export async function verificationSlaSweepJob(
+  thresholdHours = VERIFICATION_MANUAL_REVIEW_SLA_HOURS,
+) {
+  const pool = await getPoolOrNull();
+  if (!pool) {
+    return {
+      success: false,
+      message: "Database unavailable; verification SLA sweep was not executed.",
+    };
+  }
+
+  const boundedHours = Math.min(24 * 30, Math.max(1, Math.trunc(thresholdHours)));
+  const aging = await pool.query<{
+    id: string;
+    subject_type: string;
+    subject_key: string;
+    subject_user_id: number | null;
+    updated_at: string | Date;
+  }>(
+    `SELECT id, subject_type::text AS subject_type, subject_key, subject_user_id, updated_at
+     FROM verification.verification_case
+     WHERE state = 'manual_review'
+       AND updated_at < now() - ($1 || ' hours')::interval
+     ORDER BY updated_at
+     LIMIT 200`,
+    [boundedHours],
+  );
+
+  let escalated = 0;
+  let operatorsNotified = 0;
+  for (const row of aging.rows ?? []) {
+    const inserted = await pool.query<{ id: string }>(
+      `INSERT INTO verification.outbox_event (case_id, event_type, payload, idempotency_key)
+       VALUES ($1, 'verification.case.sla_escalated', $2::jsonb, $3)
+       ON CONFLICT (case_id, event_type, idempotency_key) DO NOTHING
+       RETURNING id`,
+      [
+        row.id,
+        JSON.stringify({
+          case_id: row.id,
+          subject_type: row.subject_type,
+          subject_key: row.subject_key,
+          state: "manual_review",
+          sla_hours: boundedHours,
+          stale_since: row.updated_at,
+        }),
+        `verification-sla-${row.id}`,
+      ],
+    );
+    if (!inserted.rows[0]) continue; // already escalated — sweep is idempotent
+    escalated += 1;
+    try {
+      const operators = await pool.query<{ email: string | null }>(
+        `SELECT email FROM public.users
+         WHERE role = 'admin' AND email IS NOT NULL
+         LIMIT 10`,
+      );
+      for (const operator of operators.rows) {
+        if (!operator.email) continue;
+        try {
+          await sendEmail(
+            operator.email,
+            "SwitchOS verification SLA escalation",
+            `Verification case ${row.id} (${row.subject_type} / ${row.subject_key}) has been in manual_review for over ${boundedHours} hours and needs operator attention.`,
+            {
+              notificationType: "verification.case.sla_escalated",
+              caseId: row.id,
+            },
+          );
+          operatorsNotified += 1;
+        } catch (error) {
+          console.warn(
+            `[scheduledJobs] SLA escalation notice to operator failed for case ${row.id}; continuing`,
+            error,
+          );
+        }
+      }
+    } catch (error) {
+      console.warn(
+        `[scheduledJobs] operator lookup for SLA escalation of case ${row.id} failed; continuing`,
+        error,
+      );
+    }
+  }
+
+  return {
+    success: true,
+    message:
+      escalated > 0
+        ? `Escalated ${escalated} verification cases breaching the ${boundedHours}h manual-review SLA.`
+        : "No verification cases breached the manual-review SLA.",
+    thresholdHours: boundedHours,
+    aged: aging.rows?.length ?? 0,
+    escalated,
+    operatorsNotified,
+  };
+}
+
 export const jobs = {
   closeLeaderboard: closeLeaderboardJob,
   pointsExpiration: expirePointsJob,
   abTestWinner: abTestWinnerJob,
   weeklyDigest: weeklyDigestJob,
+  verificationOutboxSweep: verificationOutboxSweepJob,
+  verificationSlaSweep: verificationSlaSweepJob,
 };
