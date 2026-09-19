@@ -265,6 +265,137 @@ spec:
           type: Utilization
           averageUtilization: 70
 ---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: work-record-signer
+  namespace: switchos
+  labels:
+    app.kubernetes.io/name: work-record-signer
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  replicas: 2
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: work-record-signer
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: work-record-signer
+        app.kubernetes.io/part-of: deliveryplatform
+    spec:
+      serviceAccountName: pricing-dispatch
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+        - maxSkew: 1
+          minDomains: 2
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: work-record-signer
+      containers:
+        - name: work-record-signer
+          image: ghcr.io/munisp/deliveryplatform-work-record-signer:REPLACE_WITH_IMMUTABLE_TAG
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8109
+          envFrom:
+            - configMapRef:
+                name: pricing-dispatch-runtime-config
+            - secretRef:
+                name: switchos-runtime-secrets
+          env:
+            - name: PORT
+              value: "8109"
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "256Mi"
+            limits:
+              cpu: "1"
+              memory: "512Mi"
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            failureThreshold: 30
+            periodSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            timeoutSeconds: 2
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: work-record-signer
+  namespace: switchos
+spec:
+  selector:
+    app.kubernetes.io/name: work-record-signer
+  ports:
+    - name: http
+      port: 8109
+      targetPort: http
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: work-record-signer
+  namespace: switchos
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: work-record-signer
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: work-record-signer
+  namespace: switchos
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: work-record-signer
+  minReplicas: 2
+  maxReplicas: 5
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -275,7 +406,7 @@ spec:
     matchExpressions:
       - key: app.kubernetes.io/name
         operator: In
-        values: ["pricing-engine", "dispatch-optimizer"]
+        values: ["pricing-engine", "dispatch-optimizer", "work-record-signer"]
   policyTypes: ["Ingress", "Egress"]
   ingress:
     - from:
@@ -296,6 +427,8 @@ spec:
           port: 8101
         - protocol: TCP
           port: 8090
+        - protocol: TCP
+          port: 8109
   egress:
     - to:
         - namespaceSelector:
