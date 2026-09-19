@@ -31,8 +31,8 @@ KUBERNETES_ROOT = ROOT / "deploy" / "kubernetes"
 
 # Deployment (manifest file, deployment name) -> (service source dir, language).
 # Services without an in-cluster Deployment (verification-orchestrator,
-# verification-policy, verification-intelligence) are validated by their
-# boot-time checks only and are intentionally absent here.
+# verification-policy) are validated by their boot-time checks only and are
+# intentionally absent here.
 DEPLOYMENT_SERVICES: list[tuple[str, str, str, str]] = [
     ("go-services/workloads.yaml", "inventory-control", "services/go/inventory-control", "go"),
     ("go-services/workloads.yaml", "local-commerce-gateway", "services/go/local-commerce-gateway", "go"),
@@ -50,8 +50,13 @@ DEPLOYMENT_SERVICES: list[tuple[str, str, str, str]] = [
     ("python-services/workloads.yaml", "speech-runtime", "services/python/speech-runtime", "python"),
     ("python-services/workloads.yaml", "ride-payment-webhook", "services/python/payment-webhook", "python"),
     ("python-services/workloads.yaml", "compliance-review", "services/python/compliance-review", "python"),
+    ("python-services/workloads.yaml", "verification-intelligence", "services/python/verification-intelligence", "python"),
+    ("python-services/workloads.yaml", "incentives-worker", "services/python/incentives-worker", "python"),
+    ("python-services/workloads.yaml", "market-economics", "services/python/market-economics", "python"),
+    ("go-services/workloads.yaml", "safety-engine", "services/go/safety-engine", "go"),
     ("pricing-dispatch/workloads.yaml", "pricing-engine", "services/rust/pricing-engine", "rust"),
     ("pricing-dispatch/workloads.yaml", "dispatch-optimizer", "services/rust/dispatch-optimizer", "rust"),
+    ("pricing-dispatch/workloads.yaml", "work-record-signer", "services/rust/work-record-signer", "rust"),
     ("tracker-ingest/workloads.yaml", "vehicle-tracker-ingest", "server", "typescript"),
     ("central/workloads.yaml", "central-app", "server", "typescript"),
 ]
