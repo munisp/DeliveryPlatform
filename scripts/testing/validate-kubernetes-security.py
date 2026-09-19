@@ -26,6 +26,11 @@ EXPECTED_RUNTIME_SAS = {
     "speech-runtime": "python-services",
     "ride-payment-webhook": "python-services",
     "compliance-review": "python-services",
+    "safety-engine": "go-services",
+    "verification-intelligence": "python-services",
+    "incentives-worker": "python-services",
+    "market-economics": "python-services",
+    "work-record-signer": "pricing-dispatch",
 }
 EXPECTED_EXTERNAL_SECRETS = {
     "switchos-runtime-secrets",
@@ -39,7 +44,7 @@ def load_yaml(path: Path) -> list[dict[str, Any]]:
     documents: list[dict[str, Any]] = []
     for index, document in enumerate(yaml.safe_load_all(path.read_text(encoding="utf-8")), start=1):
         if not isinstance(document, dict):
-            raise SystemExit(f"{path}:{index}: expected YAML mapping")
+            raise SystemExit(f"{path}:{index}: expected a YAML mapping")
         documents.append(document)
     return documents
 
