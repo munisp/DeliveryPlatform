@@ -1032,6 +1032,152 @@ spec:
         type: Utilization
         averageUtilization: 70
 ---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: safety-engine
+  namespace: switchos
+  labels: &id001
+    app.kubernetes.io/name: safety-engine
+    app.kubernetes.io/component: go-service
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  replicas: 2
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: safety-engine
+  template:
+    metadata:
+      labels: *id001
+      annotations: {}
+    spec:
+      serviceAccountName: go-services
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+      - maxSkew: 1
+        minDomains: 2
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: DoNotSchedule
+        labelSelector:
+          matchLabels:
+            app.kubernetes.io/name: safety-engine
+      containers:
+      - name: safety-engine
+        image: ghcr.io/munisp/deliveryplatform-safety-engine:REPLACE_WITH_IMMUTABLE_TAG
+        imagePullPolicy: IfNotPresent
+        ports:
+        - name: http
+          containerPort: 8107
+        envFrom:
+        - configMapRef:
+            name: go-services-runtime-config
+        - secretRef:
+            name: go-services-secrets
+        env:
+        - name: PORT
+          value: '8107'
+        resources:
+          requests:
+            cpu: 250m
+            memory: 256Mi
+          limits:
+            cpu: '1'
+            memory: 512Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+        startupProbe:
+          httpGet:
+            path: /health
+            port: http
+          failureThreshold: 36
+          periodSeconds: 5
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: http
+          periodSeconds: 10
+          timeoutSeconds: 3
+          failureThreshold: 3
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 20
+          periodSeconds: 20
+          timeoutSeconds: 3
+          failureThreshold: 3
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: safety-engine
+  namespace: switchos
+  labels:
+    app.kubernetes.io/name: safety-engine
+    app.kubernetes.io/component: go-service
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  selector:
+    app.kubernetes.io/name: safety-engine
+  ports:
+  - name: http
+    port: 8107
+    targetPort: http
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: safety-engine
+  namespace: switchos
+  labels:
+    app.kubernetes.io/name: safety-engine
+    app.kubernetes.io/component: go-service
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: safety-engine
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: safety-engine
+  namespace: switchos
+  labels:
+    app.kubernetes.io/name: safety-engine
+    app.kubernetes.io/component: go-service
+    app.kubernetes.io/part-of: deliveryplatform
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: safety-engine
+  minReplicas: 2
+  maxReplicas: 5
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -1066,6 +1212,8 @@ spec:
     - protocol: TCP
       port: 8104
     - protocol: TCP
+      port: 8107
+    - protocol: TCP
       port: 8112
     - protocol: TCP
       port: 8114
@@ -1097,6 +1245,8 @@ spec:
       port: 8090
     - protocol: TCP
       port: 8105
+    - protocol: TCP
+      port: 8106
     - protocol: TCP
       port: 9092
     - protocol: TCP
