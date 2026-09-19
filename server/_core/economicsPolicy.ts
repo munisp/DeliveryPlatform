@@ -1,6 +1,8 @@
 import { TRPCError } from "@trpc/server";
 
 import { getPool } from "../db";
+import { ENV } from "./env";
+import { resilientFetch } from "./resilientFetch";
 import { assertConsultationEligible, postConsultation } from "./workerCouncil";
 
 /**
@@ -288,4 +290,102 @@ export async function recordFloorOverride(
     floorMinor: policy.floor_minor,
     consultationId: consultation.id,
   };
+}
+
+export type MarketEconomicsReportRow = {
+  id: string;
+  market_id: string;
+  period: unknown;
+  report: unknown;
+  created_at: string | Date;
+};
+
+export type MarketEconomicsReportResult = {
+  marketId: string;
+  persisted: boolean;
+  unavailable: boolean;
+  reportId: string | null;
+  createdAt: string | null;
+};
+
+/**
+ * Generate a published market economics report through the market-economics
+ * service (POST /reports/generate) and persist the machine-readable output
+ * in public.market_economics_reports (drizzle/0092) — durability belongs to
+ * the caller, the service only caches in-memory.
+ *
+ * The request carries the currently published take rate and fare floor for
+ * the market. Per-trip aggregates are not exported server-side yet, so
+ * `trips` is an empty set (the service accepts it and reports zero-volume
+ * economics); wiring the trip aggregate export is follow-up work.
+ *
+ * Fail-open: a service outage never throws into the operator path — the
+ * result is { persisted: false, unavailable: true }.
+ */
+export async function generateMarketEconomicsReport(
+  actorUserId: number,
+  input: { marketId: string; periodStart: string; periodEnd: string },
+): Promise<MarketEconomicsReportResult> {
+  const takeRate = await getLatestTakeRate(input.marketId);
+  const floor = await getFareFloorPolicy(input.marketId);
+  const base = ENV.marketEconomicsUrl.replace(/\/$/, "");
+  try {
+    const response = await resilientFetch(`${base}/reports/generate`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "X-Internal-Service-Token": ENV.internalServiceToken,
+      },
+      body: JSON.stringify({
+        market_id: input.marketId,
+        period: { start: input.periodStart, end: input.periodEnd },
+        trips: [],
+        published_take_rate_bps: takeRate?.rate_bps ?? 0,
+        fare_floor_minor: floor?.floor_minor ?? 0,
+      }),
+      timeoutMs: 10_000,
+      maxAttempts: 1,
+    });
+    if (!response.ok) {
+      throw new Error(`reports/generate returned status ${response.status}`);
+    }
+    const body = (await response.json()) as { report?: unknown };
+    if (!body.report || typeof body.report !== "object") {
+      throw new Error("reports/generate response invalid");
+    }
+    const pool = await getPool();
+    const inserted = await pool.query<MarketEconomicsReportRow>(
+      `INSERT INTO public.market_economics_reports (market_id, period, report)
+       VALUES ($1, $2::jsonb, $3::jsonb)
+       RETURNING *`,
+      [
+        input.marketId,
+        JSON.stringify({ start: input.periodStart, end: input.periodEnd }),
+        JSON.stringify(body.report),
+      ],
+    );
+    const row = inserted.rows[0];
+    if (!row) {
+      throw new Error("market_economics_report_persist_failed");
+    }
+    return {
+      marketId: input.marketId,
+      persisted: true,
+      unavailable: false,
+      reportId: row.id,
+      createdAt: new Date(row.created_at).toISOString(),
+    };
+  } catch (error) {
+    console.warn(
+      `[economicsPolicy] market-economics reports/generate unavailable for ${input.marketId} (actor ${actorUserId}); failing open`,
+      error,
+    );
+    return {
+      marketId: input.marketId,
+      persisted: false,
+      unavailable: true,
+      reportId: null,
+      createdAt: null,
+    };
+  }
 }
