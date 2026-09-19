@@ -1,8 +1,8 @@
 import { z } from "zod";
-
 import { TRPCError } from "@trpc/server";
+import { getSessionFromRequest, signSessionToken } from "./_core/auth";
+import { getDb } from "./db";
 import {
-  analyticsReadProcedure,
   authenticatedProcedure,
   operatorMutationProcedure,
   protectedProcedure,
@@ -10,109 +10,81 @@ import {
   router,
   workspaceReadProcedure,
 } from "./_core/trpc";
-import { systemRouter } from "./_core/systemRouter";
-import { mobilityRouter } from "./_core/mobilityRouter";
-import { consolesRouter } from "./_core/consolesRouter";
-import { compliancePacksRouter } from "./_core/compliancePacksRouter";
+import { createReferral, getUserReferrals } from "./db-referrals";
+import { getUserPoints } from "./db-loyalty";
+import { getCampaigns, trackMarketingEvent } from "./db-marketing";
 import {
-  getDriverMobilityWorkspace,
-  getMerchantChannelWorkspace,
-  getPhoneOrderingWorkspace,
-  getServiceRecoveryWorkspace,
-  getTablesideWorkspace,
-  getWhiteLabelAppsWorkspace,
-} from "./lib/platformWorkspaces";
+  createLocalCommerceOrder,
+  createLocalCommerceVendor,
+  getLocalCommerceWorkspace,
+} from "./_core/localCommerce";
 import {
-  getLakehouseAnalyticsSummary,
-  getLakehouseDriverStats,
-  getLakehouseMarketplaceOverview,
-  getLakehouseOrderStats,
-  syncLakehouseFromPostgres,
-} from "./lib/lakehouse";
-import { getFundsReconciliationSnapshot, getOrderRevenueTrend, getOrdersByVertical } from "./db";
+  createVoiceAgentCall,
+  escalateVoiceAgentCall,
+  getVoiceAgentWorkspace,
+  handoffVoiceAgentCall,
+  startVoiceAgentCall,
+} from "./_core/voiceAgent";
+import { getPhoneOrderingWorkspace } from "./_core/phoneOrdering";
 import {
   appendLongCatMessagingTurn,
   appendLongCatVoiceTurn,
+  executeLongCatAction,
   getLongCatCustomerMemory,
   startLongCatMessagingSession,
   startLongCatVoiceSession,
 } from "./_core/longcatVoice";
-import { executeLongCatAction } from "./_core/longcatActions";
+import { ENV } from "./_core/env";
 import {
-  buildLocalCommerceLogisticsControlTower,
-  buildLocalCommerceSuperGatewayWorkspace,
-  planLocalCommerceConciergeIntent,
-} from "./_core/localCommerceSuperGateway";
+  cancelLocalCommerceOrder,
+  confirmLocalCommerceOrderDelivery,
+  createGuestOrderQuote,
+  placeLocalCommerceOrder,
+} from "./_core/localCommerceCheckout";
 import {
-  applyLoyaltyIntervention,
-  executeMerchantGrowthCampaign,
-  getSupplyChainGrowthControl,
-  queueReplenishmentWorkflow,
-} from "./_core/supplyChainCommandCenter";
+  archiveLocalCommerceCustomer,
+  mergeLocalCommerceCustomers,
+  restoreLocalCommerceCustomer,
+} from "./_core/localCommerceCustomers";
 import {
-  advanceWorkOrder,
-  assignWorkOrder,
-  cancelWorkOrder,
-  completeWorkOrder,
-  createWorkOrder,
-  getWorkOrderDetail,
-  listWorkOrders,
-  recordWorkOrderProof,
-  scheduleWorkOrder,
-  setTechnicianServiceArea,
-  upsertServiceArea,
-  upsertTechnician,
-} from "./_core/fieldService";
+  approveLocalCommerceVendorPayout,
+  processLocalCommerceVendorPayout,
+  rejectLocalCommerceVendorPayout,
+  requestLocalCommerceVendorPayout,
+} from "./_core/localCommercePayouts";
 import {
-  declineTransparentDriverOffer,
-  listTransparentDriverOffers,
-  setDriverDispatchFairnessPolicy,
-  setDriverOfferEconomicsPolicy,
-} from "./_core/driverDispatchFairness";
+  decideLocalCommercePlanApproval,
+  requestLocalCommercePlanApproval,
+} from "./_core/localCommerceApprovals";
 import {
-  activateVehicleAsset,
-  assignVehicleAssetLocation,
-  cancelVehicleAvailabilityBlock,
-  createFleetProvider,
-  createVehicleAvailabilityBlock,
-  createVehicleProviderLocation,
-  createVehicleRentalAddOn,
-  createVehicleOffer,
-  createVehicleRentalGeofence,
-  createVehicleTrackerProvider,
-  decideVehicleContractExtension,
-  getVehicleRentalOperationsSnapshot,
-  getVehicleTrackerOperationsSnapshot,
-  listVehicleAccessContracts,
-  listVehicleAccessOffers,
-  listVehicleRentalAddOns,
-  recordAssetEvidence,
-  recordVehicleAgreementAcceptance,
-  recordVehicleInspection,
-  recordVehicleRentalPaymentTrackingSignal,
-  recordVehicleTrackerControlConsent,
-  registerVehicleAsset,
-  requestVehicleAccess,
-  requestVehiclePreventNextStart,
-  requestVehicleAccessWithAddOns,
-  requestVehicleContractExtension,
-  transitionVehicleAccessContract,
-  authorizeVehiclePreventNextStart,
-  cancelVehiclePreventNextStart,
-  registerVehicleAssetTracker,
-  upsertWorkerVehicleEligibility,
-} from "./_core/vehicleAccess";
+  acknowledgeDeliveryPartnerTrackingAlert,
+  claimDeliveryPartnerOrder,
+  getDeliveryPartnerWorkspace,
+  refreshDeliveryPartnerTrackingAlertSnapshot,
+  registerDeliveryPartnerTrackingDevice,
+  reportDeliveryPartnerStatus,
+  reportDeliveryPartnerTrackingPosition,
+  resolveDeliveryPartnerTrackingAlert,
+} from "./_core/deliveryPartner";
 import {
-  decideVerificationCase,
-  enqueueVerificationProcessing,
-  getVerificationChecks,
-  listVerificationCases,
-  recordVerificationConsent,
-  recordVerificationEvidence,
-  recordVerificationProviderCheck,
-  startVerificationCase,
-  withdrawVerificationConsent,
-} from "./_core/stakeholderVerification";
+  listCommerceFulfillmentRequests,
+  transitionCommerceFulfillment,
+  assignCommerceFulfillmentDriver,
+  registerExternalCommerceConnection,
+  upsertMedusaStoreConnection,
+} from "./_core/commerceFulfillment";
+import {
+  beginMerchantOnboarding,
+  createMerchantProduct,
+  decideMerchantOnboarding,
+  getMerchantCommerceProfile,
+  getMerchantOnboardingProgress,
+  issueMerchantApiCredential,
+  revokeMerchantApiCredential,
+  rotateMerchantApiCredential,
+  setMerchantPaymentConfiguration,
+  updateMerchantInventoryLevel,
+} from "./_core/merchantCommerce";
 import {
   createDeveloperApiClient,
   createDeveloperApiKey,
@@ -121,31 +93,77 @@ import {
   listDeveloperApiKeys,
   listDeveloperWebhookEndpoints,
   revokeDeveloperApiKey,
-} from "./_core/developerApi";
+} from "./_core/developerPlatform";
 import {
-  assignCommerceFulfillmentDriver,
-  listCommerceFulfillmentRequests,
-  registerExternalCommerceConnection,
-  transitionCommerceFulfillment,
-  upsertMedusaStoreConnection,
-} from "./_core/commerceFulfillment";
+  activateVehicleAsset,
+  assignVehicleAssetLocation,
+  cancelVehicleAvailabilityBlock,
+  createFleetProvider,
+  createVehicleAvailabilityBlock,
+  createVehicleOffer,
+  createVehicleProviderLocation,
+  createVehicleRentalAddOn,
+  decideVehicleContractExtension,
+  getVehicleRentalOperationsSnapshot,
+  getVehicleTrackerOperationsSnapshot,
+  listAvailableVehicleOffers,
+  listVehicleRentalAddOns,
+  recordAssetEvidence,
+  recordVehicleAgreementAcceptance,
+  recordVehicleInspection,
+  recordVehicleRentalPaymentTrackingSignal,
+  recordVehicleTrackerControlConsent,
+  registerVehicleAsset,
+  registerVehicleAssetTracker,
+  requestVehicleAccessWithAddOns,
+  requestVehicleContractExtension,
+  requestVehiclePreventNextStart,
+  authorizeVehiclePreventNextStart,
+  cancelVehiclePreventNextStart,
+  createVehicleRentalGeofence,
+  createVehicleTrackerProvider,
+  transitionVehicleAccessContract,
+  upsertWorkerVehicleEligibility,
+} from "./_core/vehicleAccess";
 import {
-  beginMerchantOnboarding,
-  createMerchantProduct,
-  decideMerchantOnboarding,
-  getMerchantCommerceProfile,
-  setMerchantPaymentConfiguration,
-  updateMerchantInventoryLevel,
-  issueMerchantApiCredential,
-  rotateMerchantApiCredential,
-  revokeMerchantApiCredential,
-} from "./_core/merchantCommerce";
-import { getMerchantOnboardingProgress } from "./_core/merchantOnboarding";
-import { selfserveRouter } from "./_core/selfserveRouter";
+  activateFieldServiceAgreement,
+  assignFieldServiceWorkOrder,
+  completeFieldServiceWorkOrder,
+  createFieldServiceProvider,
+  createFieldServiceWorkOrder,
+  getFieldServiceOperationsSnapshot,
+  recordFieldServiceWorkOrderStatus,
+  recordFieldServiceSlaEvent,
+  scheduleFieldServiceWorkOrder,
+  upsertFieldServiceTechnician,
+} from "./_core/fieldService";
+import {
+  applyPromoCodeToShipment,
+  createShipmentQuote,
+  createShipmentTrackingEvent,
+  getPublicTrackingSnapshot,
+  listActiveShipmentRules,
+  purchaseShipmentLabel,
+  resolveShipmentProofOfDelivery,
+  scheduleShipmentPickup,
+  updateShipmentStatus,
+  upsertShipmentRule,
+} from "./_core/commerceShipping";
+import {
+  decideVerificationCase,
+  getVerificationChecks,
+  listVerificationCases,
+  recordVerificationConsent,
+  recordVerificationEvidence,
+  recordVerificationProviderCheck,
+  startVerificationCase,
+  withdrawVerificationConsent,
+} from "./_core/stakeholderVerification";
 import { driverOnboardingRouter } from "./_core/driverOnboardingRouter";
-import { approveExternalOperator } from "./_core/operatorAuthStore";
+import { selfserveRouter } from "./_core/selfserveRouter";
 import { consumerRouter } from "./_core/consumerRouter";
 import { riderVerificationRouter } from "./_core/riderVerificationRouter";
+import { verificationRouter } from "./_core/verificationRouter";
 import { deactivationRouter } from "./_core/deactivationRouter";
 import { councilRouter } from "./_core/councilRouter";
 import { economicsRouter } from "./_core/economicsRouter";
@@ -156,393 +174,580 @@ import { protectionRouter } from "./_core/protectionRouter";
 import { transitionRouter } from "./_core/transitionRouter";
 import { portabilityRouter } from "./_core/portabilityRouter";
 import { contractDefaultsRouter } from "./_core/contractDefaultsRouter";
-import { postConsultation } from "./_core/workerCouncil";
-
-/**
- * Wave B1 (R5): worker-affecting economics mutations auto-post a worker
- * council consultation object before proceeding. Advisory and additive —
- * a consultation-post failure is logged and never blocks the mutation.
- */
-async function autoPostEconomicsConsultation(input: {
-  actorUserId: number;
-  kind: "pricing" | "commission";
-  title: string;
-  payload: Record<string, unknown>;
-}): Promise<void> {
-  try {
-    await postConsultation(input.actorUserId, {
-      kind: input.kind,
-      title: input.title,
-      payload: input.payload,
-      responseSlaHours: 72,
-    });
-  } catch (error) {
-    console.warn(
-      "[economics] worker-council consultation auto-post failed; proceeding",
-      error,
-    );
-  }
-}
-
-const listInput = z
-  .object({ limit: z.number().min(1).max(25).optional() })
-  .optional();
-
-async function requireLakehouseAnalytics<T>(loader: () => Promise<T>) {
-  try {
-    await syncLakehouseFromPostgres();
-    return await loader();
-  } catch (error) {
-    console.warn("[SwitchOS] Lakehouse analytics unavailable:", error);
-    throw new TRPCError({
-      code: "SERVICE_UNAVAILABLE",
-      message: "LAKEHOUSE_ANALYTICS_UNAVAILABLE",
-      cause: error,
-    });
-  }
-}
-
-async function requireWorkspaceData<T>(
-  workspace: string,
-  loader: () => Promise<T>,
-) {
-  try {
-    return await loader();
-  } catch (error) {
-    console.warn(`[SwitchOS] ${workspace} workspace unavailable:`, error);
-    throw new TRPCError({
-      code: "SERVICE_UNAVAILABLE",
-      message: `${workspace.toUpperCase().replace(/[^A-Z0-9]+/g, "_")}_DATA_UNAVAILABLE`,
-      cause: error,
-    });
-  }
-}
 
 export const appRouter = router({
-  system: systemRouter,
-  compliancePacks: compliancePacksRouter,
-
-  mobility: mobilityRouter,
-  consoles: consolesRouter,
-
-  auth: router({
-    me: publicProcedure.query(({ ctx }) => ctx.user),
+  system: router({
+    health: publicProcedure.query(() => ({ ok: true })),
   }),
 
-  // External OIDC operator provisioning is fail-closed (Audit A P0-3): new
-  // external identities are inactive until an existing operator approves
-  // them here.
-  operatorOnboarding: router({
-    approveExternalOperator: operatorMutationProcedure("write_platform")
-      .input(z.object({ operatorId: z.number().int().positive() }))
+  auth: router({
+    me: publicProcedure.query(({ ctx }) => ctx.user ?? null),
+    legacySession: publicProcedure
+      .input(z.object({ email: z.string().email() }))
       .mutation(async ({ input }) => {
-        const approved = await approveExternalOperator(input.operatorId);
-        if (!approved) {
+        const db = await getDb();
+        const [user] = await db.query.users.findMany({
+          where: (users, { eq }) => eq(users.email, input.email),
+          limit: 1,
+        });
+        if (!user) {
           throw new TRPCError({
             code: "NOT_FOUND",
-            message: "operator_not_found",
+            message: "User not found",
           });
         }
-        return approved;
+        const session = await signSessionToken({
+          userId: user.id,
+          openId: user.openId,
+          name: user.name ?? undefined,
+        });
+        return { session, user };
+      }),
+    sessionFromRequest: publicProcedure.query(async ({ ctx }) => {
+      const session = await getSessionFromRequest(ctx.req);
+      return session;
+    }),
+  }),
+
+  growth: router({
+    createReferral: protectedProcedure
+      .input(
+        z.object({
+          referredEmail: z.string().email(),
+          campaignId: z.number().optional(),
+        }),
+      )
+      .mutation(async ({ ctx, input }) => {
+        return await createReferral({
+          referrerUserId: ctx.user.id,
+          referredEmail: input.referredEmail,
+          campaignId: input.campaignId,
+        });
+      }),
+
+    getUserReferrals: protectedProcedure.query(async ({ ctx }) => {
+      return await getUserReferrals(ctx.user.id);
+    }),
+
+    getUserPoints: protectedProcedure.query(async ({ ctx }) => {
+      return await getUserPoints(ctx.user.id);
+    }),
+
+    getCampaigns: protectedProcedure.query(async () => {
+      return await getCampaigns();
+    }),
+
+    trackEvent: protectedProcedure
+      .input(
+        z.object({
+          eventType: z.string(),
+          campaignId: z.number().optional(),
+          variantId: z.number().optional(),
+          metadata: z.record(z.string(), z.any()).optional(),
+        }),
+      )
+      .mutation(async ({ ctx, input }) => {
+        await trackMarketingEvent({
+          userId: ctx.user.id,
+          eventType: input.eventType,
+          campaignId: input.campaignId,
+          variantId: input.variantId,
+          metadata: input.metadata,
+        });
+        return { success: true };
       }),
   }),
 
-  analytics: router({
-    summary: analyticsReadProcedure.query(() =>
-      requireLakehouseAnalytics(() => getLakehouseAnalyticsSummary()),
-    ),
-    orderStats: analyticsReadProcedure.query(() =>
-      requireLakehouseAnalytics(() => getLakehouseOrderStats()),
-    ),
-    driverStats: analyticsReadProcedure.query(() =>
-      requireLakehouseAnalytics(() => getLakehouseDriverStats()),
-    ),
-    marketplaceOverview: analyticsReadProcedure.query(() =>
-      requireLakehouseAnalytics(() => getLakehouseMarketplaceOverview()),
-    ),
-    fundsReconciliation: analyticsReadProcedure.query(async () =>
-      getFundsReconciliationSnapshot(),
-    ),
-    revenueTrend: analyticsReadProcedure.query(async () =>
-      getOrderRevenueTrend(),
-    ),
-    ordersByVertical: analyticsReadProcedure.query(async () =>
-      getOrdersByVertical(),
-    ),
-  }),
-
-  driverMobility: router({
-    summary: workspaceReadProcedure
-      .input(listInput)
-      .query(({ input }) =>
-        requireWorkspaceData("driver_mobility", () =>
-          getDriverMobilityWorkspace(input?.limit),
-        ),
-      ),
-  }),
-
-  tablesideOrdering: router({
-    summary: workspaceReadProcedure
-      .input(listInput)
-      .query(() =>
-        requireWorkspaceData("tableside_ordering", () =>
-          getTablesideWorkspace(),
-        ),
-      ),
-  }),
-
-  whiteLabelApps: router({
-    summary: workspaceReadProcedure
-      .input(listInput)
-      .query(() =>
-        requireWorkspaceData("white_label_apps", () =>
-          getWhiteLabelAppsWorkspace(),
-        ),
-      ),
-  }),
-
-  merchantChannels: router({
+  localCommerce: router({
     workspace: workspaceReadProcedure.query(() =>
-      requireWorkspaceData("merchant_channels", () =>
-        getMerchantChannelWorkspace(),
-      ),
+      requireWorkspaceData("local_commerce", () => getLocalCommerceWorkspace()),
     ),
-  }),
 
-  serviceRecovery: router({
-    workspace: workspaceReadProcedure.query(() =>
-      requireWorkspaceData("service_recovery", () =>
-        getServiceRecoveryWorkspace(),
-      ),
-    ),
-  }),
-
-  localCommerceSuperGateway: router({
-    workspace: workspaceReadProcedure.query(() =>
-      buildLocalCommerceSuperGatewayWorkspace(),
-    ),
-    logisticsControlTower: workspaceReadProcedure
-      .input(
-        z
-          .object({
-            city: z.string().trim().min(2).max(128).optional(),
-            forceRefresh: z.boolean().optional(),
-          })
-          .optional(),
-      )
-      .query(({ input }) =>
-        buildLocalCommerceLogisticsControlTower({
-          city: input?.city,
-          forceRefresh: input?.forceRefresh,
-        }),
-      ),
-    supplyChainGrowthControl: workspaceReadProcedure
-      .input(
-        z
-          .object({
-            city: z.string().trim().min(2).max(128).optional(),
-            forceRefresh: z.boolean().optional(),
-          })
-          .optional(),
-      )
-      .query(({ input }) =>
-        getSupplyChainGrowthControl({
-          city: input?.city,
-          forceRefresh: input?.forceRefresh,
-        }),
-      ),
-    queueReplenishment: operatorMutationProcedure("operate")
+    createVendor: operatorMutationProcedure("write_platform")
       .input(
         z.object({
-          city: z.string().trim().min(2).max(128),
-          planningHorizonHours: z.number().int().min(4).max(720).optional(),
-          trigger: z.string().trim().min(2).max(128).optional(),
-          requestedBy: z.string().trim().min(2).max(255).optional(),
-          workflowReason: z.string().trim().min(3).max(500).optional(),
-          traceId: z.string().trim().min(3).max(128).optional(),
-          skus: z
+          businessName: z.string().trim().min(2).max(160),
+          ownerName: z.string().trim().min(2).max(160),
+          ownerPhone: z.string().trim().min(5).max(32),
+          ownerEmail: z.string().trim().email().max(320).optional(),
+          addressSummary: z.string().trim().min(3).max(400),
+          latitude: z.number().min(-90).max(90).optional(),
+          longitude: z.number().min(-180).max(180).optional(),
+          category: z
+            .enum([
+              "restaurant",
+              "grocery",
+              "pharmacy",
+              "retail",
+              "services",
+              "other",
+            ])
+            .default("other"),
+          commissionBps: z.number().int().min(0).max(5000).default(1500),
+          settlementFspAlias: z.string().trim().min(3).max(120).optional(),
+          settlementAccountRef: z.string().trim().min(3).max(120).optional(),
+          metadata: z.record(z.string(), z.unknown()).optional(),
+        }),
+      )
+      .mutation(({ input }) => createLocalCommerceVendor(input)),
+
+    createOrder: operatorMutationProcedure("operate")
+      .input(
+        z.object({
+          vendorId: z.number().int().positive(),
+          customerName: z.string().trim().min(2).max(160),
+          customerPhone: z.string().trim().min(5).max(32),
+          deliveryAddress: z.string().trim().min(3).max(400),
+          deliveryLatitude: z.number().min(-90).max(90).optional(),
+          deliveryLongitude: z.number().min(-180).max(180).optional(),
+          items: z
             .array(
               z.object({
-                sku: z.string().trim().min(1).max(128),
-                label: z.string().trim().max(255).optional(),
-                category: z.string().trim().max(128).optional(),
-                warehouseId: z.number().int().positive(),
-                warehouseLabel: z.string().trim().min(1).max(255),
-                zoneKey: z.string().trim().max(128).optional(),
-                currentAvailableUnits: z.number().nonnegative(),
-                currentReservedUnits: z.number().nonnegative().optional(),
-                currentInboundUnits: z.number().nonnegative().optional(),
-                forecastUnits: z.number().nonnegative(),
-                recommendedRestockUnits: z.number().nonnegative(),
-                safetyStockUnits: z.number().nonnegative(),
-                stockoutRisk: z.string().trim().min(1).max(64),
-                supplier: z.object({
-                  supplierId: z.string().trim().min(1).max(128),
-                  supplierName: z.string().trim().min(1).max(255),
-                  leadTimeHours: z.number().nonnegative(),
-                  fillRate: z.number().min(0).max(1),
-                  spoilageRisk: z.number().min(0).max(1),
-                  reliabilityBand: z.string().trim().min(1).max(64),
-                }),
-                targetTransferNodeId: z.number().int().positive().optional(),
-                targetTransferNodeName: z
-                  .string()
-                  .trim()
-                  .min(1)
-                  .max(255)
-                  .optional(),
+                productName: z.string().trim().min(1).max(200),
+                quantity: z.number().int().min(1).max(999),
+                unitPriceKobo: z.number().int().min(0),
+                notes: z.string().trim().max(500).optional(),
               }),
             )
             .min(1)
-            .max(200),
+            .max(64),
+          deliveryFeeKobo: z.number().int().min(0).default(0),
+          paymentMethod: z
+            .enum(["cash", "transfer", "card", "wallet"])
+            .default("cash"),
+          notes: z.string().trim().max(1000).optional(),
+          idempotencyKey: z.string().trim().min(8).max(128).optional(),
         }),
       )
-      .mutation(({ input }) => queueReplenishmentWorkflow(input)),
-    loyaltyIntervention: operatorMutationProcedure("write_platform")
-      .input(
-        z.object({
-          userId: z.number().int().positive(),
-          points: z.number().int().optional(),
-          transactionType: z.string().trim().min(2).max(128).optional(),
-          description: z.string().trim().min(3).max(500).optional(),
-          orderId: z.number().int().positive().optional(),
-          rewardId: z.number().int().positive().optional(),
-          idempotencyKey: z.string().trim().min(3).max(255).optional(),
-        }),
-      )
-      .mutation(({ input }) => applyLoyaltyIntervention(input)),
-    merchantGrowthCampaign: operatorMutationProcedure("write_platform")
-      .input(
-        z.object({
-          campaignId: z.number().int().positive().optional(),
-          campaignName: z.string().trim().min(2).max(255).optional(),
-          campaignType: z.string().trim().min(2).max(128).optional(),
-          emailTemplate: z.string().trim().min(3).max(5000).optional(),
-          smsTemplate: z.string().trim().min(3).max(1000).optional(),
-          targetAudience: z.string().trim().min(2).max(128).optional(),
-          triggerCondition: z.record(z.string(), z.any()).optional(),
-          activate: z.boolean().optional(),
-          audienceMode: z.enum(["single_user", "full_audience"]).optional(),
-          userId: z.number().int().positive().optional(),
-          channel: z.enum(["email", "sms"]).optional(),
-          idempotencyKey: z.string().trim().min(3).max(255).optional(),
-        }),
-      )
-      .mutation(({ input }) => executeMerchantGrowthCampaign(input)),
-    plan: protectedProcedure
-      .input(
-        z.object({
-          city: z.string().trim().min(2).max(128).optional(),
-          customerSegment: z.string().trim().min(2).max(128).optional(),
-          categories: z
-            .array(z.string().trim().min(2).max(64))
-            .max(8)
-            .optional(),
-          request: z.string().trim().min(3).max(1_000),
-          basket: z
-            .array(
-              z.object({
-                sku: z.string().trim().min(1).max(128),
-                quantity: z.number().positive(),
-                label: z.string().trim().min(1).max(255).optional(),
-                category: z.string().trim().min(1).max(128).optional(),
-                onHandUnits: z.number().min(0).optional(),
-                reservedUnits: z.number().min(0).optional(),
-                inboundUnits: z.number().min(0).optional(),
-                leadTimeHours: z.number().min(1).max(240).optional(),
-                eventMultiplier: z.number().min(0.5).max(3).optional(),
-                weatherMultiplier: z.number().min(0.5).max(2).optional(),
-                substitutionGroup: z.string().trim().min(1).max(128).optional(),
-                coldChainRequired: z.boolean().optional(),
-              }),
-            )
-            .max(20)
-            .optional(),
-          warehouseCandidates: z
-            .array(
-              z.object({
-                warehouseId: z.number().int().positive(),
-                label: z.string().trim().min(1).max(255),
-                zoneKey: z.string().trim().min(1).max(128).optional(),
-                distanceKm: z.number().min(0).max(200),
-                pickPackMinutes: z.number().min(0).max(240).optional(),
-                coldChainReady: z.boolean().optional(),
-                stockAccuracy: z.number().min(0).max(1).optional(),
-                inventory: z
-                  .array(
-                    z.object({
-                      sku: z.string().trim().min(1).max(128),
-                      availableUnits: z.number().min(0),
-                      freshnessHours: z.number().min(0).max(720).optional(),
-                    }),
-                  )
-                  .max(50),
-              }),
-            )
-            .max(12)
-            .optional(),
-        }),
-      )
-      .mutation(({ input }) => planLocalCommerceConciergeIntent(input)),
+      .mutation(({ input }) => createLocalCommerceOrder(input)),
   }),
 
-  fieldService: router({
-    listWorkOrders: authenticatedProcedure
-      .input(
-        z
-          .object({
-            state: z
-              .enum([
-                "requested",
-                "scheduled",
-                "assigned",
-                "en_route",
-                "on_site",
-                "completed",
-                "cancelled",
-              ])
-              .optional(),
-            limit: z.number().int().min(1).max(100).optional(),
-          })
-          .optional(),
-      )
-      .query(({ ctx, input }) =>
-        listWorkOrders({
-          actorUserId: ctx.user!.id,
-          state: input?.state,
-          limit: input?.limit ?? 50,
-        }),
-      ),
-    workOrderDetail: authenticatedProcedure
-      .input(z.object({ workOrderId: z.string().uuid() }))
-      .query(({ ctx, input }) =>
-        getWorkOrderDetail({
-          actorUserId: ctx.user!.id,
-          workOrderId: input.workOrderId,
-        }),
-      ),
-    upsertServiceArea: operatorMutationProcedure("operate")
+  localCommerceCheckout: router({
+    quoteGuestOrder: publicProcedure
       .input(
         z.object({
-          providerId: z.number().int().positive(),
-          code: z
-            .string()
-            .trim()
-            .regex(/^[a-z][a-z0-9_-]{2,63}$/),
-          displayName: z.string().trim().min(2).max(160),
-          boundaryGeoJson: z.object({
-            type: z.literal("Polygon"),
-            coordinates: z.array(z.array(z.array(z.number()))).min(1),
-          }),
-          timezone: z
-            .string()
-            .trim()
-            .regex(/^[A-Za-z_]+\/[A-Za-z_]+$/),
-          active: z.boolean().default(true),
+          vendorId: z.number().int().positive(),
+          items: z
+            .array(
+              z.object({
+                productName: z.string().trim().min(1).max(200),
+                quantity: z.number().int().min(1).max(999),
+                unitPriceKobo: z.number().int().min(0),
+              }),
+            )
+            .min(1)
+            .max(64),
+          deliveryFeeKobo: z.number().int().min(0).default(0),
+          promoCode: z.string().trim().min(3).max(64).optional(),
+        }),
+      )
+      .mutation(({ input }) => createGuestOrderQuote(input)),
+
+    placeOrder: protectedProcedure
+      .input(
+        z.object({
+          vendorId: z.number().int().positive(),
+          customerName: z.string().trim().min(2).max(160),
+          customerPhone: z.string().trim().min(5).max(32),
+          deliveryAddress: z.string().trim().min(3).max(400),
+          deliveryLatitude: z.number().min(-90).max(90).optional(),
+          deliveryLongitude: z.number().min(-180).max(180).optional(),
+          items: z
+            .array(
+              z.object({
+                productName: z.string().trim().min(1).max(200),
+                quantity: z.number().int().min(1).max(999),
+                unitPriceKobo: z.number().int().min(0),
+                notes: z.string().trim().max(500).optional(),
+              }),
+            )
+            .min(1)
+            .max(64),
+          deliveryFeeKobo: z.number().int().min(0).default(0),
+          paymentMethod: z
+            .enum(["cash", "transfer", "card", "wallet"])
+            .default("cash"),
+          promoCode: z.string().trim().min(3).max(64).optional(),
+          notes: z.string().trim().max(1000).optional(),
+          idempotencyKey: z.string().trim().min(8).max(128),
         }),
       )
       .mutation(({ ctx, input }) =>
-        upsertServiceArea({ actorUserId: ctx.user!.id, ...input }),
+        placeLocalCommerceOrder(ctx.user.id, input),
+      ),
+
+    cancelOrder: operatorMutationProcedure("operate")
+      .input(
+        z.object({
+          orderId: z.number().int().positive(),
+          reason: z.string().trim().min(3).max(500),
+        }),
+      )
+      .mutation(({ input }) => cancelLocalCommerceOrder(input)),
+
+    confirmDelivery: operatorMutationProcedure("operate")
+      .input(
+        z.object({
+          orderId: z.number().int().positive(),
+          proofPhotoUrl: z.string().url().max(2048).optional(),
+          recipientName: z.string().trim().min(2).max(160).optional(),
+        }),
+      )
+      .mutation(({ input }) => confirmLocalCommerceOrderDelivery(input)),
+  }),
+
+  localCommerceCustomers: router({
+    merge: operatorMutationProcedure("write_platform")
+      .input(
+        z.object({
+          primaryCustomerId: z.number().int().positive(),
+          duplicateCustomerId: z.number().int().positive(),
+          reason: z.string().trim().min(3).max(500),
+        }),
+      )
+      .mutation(({ input }) => mergeLocalCommerceCustomers(input)),
+
+    archive: operatorMutationProcedure("write_platform")
+      .input(
+        z.object({
+          customerId: z.number().int().positive(),
+          reason: z.string().trim().min(3).max(500),
+        }),
+      )
+      .mutation(({ input }) => archiveLocalCommerceCustomer(input)),
+
+    restore: operatorMutationProcedure("write_platform")
+      .input(
+        z.object({
+          customerId: z.number().int().positive(),
+        }),
+      )
+      .mutation(({ input }) => restoreLocalCommerceCustomer(input)),
+  }),
+
+  localCommercePayouts: router({
+    request: operatorMutationProcedure("operate")
+      .input(
+        z.object({
+          vendorId: z.number().int().positive(),
+          amountKobo: z.number().int().positive(),
+          settlementFspAlias: z.string().trim().min(3).max(120).optional(),
+          settlementAccountRef: z.string().trim().min(3).max(120).optional(),
+          notes: z.string().trim().max(1000).optional(),
+          idempotencyKey: z.string().trim().min(8).max(128),
+        }),
+      )
+      .mutation(({ input }) => requestLocalCommerceVendorPayout(input)),
+
+    approve: operatorMutationProcedure("write_platform")
+      .input(
+        z.object({
+          payoutId: z.number().int().positive(),
+        }),
+      )
+      .mutation(({ input }) => approveLocalCommerceVendorPayout(input)),
+
+    reject: operatorMutationProcedure("write_platform")
+      .input(
+        z.object({
+          payoutId: z.number().int().positive(),
+          reason: z.string().trim().min(3).max(500),
+        }),
+      )
+      .mutation(({ input }) => rejectLocalCommerceVendorPayout(input)),
+
+    process: operatorMutationProcedure("write_platform")
+      .input(
+        z.object({
+          payoutId: z.number().int().positive(),
+          settlementReference: z.string().trim().min(3).max(120),
+        }),
+      )
+      .mutation(({ input }) => processLocalCommerceVendorPayout(input)),
+  }),
+
+  localCommerceApprovals: router({
+    request: operatorMutationProcedure("operate")
+      .input(
+        z.object({
+          planId: z.number().int().positive(),
+          reason: z.string().trim().min(3).max(500),
+        }),
+      )
+      .mutation(({ input }) => requestLocalCommercePlanApproval(input)),
+
+    decide: operatorMutationProcedure("write_platform")
+      .input(
+        z.object({
+          approvalId: z.number().int().positive(),
+          decision: z.enum(["approved", "rejected"]),
+          reason: z.string().trim().min(3).max(500).optional(),
+        }),
+      )
+      .mutation(({ input }) => decideLocalCommercePlanApproval(input)),
+  }),
+
+  voiceAgent: router({
+    workspace: workspaceReadProcedure.query(() =>
+      requireWorkspaceData("voice_agent", () => getVoiceAgentWorkspace()),
+    ),
+
+    createCall: operatorMutationProcedure("operate")
+      .input(
+        z.object({
+          customerPhone: z.string().trim().min(5).max(32),
+          customerName: z.string().trim().min(1).max(255).optional(),
+          direction: z.enum(["inbound", "outbound"]).default("inbound"),
+          voiceChannel: z.string().trim().min(2).max(64).optional(),
+          metadata: z.record(z.string(), z.unknown()).optional(),
+        }),
+      )
+      .mutation(({ input }) => createVoiceAgentCall(input)),
+
+    startCall: operatorMutationProcedure("operate")
+      .input(
+        z.object({
+          callId: z.string().uuid(),
+        }),
+      )
+      .mutation(({ input }) => startVoiceAgentCall(input)),
+
+    escalate: operatorMutationProcedure("operate")
+      .input(
+        z.object({
+          callId: z.string().uuid(),
+          reason: z.string().trim().min(3).max(500),
+        }),
+      )
+      .mutation(({ input }) => escalateVoiceAgentCall(input)),
+
+    handoff: operatorMutationProcedure("operate")
+      .input(
+        z.object({
+          callId: z.string().uuid(),
+          targetQueue: z.string().trim().min(2).max(120),
+          reason: z.string().trim().min(3).max(500),
+        }),
+      )
+      .mutation(({ input }) => handoffVoiceAgentCall(input)),
+  }),
+
+  deliveryPartner: router({
+    workspace: workspaceReadProcedure.query(() =>
+      requireWorkspaceData("delivery_partner", () =>
+        getDeliveryPartnerWorkspace(),
+      ),
+    ),
+
+    claimOrder: operatorMutationProcedure("operate")
+      .input(
+        z.object({
+          orderId: z.number().int().positive(),
+          partnerCode: z.string().trim().min(2).max(64),
+          driverName: z.string().trim().min(2).max(160),
+          driverPhone: z.string().trim().min(5).max(32),
+        }),
+      )
+      .mutation(({ input }) => claimDeliveryPartnerOrder(input)),
+
+    reportStatus: operatorMutationProcedure("operate")
+      .input(
+        z.object({
+          orderId: z.number().int().positive(),
+          partnerCode: z.string().trim().min(2).max(64),
+          status: z.enum([
+            "picked_up",
+            "in_transit",
+            "arrived",
+            "delivered",
+            "failed",
+          ]),
+          note: z.string().trim().max(500).optional(),
+        }),
+      )
+      .mutation(({ input }) => reportDeliveryPartnerStatus(input)),
+
+    registerTrackingDevice: operatorMutationProcedure("operate")
+      .input(
+        z.object({
+          partnerCode: z.string().trim().min(2).max(64),
+          deviceIdentifier: z.string().trim().min(3).max(160),
+          platform: z.enum(["ios", "android", "hardware"]),
+          label: z.string().trim().max(160).optional(),
+        }),
+      )
+      .mutation(({ input }) => registerDeliveryPartnerTrackingDevice(input)),
+
+    reportTrackingPosition: publicProcedure
+      .input(
+        z.object({
+          deviceToken: z.string().trim().min(8).max(255),
+          latitude: z.number().min(-90).max(90),
+          longitude: z.number().min(-180).max(180),
+          accuracyMeters: z.number().min(0).max(100000).optional(),
+          batteryPercent: z.number().min(0).max(100).optional(),
+          recordedAt: z.string().datetime().optional(),
+        }),
+      )
+      .mutation(({ input }) => reportDeliveryPartnerTrackingPosition(input)),
+
+    refreshTrackingAlerts: operatorMutationProcedure("operate")
+      .input(z.object({}).optional())
+      .mutation(() => refreshDeliveryPartnerTrackingAlertSnapshot()),
+
+    acknowledgeTrackingAlert: operatorMutationProcedure("operate")
+      .input(
+        z.object({
+          alertId: z.number().int().positive(),
+        }),
+      )
+      .mutation(({ input }) => acknowledgeDeliveryPartnerTrackingAlert(input)),
+
+    resolveTrackingAlert: operatorMutationProcedure("operate")
+      .input(
+        z.object({
+          alertId: z.number().int().positive(),
+          resolution: z.string().trim().min(3).max(500),
+        }),
+      )
+      .mutation(({ input }) => resolveDeliveryPartnerTrackingAlert(input)),
+  }),
+
+  commerceShipping: router({
+    quote: authenticatedProcedure
+      .input(
+        z.object({
+          orderId: z.number().int().positive(),
+          carrierCode: z.string().trim().min(2).max(64).optional(),
+          serviceCode: z.string().trim().min(2).max(64).optional(),
+        }),
+      )
+      .mutation(({ ctx, input }) =>
+        createShipmentQuote({ actorUserId: ctx.user!.id, ...input }),
+      ),
+    purchaseLabel: operatorMutationProcedure("operate")
+      .input(
+        z.object({
+          quoteId: z.string().uuid(),
+          idempotencyKey: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
+        }),
+      )
+      .mutation(({ ctx, input }) =>
+        purchaseShipmentLabel({ actorUserId: ctx.user!.id, ...input }),
+      ),
+    schedulePickup: operatorMutationProcedure("operate")
+      .input(
+        z.object({
+          shipmentId: z.string().uuid(),
+          pickupWindowStart: z.string().datetime(),
+          pickupWindowEnd: z.string().datetime(),
+          idempotencyKey: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
+        }),
+      )
+      .mutation(({ ctx, input }) =>
+        scheduleShipmentPickup({ actorUserId: ctx.user!.id, ...input }),
+      ),
+    updateStatus: operatorMutationProcedure("operate")
+      .input(
+        z.object({
+          shipmentId: z.string().uuid(),
+          status: z.enum([
+            "label_purchased",
+            "pickup_scheduled",
+            "picked_up",
+            "in_transit",
+            "out_for_delivery",
+            "delivered",
+            "failed",
+            "returned",
+          ]),
+          detail: z.string().trim().max(500).optional(),
+          idempotencyKey: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
+        }),
+      )
+      .mutation(({ ctx, input }) =>
+        updateShipmentStatus({ actorUserId: ctx.user!.id, ...input }),
+      ),
+    recordTrackingEvent: operatorMutationProcedure("operate")
+      .input(
+        z.object({
+          shipmentId: z.string().uuid(),
+          eventCode: z.string().trim().min(2).max(64),
+          description: z.string().trim().max(500).optional(),
+          locationSummary: z.string().trim().max(255).optional(),
+          occurredAt: z.string().datetime().optional(),
+          idempotencyKey: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
+        }),
+      )
+      .mutation(({ ctx, input }) =>
+        createShipmentTrackingEvent({ actorUserId: ctx.user!.id, ...input }),
+      ),
+    resolveProofOfDelivery: publicProcedure
+      .input(z.object({ shipmentId: z.string().uuid() }))
+      .query(({ input }) => resolveShipmentProofOfDelivery(input)),
+    trackingSnapshot: publicProcedure
+      .input(
+        z.object({
+          trackingNumber: z.string().trim().min(4).max(128),
+        }),
+      )
+      .query(({ input }) => getPublicTrackingSnapshot(input)),
+    applyPromoCode: operatorMutationProcedure("operate")
+      .input(
+        z.object({
+          shipmentId: z.string().uuid(),
+          promoCode: z.string().trim().min(3).max(64),
+          idempotencyKey: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
+        }),
+      )
+      .mutation(({ ctx, input }) =>
+        applyPromoCodeToShipment({ actorUserId: ctx.user!.id, ...input }),
+      ),
+    listRules: operatorMutationProcedure("operate")
+      .input(
+        z
+          .object({
+            activeOnly: z.boolean().default(true),
+          })
+          .optional(),
+      )
+      .query(({ input }) =>
+        listActiveShipmentRules({ activeOnly: input?.activeOnly ?? true }),
+      ),
+    upsertRule: operatorMutationProcedure("write_platform")
+      .input(
+        z.object({
+          ruleCode: z.string().trim().min(2).max(64),
+          displayName: z.string().trim().min(2).max(160),
+          carrierCode: z.string().trim().min(2).max(64),
+          serviceCode: z.string().trim().min(2).max(64),
+          baseRateKobo: z.number().int().min(0),
+          perKgRateKobo: z.number().int().min(0),
+          maxWeightKg: z.number().min(0).max(10000).optional(),
+          active: z.boolean(),
+          idempotencyKey: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
+        }),
+      )
+      .mutation(({ ctx, input }) =>
+        upsertShipmentRule({ actorUserId: ctx.user!.id, ...input }),
+      ),
+  }),
+
+  fieldService: router({
+    operationsSnapshot: authenticatedProcedure.query(({ ctx }) =>
+      getFieldServiceOperationsSnapshot(ctx.user!.id),
+    ),
+    createProvider: operatorMutationProcedure("operate")
+      .input(
+        z.object({
+          displayName: z.string().trim().min(2).max(160),
+          legalName: z.string().trim().min(2).max(255),
+          dispatchEmail: z.string().trim().email().max(320).optional(),
+          dispatchPhone: z.string().trim().min(5).max(32).optional(),
+        }),
+      )
+      .mutation(({ ctx, input }) =>
+        createFieldServiceProvider({ actorUserId: ctx.user!.id, ...input }),
       ),
     upsertTechnician: operatorMutationProcedure("operate")
       .input(
@@ -550,252 +755,124 @@ export const appRouter = router({
           userId: z.number().int().positive(),
           providerId: z.number().int().positive(),
           displayName: z.string().trim().min(2).max(160),
-          employeeReference: z.string().trim().min(1).max(128).nullable(),
-          skills: z.array(z.string().trim().min(1).max(96)).max(48),
-          state: z.enum(["active", "suspended", "inactive"]),
+          employeeReference: z.string().trim().max(128).nullable(),
+          skills: z.array(z.string().trim().min(1).max(64)).max(48),
+          state: z.enum(["onboarding", "active", "suspended"]),
         }),
       )
       .mutation(({ ctx, input }) =>
-        upsertTechnician({ actorUserId: ctx.user!.id, ...input }),
-      ),
-    setTechnicianServiceArea: operatorMutationProcedure("operate")
-      .input(
-        z.object({
-          technicianUserId: z.number().int().positive(),
-          serviceAreaId: z.string().uuid(),
-          active: z.boolean(),
-        }),
-      )
-      .mutation(({ ctx, input }) =>
-        setTechnicianServiceArea({ actorUserId: ctx.user!.id, ...input }),
+        upsertFieldServiceTechnician({ actorUserId: ctx.user!.id, ...input }),
       ),
     createWorkOrder: operatorMutationProcedure("operate")
       .input(
         z.object({
-          customerId: z.number().int().positive(),
           providerId: z.number().int().positive(),
-          serviceAreaId: z.string().uuid(),
-          title: z.string().trim().min(3).max(180),
-          description: z.string().trim().min(3).max(5000),
-          serviceAddress: z.string().trim().min(3).max(500),
-          latitude: z.number().min(-90).max(90).nullable(),
-          longitude: z.number().min(-180).max(180).nullable(),
-          priority: z
-            .enum(["low", "normal", "high", "urgent"])
-            .default("normal"),
-          scheduledStartAt: z.string().datetime().nullable(),
-          scheduledEndAt: z.string().datetime().nullable(),
-          sourceOrderId: z.number().int().positive().nullable(),
-          idempotencyKey: z
-            .string()
-            .trim()
-            .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
+          customerName: z.string().trim().min(2).max(160),
+          customerPhone: z.string().trim().min(5).max(32),
+          serviceAddress: z.string().trim().min(3).max(400),
+          serviceLatitude: z.number().min(-90).max(90).optional(),
+          serviceLongitude: z.number().min(-180).max(180).optional(),
+          description: z.string().trim().min(3).max(2000),
+          priority: z.enum(["low", "normal", "high", "urgent"]).default("normal"),
+          slaDueAt: z.string().datetime().optional(),
+          idempotencyKey: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
         }),
       )
       .mutation(({ ctx, input }) =>
-        createWorkOrder({ actorUserId: ctx.user!.id, ...input }),
+        createFieldServiceWorkOrder({ actorUserId: ctx.user!.id, ...input }),
       ),
     scheduleWorkOrder: operatorMutationProcedure("operate")
       .input(
         z.object({
           workOrderId: z.string().uuid(),
-          scheduledStartAt: z.string().datetime(),
-          scheduledEndAt: z.string().datetime(),
-          idempotencyKey: z
-            .string()
-            .trim()
-            .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
+          scheduledStart: z.string().datetime(),
+          scheduledEnd: z.string().datetime(),
+          idempotencyKey: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
         }),
       )
       .mutation(({ ctx, input }) =>
-        scheduleWorkOrder({ actorUserId: ctx.user!.id, ...input }),
+        scheduleFieldServiceWorkOrder({ actorUserId: ctx.user!.id, ...input }),
       ),
     assignWorkOrder: operatorMutationProcedure("operate")
       .input(
         z.object({
           workOrderId: z.string().uuid(),
           technicianUserId: z.number().int().positive(),
-          idempotencyKey: z
-            .string()
-            .trim()
-            .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
+          idempotencyKey: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
         }),
       )
       .mutation(({ ctx, input }) =>
-        assignWorkOrder({ actorUserId: ctx.user!.id, ...input }),
+        assignFieldServiceWorkOrder({ actorUserId: ctx.user!.id, ...input }),
       ),
-    advanceWorkOrder: authenticatedProcedure
+    recordStatus: authenticatedProcedure
       .input(
         z.object({
           workOrderId: z.string().uuid(),
-          action: z.enum(["depart", "arrive"]),
-          note: z.string().trim().min(1).max(2000).nullable(),
-          idempotencyKey: z
-            .string()
-            .trim()
-            .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
-        }),
-      )
-      .mutation(({ ctx, input }) =>
-        advanceWorkOrder({ technicianUserId: ctx.user!.id, ...input }),
-      ),
-    recordWorkOrderProof: authenticatedProcedure
-      .input(
-        z.object({
-          workOrderId: z.string().uuid(),
-          kind: z.enum(["arrival", "customer_signature", "equipment_serial"]),
-          objectKey: z.string().trim().min(3).max(512),
-          contentType: z.enum([
-            "image/jpeg",
-            "image/png",
-            "image/heic",
-            "application/pdf",
+          status: z.enum([
+            "en_route",
+            "arrived",
+            "in_progress",
+            "completed",
+            "cancelled",
           ]),
-          sha256Hex: z.string().regex(/^[a-f0-9]{64}$/),
-          idempotencyKey: z
-            .string()
-            .trim()
-            .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
+          note: z.string().trim().max(1000).optional(),
+          idempotencyKey: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
         }),
       )
       .mutation(({ ctx, input }) =>
-        recordWorkOrderProof({ technicianUserId: ctx.user!.id, ...input }),
+        recordFieldServiceWorkOrderStatus({
+          actorUserId: ctx.user!.id,
+          ...input,
+        }),
+      ),
+    recordSlaEvent: operatorMutationProcedure("operate")
+      .input(
+        z.object({
+          workOrderId: z.string().uuid(),
+          eventType: z.enum(["breach_warning", "breached", "met"]),
+          detail: z.string().trim().max(500).optional(),
+          idempotencyKey: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
+        }),
+      )
+      .mutation(({ ctx, input }) =>
+        recordFieldServiceSlaEvent({ actorUserId: ctx.user!.id, ...input }),
       ),
     completeWorkOrder: authenticatedProcedure
       .input(
         z.object({
           workOrderId: z.string().uuid(),
-          completionSummary: z.string().trim().min(3).max(4000),
-          objectKey: z.string().trim().min(3).max(512),
-          contentType: z.enum([
-            "image/jpeg",
-            "image/png",
-            "image/heic",
-            "application/pdf",
-          ]),
-          sha256Hex: z.string().regex(/^[a-f0-9]{64}$/),
-          idempotencyKey: z
-            .string()
-            .trim()
-            .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
+          completionNotes: z.string().trim().min(3).max(2000),
+          partsUsed: z
+            .array(
+              z.object({
+                name: z.string().trim().min(1).max(160),
+                quantity: z.number().int().min(1).max(999),
+                unitCostKobo: z.number().int().min(0),
+              }),
+            )
+            .max(64)
+            .optional(),
+          laborMinutes: z.number().int().min(0).max(100000).optional(),
+          idempotencyKey: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
         }),
       )
       .mutation(({ ctx, input }) =>
-        completeWorkOrder({ technicianUserId: ctx.user!.id, ...input }),
+        completeFieldServiceWorkOrder({ actorUserId: ctx.user!.id, ...input }),
       ),
-    cancelWorkOrder: operatorMutationProcedure("operate")
+    activateAgreement: operatorMutationProcedure("operate")
       .input(
         z.object({
-          workOrderId: z.string().uuid(),
-          reason: z.string().trim().min(3).max(1000),
-          idempotencyKey: z
-            .string()
-            .trim()
-            .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
+          agreementId: z.string().uuid(),
+          idempotencyKey: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
         }),
       )
       .mutation(({ ctx, input }) =>
-        cancelWorkOrder({ actorUserId: ctx.user!.id, ...input }),
+        activateFieldServiceAgreement({ actorUserId: ctx.user!.id, ...input }),
       ),
   }),
 
-  driverDispatchFairness: router({
-    listMyOffers: authenticatedProcedure.query(({ ctx }) =>
-      listTransparentDriverOffers(ctx.user!.id),
-    ),
-    declineOffer: authenticatedProcedure
-      .input(
-        z.object({
-          offerId: z.string().uuid(),
-          reason: z.enum([
-            "pickup_distance_unprofitable",
-            "pickup_time_unprofitable",
-            "fare_insufficient",
-            "destination_unsuitable",
-            "safety_preference",
-            "vehicle_constraint",
-            "other",
-          ]),
-          idempotencyKey: z
-            .string()
-            .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
-        }),
-      )
-      .mutation(({ ctx, input }) =>
-        declineTransparentDriverOffer({ driverUserId: ctx.user!.id, ...input }),
-      ),
-    setEconomicsPolicy: operatorMutationProcedure("write_platform")
-      .input(
-        z.object({
-          zoneId: z.string().uuid(),
-          version: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{2,63}$/),
-          driverTimeFloorKoboPerMin: z.number().int().min(1).max(1000000),
-          driverDistanceFloorKoboPerKm: z.number().int().min(1).max(10000000),
-          fuelCostIndexBp: z.number().int().min(5000).max(30000),
-          maintenanceCostIndexBp: z.number().int().min(5000).max(30000),
-          pickupSubsidyKoboPerKm: z.number().int().min(0).max(10000000),
-          maxPickupSubsidyKobo: z.number().int().min(0).max(1000000000),
-          platformVariableCostKobo: z.number().int().min(0).max(1000000000),
-          platformContributionTargetKobo: z
-            .number()
-            .int()
-            .min(0)
-            .max(1000000000),
-          effectiveFrom: z.string().datetime(),
-        }),
-      )
-      .mutation(async ({ ctx, input }) => {
-        await autoPostEconomicsConsultation({
-          actorUserId: ctx.user!.id,
-          kind: "pricing",
-          title: `Driver offer economics policy ${input.version} (zone ${input.zoneId})`,
-          payload: { ...input },
-        });
-        return setDriverOfferEconomicsPolicy({
-          actorUserId: ctx.user!.id,
-          ...input,
-        });
-      }),
-    setPolicy: operatorMutationProcedure("write_platform")
-      .input(
-        z.object({
-          zoneId: z.string().uuid(),
-          version: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{2,63}$/),
-          platformCommissionBp: z.number().int().min(0).max(1500),
-          maxPickupDistanceM: z.number().int().min(250).max(5000),
-          maxPickupEtaS: z.number().int().min(60).max(1200),
-          effectiveFrom: z.string().datetime(),
-        }),
-      )
-      .mutation(async ({ ctx, input }) => {
-        await autoPostEconomicsConsultation({
-          actorUserId: ctx.user!.id,
-          kind: "commission",
-          title: `Dispatch fairness/commission policy ${input.version} (zone ${input.zoneId})`,
-          payload: { ...input },
-        });
-        return setDriverDispatchFairnessPolicy({
-          actorUserId: ctx.user!.id,
-          ...input,
-        });
-      }),
-  }),
-  stakeholderVerification: router({
-    listCases: authenticatedProcedure
-      .input(
-        z
-          .object({ limit: z.number().int().min(1).max(100).optional() })
-          .optional(),
-      )
-      .query(({ ctx, input }) =>
-        listVerificationCases(ctx.user!.id, input?.limit ?? 50),
-      ),
-    getChecks: authenticatedProcedure
-      .input(z.object({ caseId: z.string().uuid() }))
-      .query(({ ctx, input }) =>
-        getVerificationChecks(ctx.user!.id, input.caseId),
-      ),
-    startCase: authenticatedProcedure
+  verification: router({
+    startCase: operatorMutationProcedure("operate")
       .input(
         z.object({
           subjectType: z.enum([
@@ -806,57 +883,54 @@ export const appRouter = router({
             "fleet_provider",
             "operator",
           ]),
-          subjectKey: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{1,127}$/),
-          jurisdiction: z.string().regex(/^[A-Z]{2}(-[A-Z0-9]{1,12})?$/),
-          purpose: z.string().regex(/^[a-z][a-z0-9_.-]{2,63}$/),
-          idempotencyKey: z
-            .string()
-            .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
+          subjectKey: z.string().trim().min(1).max(160),
+          subjectUserId: z.number().int().positive().nullable(),
+          jurisdiction: z.string().trim().min(2).max(8),
+          purpose: z.string().trim().min(2).max(64),
+          idempotencyKey: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
         }),
       )
-      .mutation(({ ctx, input }) =>
-        startVerificationCase({
+      .mutation(async ({ ctx, input }) => ({
+        caseId: await startVerificationCase({
           actorUserId: ctx.user!.id,
-          subjectUserId: ctx.user!.id,
           ...input,
         }),
-      ),
-    recordConsent: authenticatedProcedure
+      })),
+    recordConsent: operatorMutationProcedure("operate")
       .input(
         z.object({
           caseId: z.string().uuid(),
-          consentVersion: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/),
+          consentVersion: z.string().trim().min(1).max(64),
           disclosureDigestHex: z.string().regex(/^[a-f0-9]{64}$/),
           expiresAt: z.string().datetime(),
-          idempotencyKey: z
-            .string()
-            .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
+          idempotencyKey: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
         }),
       )
-      .mutation(({ ctx, input }) =>
-        recordVerificationConsent({ actorUserId: ctx.user!.id, ...input }),
-      ),
+      .mutation(async ({ ctx, input }) => ({
+        consentId: await recordVerificationConsent({
+          actorUserId: ctx.user!.id,
+          ...input,
+        }),
+      })),
     withdrawConsent: authenticatedProcedure
       .input(
         z.object({
           caseId: z.string().uuid(),
-          idempotencyKey: z
-            .string()
-            .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
+          idempotencyKey: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
         }),
       )
-      .mutation(({ ctx, input }) =>
-        withdrawVerificationConsent({ actorUserId: ctx.user!.id, ...input }),
-      ),
-    recordEvidence: authenticatedProcedure
+      .mutation(async ({ ctx, input }) => ({
+        state: await withdrawVerificationConsent({
+          actorUserId: ctx.user!.id,
+          ...input,
+        }),
+      })),
+    recordEvidence: operatorMutationProcedure("operate")
       .input(
         z.object({
           caseId: z.string().uuid(),
-          evidenceKind: z.string().regex(/^[a-z][a-z0-9_.-]{2,63}$/),
-          objectKey: z
-            .string()
-            .regex(/^[A-Za-z0-9][A-Za-z0-9._/-]+$/)
-            .max(512),
+          evidenceKind: z.string().trim().min(2).max(64),
+          objectKey: z.string().trim().min(3).max(512),
           contentType: z.enum([
             "application/pdf",
             "image/jpeg",
@@ -866,33 +940,28 @@ export const appRouter = router({
           ]),
           sha256Hex: z.string().regex(/^[a-f0-9]{64}$/),
           captureMetadata: z.record(z.string(), z.unknown()),
-          idempotencyKey: z
-            .string()
-            .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
+          idempotencyKey: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
         }),
       )
-      .mutation(({ ctx, input }) =>
-        recordVerificationEvidence({ actorUserId: ctx.user!.id, ...input }),
-      ),
-    enqueueProcessing: authenticatedProcedure
+      .mutation(async ({ ctx, input }) => ({
+        evidenceId: await recordVerificationEvidence({
+          actorUserId: ctx.user!.id,
+          ...input,
+        }),
+      })),
+    listCases: operatorMutationProcedure("operate")
       .input(
         z.object({
-          caseId: z.string().uuid(),
-          evidenceId: z.string().uuid(),
-          processor: z.enum([
-            "paddleocr",
-            "docling",
-            "vlm_document",
-            "liveness",
-            "document_forensics",
-          ]),
-          idempotencyKey: z
-            .string()
-            .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
+          limit: z.number().int().min(1).max(200).default(50),
         }),
       )
-      .mutation(({ ctx, input }) =>
-        enqueueVerificationProcessing({ actorUserId: ctx.user!.id, ...input }),
+      .query(async ({ ctx, input }) =>
+        listVerificationCases(ctx.user!.id, input.limit),
+      ),
+    getChecks: authenticatedProcedure
+      .input(z.object({ caseId: z.string().uuid() }))
+      .query(async ({ ctx, input }) =>
+        getVerificationChecks(ctx.user!.id, input.caseId),
       ),
     recordProviderCheck: operatorMutationProcedure("operate")
       .input(
@@ -910,7 +979,7 @@ export const appRouter = router({
             "beneficial_owner",
             "operator_recertification",
           ]),
-          providerKey: z.string().regex(/^[a-z][a-z0-9_-]{2,63}$/),
+          providerKey: z.string().trim().min(2).max(64),
           state: z.enum([
             "passed",
             "failed",
@@ -918,81 +987,48 @@ export const appRouter = router({
             "unavailable",
             "expired",
           ]),
-          providerReference: z.string().min(3).max(200).nullable().optional(),
-          responseDigestHex: z
-            .string()
-            .regex(/^[a-f0-9]{64}$/)
-            .nullable()
-            .optional(),
-          expiresAt: z.string().datetime().nullable().optional(),
-          detailCode: z
-            .string()
-            .regex(/^[a-z][a-z0-9_.-]{2,95}$/)
-            .nullable()
-            .optional(),
-          idempotencyKey: z
-            .string()
-            .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
+          providerReference: z.string().trim().max(255).nullable(),
+          responseDigestHex: z.string().regex(/^[a-f0-9]{64}$/).nullable(),
+          expiresAt: z.string().datetime().nullable(),
+          detailCode: z.string().trim().max(64).nullable(),
+          idempotencyKey: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
         }),
       )
-      .mutation(({ ctx, input }) =>
-        recordVerificationProviderCheck({
+      .mutation(async ({ ctx, input }) => ({
+        state: await recordVerificationProviderCheck({
           actorUserId: ctx.user!.id,
           ...input,
         }),
-      ),
-    decideCase: operatorMutationProcedure("operate")
+      })),
+    decideCase: operatorMutationProcedure("write_platform")
       .input(
         z.object({
           caseId: z.string().uuid(),
           decision: z.enum(["verify", "reject", "suspend", "expire"]),
-          reason: z.string().trim().min(3).max(1000),
-          expiresAt: z.string().datetime().nullable().optional(),
-          idempotencyKey: z
-            .string()
-            .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
+          reason: z.string().trim().min(3).max(4000),
+          expiresAt: z.string().datetime().nullable(),
+          idempotencyKey: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
         }),
       )
-      .mutation(({ ctx, input }) =>
-        decideVerificationCase({ actorUserId: ctx.user!.id, ...input }),
-      ),
-  }),
-  vehicleAccess: router({
-    listOffers: authenticatedProcedure
-      .input(
-        z
-          .object({ limit: z.number().int().min(1).max(100).optional() })
-          .optional(),
-      )
-      .query(({ input }) => listVehicleAccessOffers(input?.limit ?? 50)),
-    listContracts: authenticatedProcedure
-      .input(
-        z
-          .object({ limit: z.number().int().min(1).max(100).optional() })
-          .optional(),
-      )
-      .query(({ ctx, input }) =>
-        listVehicleAccessContracts({
+      .mutation(async ({ ctx, input }) => ({
+        state: await decideVerificationCase({
           actorUserId: ctx.user!.id,
-          limit: input?.limit ?? 50,
+          ...input,
         }),
-      ),
-    requestContract: authenticatedProcedure
+      })),
+  }),
+
+  vehicleAccess: router({
+    availableOffers: authenticatedProcedure
       .input(
         z.object({
-          offerId: z.string().uuid(),
-          startsAt: z.string().datetime(),
-          endsAt: z.string().datetime(),
-          idempotencyKey: z
-            .string()
-            .trim()
-            .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
+          limit: z.number().int().min(1).max(24).optional(),
         }),
       )
-      .mutation(({ ctx, input }) =>
-        requestVehicleAccess({ workerUserId: ctx.user!.id, ...input }),
+      .query(({ input }) =>
+        listAvailableVehicleOffers({ limit: input.limit ?? 24 }),
       ),
-    listRentalAddOns: authenticatedProcedure
+    rentalAddOns: authenticatedProcedure
       .input(
         z.object({
           offerId: z.string().uuid(),
@@ -1578,6 +1614,7 @@ export const appRouter = router({
           providerId: z.number().int().positive(),
           decision: z.enum(["activate", "suspend", "reject"]),
           verificationCaseId: z.string().uuid().nullable(),
+          rejectionReason: z.string().trim().min(3).max(1000).optional(),
           idempotencyKey: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
         }),
       )
@@ -1974,6 +2011,8 @@ export const appRouter = router({
   consumer: consumerRouter,
 
   riderVerification: riderVerificationRouter,
+
+  verification: verificationRouter,
 
   deactivation: deactivationRouter,
 
