@@ -142,6 +142,8 @@ import {
 } from "./_core/merchantCommerce";
 import { getMerchantOnboardingProgress } from "./_core/merchantOnboarding";
 import { selfserveRouter } from "./_core/selfserveRouter";
+import { driverOnboardingRouter } from "./_core/driverOnboardingRouter";
+import { approveExternalOperator } from "./_core/operatorAuthStore";
 import { consumerRouter } from "./_core/consumerRouter";
 import { riderVerificationRouter } from "./_core/riderVerificationRouter";
 import { deactivationRouter } from "./_core/deactivationRouter";
@@ -225,6 +227,24 @@ export const appRouter = router({
 
   auth: router({
     me: publicProcedure.query(({ ctx }) => ctx.user),
+  }),
+
+  // External OIDC operator provisioning is fail-closed (Audit A P0-3): new
+  // external identities are inactive until an existing operator approves
+  // them here.
+  operatorOnboarding: router({
+    approveExternalOperator: operatorMutationProcedure("write_platform")
+      .input(z.object({ operatorId: z.number().int().positive() }))
+      .mutation(async ({ input }) => {
+        const approved = await approveExternalOperator(input.operatorId);
+        if (!approved) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "operator_not_found",
+          });
+        }
+        return approved;
+      }),
   }),
 
   analytics: router({
@@ -1500,7 +1520,7 @@ export const appRouter = router({
         }),
       )
       .mutation(({ ctx, input }) =>
-        cancelVehiclePreventNextStart({ actorUserId: ctx.user!.id, ...input }),
+        cancelPreventNextStart({ actorUserId: ctx.user!.id, ...input }),
       ),
     operateTransition: operatorMutationProcedure("operate")
       .input(
@@ -1948,6 +1968,8 @@ export const appRouter = router({
   }),
 
   selfserve: selfserveRouter,
+
+  driverOnboarding: driverOnboardingRouter,
 
   consumer: consumerRouter,
 
