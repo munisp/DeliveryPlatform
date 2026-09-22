@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { memo, useCallback, useMemo, useState } from "react";
+import { FlatList, Pressable, Text, TextInput, View } from "react-native";
 
 import { SectionCard } from "@/components/mobile/operations-ui";
 import { ScreenContainer } from "@/components/screen-container";
@@ -26,18 +26,20 @@ import { formatDateTime, formatMinor } from "@/lib/money";
  * up a breakdown by offer ID.
  */
 
-function OfferRow({
-  offer,
-  selected,
-  onSelect,
-}: {
+type OfferRowProps = {
   offer: TransparentDriverOffer;
   selected: boolean;
-  onSelect: () => void;
-}) {
+  onSelect: (offerId: string) => void;
+};
+
+const OfferRow = memo(function OfferRow({ offer, selected, onSelect }: OfferRowProps) {
+  const handlePress = useCallback(
+    () => onSelect(offer.offerId),
+    [offer.offerId, onSelect],
+  );
   return (
     <Pressable
-      onPress={onSelect}
+      onPress={handlePress}
       accessibilityRole="button"
       accessibilityState={{ selected }}
       className={
@@ -63,113 +65,116 @@ function OfferRow({
       </Text>
     </Pressable>
   );
-}
+});
 
-function MyOffersSection({
-  selectedOfferId,
-  onSelect,
-}: {
-  selectedOfferId: string;
-  onSelect: (offerId: string) => void;
-}) {
-  const offers = useMyOffers();
-
-  if (offers.isError) {
-    return (
-      <QueryErrorNotice
-        resource="your dispatch offers"
-        message={offers.error?.message}
-        onRetry={() => void offers.refetch()}
-        retrying={offers.isRefetching}
-      />
-    );
-  }
-  if (offers.isLoading) {
-    return <Text className="text-sm text-muted">Loading your offers…</Text>;
-  }
-  const list = offers.data ?? [];
-  if (list.length === 0) {
-    return (
-      <Notice
-        tone="neutral"
-        title="No active dispatch offers"
-        body="When the platform offers you a trip it will appear here with its full fare breakdown."
-      />
-    );
-  }
-  return (
-    <View className="gap-2">
-      {list.map((offer) => (
-        <OfferRow
-          key={offer.offerId}
-          offer={offer}
-          selected={selectedOfferId === offer.offerId}
-          onSelect={() => onSelect(offer.offerId)}
-        />
-      ))}
-    </View>
-  );
-}
+const offerKeyExtractor = (offer: TransparentDriverOffer) => offer.offerId;
 
 export default function FaresScreen() {
   const [selectedOfferId, setSelectedOfferId] = useState("");
   const [manualOfferId, setManualOfferId] = useState("");
+  const offers = useMyOffers();
 
   const effectiveOfferId = manualOfferId.trim() || selectedOfferId;
+  const list = useMemo(() => offers.data ?? [], [offers.data]);
+
+  const handleSelect = useCallback((offerId: string) => {
+    setManualOfferId("");
+    setSelectedOfferId(offerId);
+  }, []);
+
+  const renderOffer = useCallback(
+    ({ item }: { item: TransparentDriverOffer }) => (
+      <OfferRow
+        offer={item}
+        selected={!manualOfferId.trim() && selectedOfferId === item.offerId}
+        onSelect={handleSelect}
+      />
+    ),
+    [manualOfferId, selectedOfferId, handleSelect],
+  );
 
   return (
     <ScreenContainer className="px-4 pb-6">
-      <ScrollView
+      <FlatList
+        data={list}
+        keyExtractor={offerKeyExtractor}
+        renderItem={renderOffer}
+        windowSize={7}
+        maxToRenderPerBatch={8}
+        removeClippedSubviews
         contentContainerStyle={{ gap: 16, paddingTop: 20, paddingBottom: 24 }}
-      >
-        <BackHeader
-          title="Fare transparency"
-          subtitle="Every kobo accounted for before you commit: base, distance, time, deadhead credit, surge, and the published take rate (R7–R9)."
-        />
-
-        <SectionCard
-          title="My dispatch offers"
-          subtitle="Select an offer to inspect its itemized breakdown and the rider's verification badge."
-        >
-          <MyOffersSection
-            selectedOfferId={manualOfferId.trim() ? "" : selectedOfferId}
-            onSelect={(offerId) => {
-              setManualOfferId("");
-              setSelectedOfferId(offerId);
-            }}
-          />
-        </SectionCard>
-
-        <SectionCard
-          title="Look up by offer ID"
-          subtitle="Paste any offer ID to load its stored breakdown."
-        >
-          <TextInput
-            value={manualOfferId}
-            onChangeText={setManualOfferId}
-            placeholder="Offer ID (UUID)"
-            placeholderTextColor={trustPlaceholderColor}
-            autoCapitalize="none"
-            className={trustInputClass}
-          />
-        </SectionCard>
-
-        {effectiveOfferId ? (
-          <SectionCard
-            title="Offer detail"
-            subtitle="Rider identity assurance and the itemized fare for the selected offer."
-          >
-            <VerifiedRiderBadge offerId={effectiveOfferId} />
-            <FareBreakdown offerId={effectiveOfferId} />
-            <View className="flex-row flex-wrap gap-2">
-              <StatusPill
-                label={`Offer ${effectiveOfferId.slice(0, 8)}…`}
-                tone="neutral"
-              />
+        ListHeaderComponent={
+          <View className="gap-4">
+            <BackHeader
+              title="Fare transparency"
+              subtitle="Every kobo accounted for before you commit: base, distance, time, deadhead credit, surge, and the published take rate (R7–R9)."
+            />
+            <View className="gap-1">
+              <Text className="text-lg font-semibold text-foreground">
+                My dispatch offers
+              </Text>
+              <Text className="text-sm leading-5 text-muted">
+                Select an offer to inspect its itemized breakdown and the
+                rider&apos;s verification badge.
+              </Text>
+              {offers.isError ? (
+                <QueryErrorNotice
+                  resource="your dispatch offers"
+                  message={offers.error?.message}
+                  onRetry={() => void offers.refetch()}
+                  retrying={offers.isRefetching}
+                />
+              ) : offers.isLoading ? (
+                <Text className="mt-2 text-sm text-muted">
+                  Loading your offers…
+                </Text>
+              ) : null}
             </View>
-          </SectionCard>
-        ) : null}
-      </ScrollView>
+          </View>
+        }
+        ListEmptyComponent={
+          offers.isLoading || offers.isError ? null : (
+            <Notice
+              tone="neutral"
+              title="No active dispatch offers"
+              body="When the platform offers you a trip it will appear here with its full fare breakdown."
+            />
+          )
+        }
+        ListFooterComponent={
+          <View className="gap-4">
+            <SectionCard
+              title="Look up by offer ID"
+              subtitle="Paste any offer ID to load its stored breakdown."
+            >
+              <TextInput
+                value={manualOfferId}
+                onChangeText={setManualOfferId}
+                placeholder="Offer ID (UUID)"
+                placeholderTextColor={trustPlaceholderColor}
+                autoCapitalize="none"
+                className={trustInputClass}
+              />
+            </SectionCard>
+
+            {effectiveOfferId ? (
+              <SectionCard
+                title="Offer detail"
+                subtitle="Rider identity assurance and the itemized fare for the selected offer."
+              >
+                <VerifiedRiderBadge offerId={effectiveOfferId} />
+                <FareBreakdown offerId={effectiveOfferId} />
+                <View className="flex-row flex-wrap gap-2">
+                  <StatusPill
+                    label={`Offer ${effectiveOfferId.slice(0, 8)}…`}
+                    tone="neutral"
+                  />
+                </View>
+              </SectionCard>
+            ) : null}
+          </View>
+        }
+      />
     </ScreenContainer>
   );
 }

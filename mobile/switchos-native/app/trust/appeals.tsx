@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { memo, useMemo, useState } from "react";
+import { FlatList, Pressable, Text, TextInput, View } from "react-native";
 
 import { SectionCard } from "@/components/mobile/operations-ui";
 import { ScreenContainer } from "@/components/screen-container";
@@ -128,10 +128,8 @@ function AppealForm({ deactivationCase }: { deactivationCase: DeactivationCaseRo
 
 function MyCaseContent({
   deactivationCase,
-  appeals,
 }: {
   deactivationCase: DeactivationCaseRow;
-  appeals: DeactivationAppealRow[];
 }) {
   const countdown = noticeCountdown(deactivationCase);
 
@@ -190,84 +188,105 @@ function MyCaseContent({
       </View>
 
       <AppealForm deactivationCase={deactivationCase} />
-
-      {appeals.length > 0 ? (
-        <View className="gap-2">
-          <Text className="text-xs font-semibold uppercase tracking-[1px] text-muted">
-            Filed appeals
-          </Text>
-          {appeals.map((appeal) => (
-            <View
-              key={appeal.id}
-              className="gap-2 rounded-[16px] border border-border bg-background/60 px-4 py-3"
-            >
-              <View className="flex-row flex-wrap items-center gap-2">
-                <StatusPill
-                  label={appeal.decision ?? appeal.status}
-                  tone={appealTone(appeal)}
-                />
-                <Text className="text-xs text-muted">
-                  SLA {formatDateTime(appeal.sla_due_at)}
-                </Text>
-              </View>
-              <Text className="text-xs text-muted">
-                Filed {formatDateTime(appeal.created_at)}
-                {appeal.decided_at
-                  ? ` · decided ${formatDateTime(appeal.decided_at)}`
-                  : ""}
-              </Text>
-              {appeal.rationale ? (
-                <Text className="text-sm leading-5 text-foreground">
-                  Rationale: {appeal.rationale}
-                </Text>
-              ) : null}
-            </View>
-          ))}
-        </View>
-      ) : null}
     </View>
   );
 }
 
+const AppealRow = memo(function AppealRow({
+  appeal,
+}: {
+  appeal: DeactivationAppealRow;
+}) {
+  return (
+    <View className="gap-2 rounded-[16px] border border-border bg-background/60 px-4 py-3">
+      <View className="flex-row flex-wrap items-center gap-2">
+        <StatusPill
+          label={appeal.decision ?? appeal.status}
+          tone={appealTone(appeal)}
+        />
+        <Text className="text-xs text-muted">
+          SLA {formatDateTime(appeal.sla_due_at)}
+        </Text>
+      </View>
+      <Text className="text-xs text-muted">
+        Filed {formatDateTime(appeal.created_at)}
+        {appeal.decided_at
+          ? ` · decided ${formatDateTime(appeal.decided_at)}`
+          : ""}
+      </Text>
+      {appeal.rationale ? (
+        <Text className="text-sm leading-5 text-foreground">
+          Rationale: {appeal.rationale}
+        </Text>
+      ) : null}
+    </View>
+  );
+});
+
+const appealKeyExtractor = (appeal: DeactivationAppealRow) => appeal.id;
+
+// Stable empty list for the no-case path.
+const EMPTY_APPEALS: DeactivationAppealRow[] = [];
+
+const renderAppeal = ({ item }: { item: DeactivationAppealRow }) => (
+  <AppealRow appeal={item} />
+);
+
 export default function AppealsScreen() {
   const myCase = useMyDeactivationCase();
+  const appeals = useMemo(
+    () => myCase.data?.appeals ?? [],
+    [myCase.data],
+  );
+  const hasCase = Boolean(myCase.data?.case);
 
   return (
     <ScreenContainer className="px-4 pb-6">
-      <ScrollView
+      <FlatList
+        data={hasCase ? appeals : EMPTY_APPEALS}
+        keyExtractor={appealKeyExtractor}
+        renderItem={renderAppeal}
+        windowSize={7}
+        maxToRenderPerBatch={8}
+        removeClippedSubviews
         contentContainerStyle={{ gap: 16, paddingTop: 20, paddingBottom: 24 }}
-      >
-        <BackHeader
-          title="Deactivation appeals"
-          subtitle="Advance notice, a stated cause, and a human appeal with a recorded decision — including reinstatement with backpay where the deactivation was unjustified (R4)."
-        />
-        <SectionCard
-          title="My case"
-          subtitle="Your deactivation case, its timeline, and the appeal form."
-        >
-          {myCase.isError ? (
-            <QueryErrorNotice
-              resource="your deactivation case"
-              message={myCase.error?.message}
-              onRetry={() => void myCase.refetch()}
-              retrying={myCase.isRefetching}
+        ListHeaderComponent={
+          <View className="gap-4">
+            <BackHeader
+              title="Deactivation appeals"
+              subtitle="Advance notice, a stated cause, and a human appeal with a recorded decision — including reinstatement with backpay where the deactivation was unjustified (R4)."
             />
-          ) : myCase.isLoading ? (
-            <Text className="text-sm text-muted">Loading your case…</Text>
-          ) : !myCase.data?.case ? (
-            <Notice
-              tone="success"
-              title="No deactivation case on your account"
-              body="Your account is in good standing. If the platform ever issues a deactivation notice you will see the 14-day timeline, the stated cause, and the appeal form here."
-            />
-          ) : (
-            <MyCaseContent
-              deactivationCase={myCase.data.case}
-              appeals={myCase.data.appeals}
-            />
-          )}
-        </SectionCard>
-      </ScrollView>
+            <SectionCard
+              title="My case"
+              subtitle="Your deactivation case, its timeline, and the appeal form."
+            >
+              {myCase.isError ? (
+                <QueryErrorNotice
+                  resource="your deactivation case"
+                  message={myCase.error?.message}
+                  onRetry={() => void myCase.refetch()}
+                  retrying={myCase.isRefetching}
+                />
+              ) : myCase.isLoading ? (
+                <Text className="text-sm text-muted">Loading your case…</Text>
+              ) : !myCase.data?.case ? (
+                <Notice
+                  tone="success"
+                  title="No deactivation case on your account"
+                  body="Your account is in good standing. If the platform ever issues a deactivation notice you will see the 14-day timeline, the stated cause, and the appeal form here."
+                />
+              ) : (
+                <MyCaseContent deactivationCase={myCase.data.case} />
+              )}
+            </SectionCard>
+            {hasCase && appeals.length > 0 ? (
+              <Text className="text-xs font-semibold uppercase tracking-[1px] text-muted">
+                Filed appeals
+              </Text>
+            ) : null}
+          </View>
+        }
+      />
     </ScreenContainer>
   );
 }
