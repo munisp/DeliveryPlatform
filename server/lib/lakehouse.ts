@@ -1,6 +1,7 @@
 import pg from "pg";
 
 import { ENV } from "../_core/env";
+import { CircuitBreaker, resilientFetch } from "../_core/resilientFetch";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -71,19 +72,37 @@ function getPool() {
     pool = new Pool({
       connectionString: ENV.databaseUrl,
       ssl: buildDatabaseSsl(ENV.databaseUrl.includes("sslmode=require")),
+      // Bounded satellite pool (perf finding 10): the syncer is the only
+      // consumer and holds ONE dedicated client per sync; cap connections,
+      // bound connect/idle, and kill runaway statements server-side.
+      max: 5,
+      connectionTimeoutMillis: 3000,
+      idleTimeoutMillis: 30000,
+      options: "-c statement_timeout=10000",
     });
   }
   return pool;
 }
 
+// Dedicated fail-fast breaker for the lakehouse service (perf finding 2):
+// two consecutive failures open it so analytics reads fail open fast instead
+// of hanging on a dead lakehouse.
+const lakehouseBreaker = new CircuitBreaker({
+  failureThreshold: 2,
+  resetTimeoutMs: 15_000,
+});
+
 async function fetchLakehouse<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${ENV.lakehouseServiceUrl}${path}`, {
+  const response = await resilientFetch(`${ENV.lakehouseServiceUrl}${path}`, {
+    ...init,
     headers: {
       "Content-Type": "application/json",
       "X-Internal-Service-Token": ENV.internalServiceToken,
       ...(init?.headers ?? {}),
     },
-    ...init,
+    timeoutMs: 2_000,
+    maxAttempts: 2,
+    breaker: lakehouseBreaker,
   });
 
   if (!response.ok) {
@@ -188,6 +207,27 @@ function buildMarketplaceEvents(orderRows: Array<Record<string, unknown>>): Json
     }));
 }
 
+let lastSyncCompletedAt: number | null = null;
+let syncInFlight: Promise<void> | null = null;
+
+/** ISO timestamp of the last successful Postgres→lakehouse sync. */
+export function getLakehouseLastSyncAt(): string | null {
+  return lastSyncCompletedAt === null
+    ? null
+    : new Date(lastSyncCompletedAt).toISOString();
+}
+
+/**
+ * Whole seconds since the last successful sync, or null when no sync has
+ * completed yet in this process. Surfaced to operators as
+ * `dataFreshnessSeconds` on every lakehouse-backed analytics payload.
+ */
+export function getLakehouseDataFreshnessSeconds(): number | null {
+  return lastSyncCompletedAt === null
+    ? null
+    : Math.max(0, Math.floor((Date.now() - lastSyncCompletedAt) / 1000));
+}
+
 export async function syncLakehouseFromPostgres(limit = DEFAULT_SYNC_LIMIT): Promise<void> {
   const client = await getPool().connect();
   try {
@@ -219,9 +259,49 @@ export async function syncLakehouseFromPostgres(limit = DEFAULT_SYNC_LIMIT): Pro
         body: JSON.stringify({ rows: buildMarketplaceEvents(orderRows) }),
       }),
     ]);
+    lastSyncCompletedAt = Date.now();
   } finally {
     client.release();
   }
+}
+
+/**
+ * Overlap-guarded sync used by the background syncer: concurrent ticks share
+ * a single in-flight sync instead of stacking full-table reads + ingest POSTs
+ * (perf finding 1). Errors are logged and swallowed so the interval keeps
+ * running; the read path reports staleness via dataFreshnessSeconds.
+ */
+function runGuardedSync(): Promise<void> {
+  if (!syncInFlight) {
+    syncInFlight = syncLakehouseFromPostgres()
+      .catch((error) => {
+        console.warn("[SwitchOS] Scheduled lakehouse sync failed:", error);
+      })
+      .finally(() => {
+        syncInFlight = null;
+      });
+  }
+  return syncInFlight;
+}
+
+/**
+ * Self-contained background syncer (perf finding 1): analytics reads no
+ * longer sync inline; this interval keeps the lakehouse warm instead.
+ * Started once from server boot (server/_core/index.ts); returns a stop
+ * function for graceful shutdown. The timer is unref'd so it never keeps a
+ * process (or test) alive.
+ */
+export function startLakehouseSyncer(
+  intervalMs: number = ENV.lakehouseSyncIntervalMs,
+): () => void {
+  const tick = () => {
+    if (!ENV.databaseUrl) return;
+    void runGuardedSync();
+  };
+  const timer = setInterval(tick, intervalMs);
+  timer.unref?.();
+  tick();
+  return () => clearInterval(timer);
 }
 
 export async function getLakehouseAnalyticsSummary(): Promise<LakehouseAnalyticsSummary> {
