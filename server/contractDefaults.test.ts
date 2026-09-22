@@ -15,6 +15,7 @@ import {
   DEFAULT_DISPUTE_FORUM,
   DEFAULT_GOVERNING_LAW,
   getContractDefaults,
+  invalidateContractDefaultsCache,
   publishContractDefaults,
   setContractDefaults,
 } from "./_core/contractDefaults";
@@ -53,6 +54,7 @@ const JURISDICTION = {
 
 beforeEach(() => {
   vi.resetAllMocks();
+  invalidateContractDefaultsCache(); // hot-read cache must not leak between tests
 });
 
 describe("Nigerian-law defaults (R15)", () => {
@@ -216,5 +218,130 @@ describe("publishContractDefaults (consultation gate)", () => {
         consultationId: "cons-1",
       }),
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+});
+
+describe("contract defaults hot-read cache", () => {
+  it("serves repeated getContractDefaults reads from cache (one DB query)", async () => {
+    const pool = createPool([
+      {
+        match: /FROM public\.contract_jurisdictions WHERE market_id/,
+        result: { rows: [{ ...JURISDICTION, published: true }] },
+      },
+    ]);
+    dbMocks.getPool.mockResolvedValue(pool);
+
+    const first = await getContractDefaults("lagos");
+    const second = await getContractDefaults("lagos");
+    expect(first.isDefault).toBe(false);
+    expect(second).toEqual(first);
+    expect(
+      pool.calls.filter((call) =>
+        /FROM public\.contract_jurisdictions WHERE market_id/.test(call.text),
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("caches the Nigerian-law fallback resolution", async () => {
+    const pool = createPool([
+      {
+        match: /FROM public\.contract_jurisdictions WHERE market_id/,
+        result: { rows: [] },
+      },
+    ]);
+    dbMocks.getPool.mockResolvedValue(pool);
+
+    const first = await getContractDefaults("kano");
+    const second = await getContractDefaults("kano");
+    expect(first.isDefault).toBe(true);
+    expect(second).toEqual(first);
+    expect(
+      pool.calls.filter((call) =>
+        /FROM public\.contract_jurisdictions WHERE market_id/.test(call.text),
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("setContractDefaults invalidates the cached defaults for the market", async () => {
+    const pool = createPool([
+      {
+        match: /SELECT .* FROM public\.contract_jurisdictions WHERE market_id/,
+        result: { rows: [] },
+      },
+      {
+        match: /INSERT INTO public\.contract_jurisdictions/,
+        result: { rows: [JURISDICTION] },
+      },
+    ]);
+    dbMocks.getPool.mockResolvedValue(pool);
+    councilMocks.postConsultation.mockResolvedValue({ id: "cons-1" });
+
+    const before = await getContractDefaults("lagos"); // prime cache (fallback)
+    expect(before.isDefault).toBe(true);
+    await setContractDefaults(7, { marketId: "lagos" });
+    const after = await getContractDefaults("lagos"); // must re-read
+    expect(
+      pool.calls.filter((call) =>
+        /SELECT .* FROM public\.contract_jurisdictions WHERE market_id/.test(call.text),
+      ),
+    ).toHaveLength(2);
+  });
+
+  it("publishContractDefaults invalidates the cached defaults for the market", async () => {
+    councilMocks.assertConsultationEligible.mockResolvedValue({
+      id: "cons-1",
+      status: "activated",
+    });
+    let published = false;
+    const pool = createPool([
+      {
+        match: /SELECT .* FROM public\.contract_jurisdictions WHERE market_id/,
+        result: () => ({
+          rows: [{ ...JURISDICTION, published }],
+        }),
+      },
+      {
+        match: /UPDATE public\.contract_jurisdictions/,
+        result: () => {
+          published = true;
+          return {
+            rows: [{ ...JURISDICTION, published: true, consultation_id: "cons-1" }],
+          };
+        },
+      },
+    ]);
+    dbMocks.getPool.mockResolvedValue(pool);
+
+    const before = await getContractDefaults("lagos"); // prime cache
+    expect(before.published).toBe(false);
+    await publishContractDefaults(7, { marketId: "lagos", consultationId: "cons-1" });
+    const after = await getContractDefaults("lagos"); // must re-read
+    expect(after.published).toBe(true);
+    expect(
+      pool.calls.filter((call) =>
+        /SELECT .* FROM public\.contract_jurisdictions WHERE market_id/.test(call.text),
+      ),
+    ).toHaveLength(2);
+  });
+
+  it("invalidation is scoped per market", async () => {
+    const pool = createPool([
+      {
+        match: /FROM public\.contract_jurisdictions WHERE market_id/,
+        result: { rows: [] },
+      },
+    ]);
+    dbMocks.getPool.mockResolvedValue(pool);
+
+    await getContractDefaults("lagos");
+    await getContractDefaults("kano");
+    invalidateContractDefaultsCache("lagos");
+    await getContractDefaults("lagos"); // re-reads
+    await getContractDefaults("kano"); // still cached
+    expect(
+      pool.calls.filter((call) =>
+        /FROM public\.contract_jurisdictions WHERE market_id/.test(call.text),
+      ),
+    ).toHaveLength(3);
   });
 });
