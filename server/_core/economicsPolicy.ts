@@ -2,6 +2,7 @@ import { TRPCError } from "@trpc/server";
 
 import { getPool } from "../db";
 import { ENV } from "./env";
+import { createHotCache } from "./hotCache";
 import { resilientFetch } from "./resilientFetch";
 import { assertConsultationEligible, postConsultation } from "./workerCouncil";
 
@@ -51,6 +52,37 @@ export type TakeRateRow = {
 
 export const INDEX_BASE_BP = 10_000;
 
+/**
+ * Hot-read cache (perf wave W2, audit finding 9): the fare floor and latest
+ * take rate are single indexed SELECTs read on every fare check / economics
+ * call but written rarely (admin updateCostIndex / publishTakeRate /
+ * recordFloorOverride). TTL 60s + write-through invalidation on the serving
+ * process keeps fare-path reads off the database. Null results are cached
+ * too — a market with no policy is the common case.
+ */
+const ECONOMICS_POLICY_CACHE_TTL_MS = 60_000;
+
+const fareFloorPolicyCache = createHotCache<
+  (FareFloorPolicyRow & { floor_minor: number }) | null
+>({ ttlMs: ECONOMICS_POLICY_CACHE_TTL_MS });
+const takeRateCache = createHotCache<TakeRateRow | null>({
+  ttlMs: ECONOMICS_POLICY_CACHE_TTL_MS,
+});
+
+/**
+ * Invalidate cached economics policy reads. Called by every mutation below;
+ * exported (no argument = clear everything) for tests.
+ */
+export function invalidateEconomicsPolicyCache(marketId?: string): void {
+  if (marketId === undefined) {
+    fareFloorPolicyCache.clear();
+    takeRateCache.clear();
+    return;
+  }
+  fareFloorPolicyCache.invalidate(`floor:${marketId}`);
+  takeRateCache.invalidate(`take:${marketId}`);
+}
+
 function parseCostIndex(raw: unknown): CostIndex | null {
   if (!raw || typeof raw !== "object") return null;
   const value = raw as Record<string, unknown>;
@@ -95,6 +127,9 @@ export function computeFareFloorMinor(
 export async function getFareFloorPolicy(
   marketId: string,
 ): Promise<(FareFloorPolicyRow & { floor_minor: number }) | null> {
+  const cacheKey = `floor:${marketId}`;
+  const cached = fareFloorPolicyCache.get(cacheKey);
+  if (cached !== undefined) return cached;
   const pool = await getPool();
   const result = await pool.query<FareFloorPolicyRow>(
     `SELECT * FROM public.fare_floor_policies
@@ -103,17 +138,25 @@ export async function getFareFloorPolicy(
     [marketId],
   );
   const row = result.rows[0];
-  if (!row) return null;
+  if (!row) {
+    fareFloorPolicyCache.set(cacheKey, null);
+    return null;
+  }
   const costIndex = parseCostIndex(row.cost_index);
   const floorMinor = costIndex
     ? computeFareFloorMinor(costIndex, row.sustainability_multiplier)
     : 0;
-  return { ...row, floor_minor: floorMinor };
+  const policy = { ...row, floor_minor: floorMinor };
+  fareFloorPolicyCache.set(cacheKey, policy);
+  return policy;
 }
 
 export async function getLatestTakeRate(
   marketId: string,
 ): Promise<TakeRateRow | null> {
+  const cacheKey = `take:${marketId}`;
+  const cached = takeRateCache.get(cacheKey);
+  if (cached !== undefined) return cached;
   const pool = await getPool();
   const result = await pool.query<TakeRateRow>(
     `SELECT * FROM public.take_rate_registry
@@ -122,7 +165,9 @@ export async function getLatestTakeRate(
      LIMIT 1`,
     [marketId],
   );
-  return result.rows[0] ?? null;
+  const rate = result.rows[0] ?? null;
+  takeRateCache.set(cacheKey, rate);
+  return rate;
 }
 
 /**
@@ -172,6 +217,7 @@ export async function updateCostIndex(
       message: "fare_floor_policy_upsert_failed",
     });
   }
+  invalidateEconomicsPolicyCache(input.marketId);
   return { ...row, floor_minor: computeFareFloorMinor(costIndex, row.sustainability_multiplier) };
 }
 
@@ -221,6 +267,7 @@ export async function publishTakeRate(
       message: "take_rate_publish_failed",
     });
   }
+  invalidateEconomicsPolicyCache(input.marketId);
   return row;
 }
 
@@ -273,6 +320,9 @@ export async function recordFloorOverride(
       message: "fare_floor_override_failed",
     });
   }
+  // Overrides accompany manual floor interventions; drop the cached read so
+  // the next fare check re-reads the policy the operator just acted on.
+  invalidateEconomicsPolicyCache(input.marketId);
   const consultation = await postConsultation(actorUserId, {
     kind: "pricing",
     title: `Fare floor override in ${input.marketId}`,
