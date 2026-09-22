@@ -190,6 +190,9 @@ func main() {
 		Addr:              fmt.Sprintf("%s:%s", bindHost, port),
 		Handler:           loggingMiddleware(httpMetrics.Middleware(mux)),
 		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      15 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 
 	serverErrors := make(chan error, 1)
