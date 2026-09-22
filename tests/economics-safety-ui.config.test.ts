@@ -9,12 +9,8 @@ const source = (path: string) => readFileSync(resolve(root, path), "utf8");
 describe("wave B3 economics + safety UI surfaces (R2 manifest, R3 SOS, R6 fare transparency, R7 take rate, R8 fare floor, R9 cost index)", () => {
   it("routes the driver safety center and market economics workspaces", () => {
     const app = source("client/src/App.tsx");
-    expect(app).toContain(
-      'import DriverSafetyCenter from "@/pages/DriverSafetyCenter"',
-    );
-    expect(app).toContain(
-      'import MarketEconomics from "@/pages/MarketEconomics"',
-    );
+    expect(app).toContain('import("@/pages/DriverSafetyCenter")');
+    expect(app).toContain('import("@/pages/MarketEconomics")');
     expect(app).toContain('path="/safety" component={DriverSafetyCenter}');
     expect(app).toContain(
       'path="/market-economics" component={MarketEconomics}',
