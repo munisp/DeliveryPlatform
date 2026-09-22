@@ -81,16 +81,21 @@ describe("verificationOutboxSweepJob", () => {
         result: { rows: events, rowCount: events.length },
       },
       {
-        match: /FROM verification\.verification_case WHERE id/,
+        match: /FROM verification\.verification_case WHERE id = ANY/,
         result: {
           rows: [
-            { subject_user_id: 42, subject_type: "driver", subject_key: "k" },
+            {
+              id: CASE_ID,
+              subject_user_id: 42,
+              subject_type: "driver",
+              subject_key: "k",
+            },
           ],
         },
       },
       {
-        match: /SELECT email, phone FROM public\.users/,
-        result: { rows: [{ email: "subject@example.com", phone: null }] },
+        match: /SELECT id, email, phone FROM public\.users WHERE id = ANY/,
+        result: { rows: [{ id: 42, email: "subject@example.com", phone: null }] },
       },
     ]);
   }
@@ -141,6 +146,69 @@ describe("verificationOutboxSweepJob", () => {
     expect(result.success).toBe(true);
     expect(result.consumed).toBe(1);
     expect(result.notified).toBe(0);
+  });
+
+  it("batch-fetches subjects and contacts with WHERE id = ANY($1) (no per-event N+1)", async () => {
+    const caseId2 = "22222222-2222-2222-2222-222222222222";
+    const events = [
+      claimedEvent,
+      { id: "evt-2", case_id: caseId2, event_type: "verification.case.rejected", payload: {}, created_at: new Date() },
+      // Same case again: subject lookup must be deduped.
+      { id: "evt-3", case_id: CASE_ID, event_type: "verification.case.verified", payload: {}, created_at: new Date() },
+    ];
+    const pool = createPool([
+      {
+        match: /UPDATE verification\.outbox_event/,
+        result: { rows: events, rowCount: events.length },
+      },
+      {
+        match: /FROM verification\.verification_case WHERE id = ANY/,
+        result: {
+          rows: [
+            { id: CASE_ID, subject_user_id: 42, subject_type: "driver", subject_key: "k" },
+            { id: caseId2, subject_user_id: 43, subject_type: "merchant", subject_key: "m" },
+          ],
+        },
+      },
+      {
+        match: /SELECT id, email, phone FROM public\.users WHERE id = ANY/,
+        result: {
+          rows: [
+            { id: 42, email: "subject@example.com", phone: null },
+            { id: 43, email: null, phone: "+27112233445" },
+          ],
+        },
+      },
+    ]);
+    dbMocks.getPool.mockResolvedValue(pool);
+
+    const result = await verificationOutboxSweepJob();
+
+    expect(result.success).toBe(true);
+    expect(result.consumed).toBe(3);
+    expect(result.notified).toBe(3);
+
+    const subjectCalls = pool.calls.filter((call) =>
+      /FROM verification\.verification_case WHERE id = ANY/.test(call.text),
+    );
+    expect(subjectCalls).toHaveLength(1);
+    expect(subjectCalls[0]?.text).toContain("ANY($1)");
+    expect(subjectCalls[0]?.values?.[0]).toEqual([CASE_ID, caseId2]);
+
+    const contactCalls = pool.calls.filter((call) =>
+      /SELECT id, email, phone FROM public\.users/.test(call.text),
+    );
+    expect(contactCalls).toHaveLength(1);
+    expect(contactCalls[0]?.text).toContain("ANY($1)");
+    expect(contactCalls[0]?.values?.[0]).toEqual([42, 43]);
+
+    expect(gatewayMocks.sendEmail).toHaveBeenCalledTimes(2);
+    expect(gatewayMocks.sendSMS).toHaveBeenCalledTimes(1);
+    expect(gatewayMocks.sendSMS).toHaveBeenCalledWith(
+      "+27112233445",
+      expect.stringContaining("verification.case.rejected"),
+      expect.objectContaining({ caseId: caseId2 }),
+    );
   });
 
   it("reports database unavailability without throwing", async () => {
@@ -233,6 +301,29 @@ describe("verificationSlaSweepJob", () => {
     expect(result.success).toBe(true);
     expect(result.escalated).toBe(1);
     expect(result.operatorsNotified).toBe(0);
+  });
+
+  it("hoists the operator recipient lookup out of the per-case loop", async () => {
+    const secondCase = {
+      id: "22222222-2222-2222-2222-222222222222",
+      subject_type: "merchant",
+      subject_key: "merchant-7",
+      subject_user_id: 77,
+      updated_at: new Date(Date.now() - 120 * 3600 * 1000),
+    };
+    const pool = slaPool([agingCase, secondCase], [{ id: "evt-1" }, { id: "evt-2" }]);
+    dbMocks.getPool.mockResolvedValue(pool);
+
+    const result = await verificationSlaSweepJob();
+
+    expect(result.success).toBe(true);
+    expect(result.escalated).toBe(2);
+    expect(result.operatorsNotified).toBe(2);
+    const operatorLookups = pool.calls.filter((call) =>
+      /SELECT email FROM public\.users/.test(call.text),
+    );
+    expect(operatorLookups).toHaveLength(1);
+    expect(gatewayMocks.sendEmail).toHaveBeenCalledTimes(2);
   });
 
   it("reports database unavailability without throwing", async () => {

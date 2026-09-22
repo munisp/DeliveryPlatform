@@ -235,11 +235,15 @@ describe("Non-Mojaloop durable idempotency hardening", () => {
     createdCampaignIds.push(campaign.id);
 
     vi.mocked(sendEmail).mockClear();
-    const firstRun = await sendCampaignToAudience(campaign.id, "campaign-audience-wave7-key");
+    // awaitCompletion keeps this test deterministic; the default mode returns
+    // a 202-style queued result and pages the audience in the background.
+    const firstRun = await sendCampaignToAudience(campaign.id, "campaign-audience-wave7-key", { awaitCompletion: true });
     const callsAfterFirstRun = vi.mocked(sendEmail).mock.calls.length;
-    const secondRun = await sendCampaignToAudience(campaign.id, "campaign-audience-wave7-key");
+    const secondRun = await sendCampaignToAudience(campaign.id, "campaign-audience-wave7-key", { awaitCompletion: true });
     const callsAfterSecondRun = vi.mocked(sendEmail).mock.calls.length;
 
+    expect(firstRun.status).toBe("completed");
+    expect(secondRun.status).toBe("completed");
     expect(firstRun.total).toBeGreaterThanOrEqual(2);
     expect(secondRun.total).toBe(firstRun.total);
 
