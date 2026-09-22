@@ -1,5 +1,6 @@
 import { ENV } from "./env";
 import type { SessionUser } from "./trpc";
+import { createHotCache } from "./hotCache";
 import { resilientFetch } from "./resilientFetch";
 
 type RedisPolicyCacheClient = {
@@ -30,15 +31,15 @@ function getPermifyAuthToken() {
 }
 
 function buildAuthzModelId() {
-  return `${process.env.PERMIFY_SCHEMA_VERSION ?? "switchos-v1"}`.trim();
+	return `${process.env.PERMIFY_SCHEMA_VERSION ?? "switchos-v1"}`.trim();
 }
 
 function getPolicyCacheTtlSeconds() {
-  const parsed = Number.parseInt(`${process.env.POLICY_CACHE_TTL_SECONDS ?? "30"}`.trim(), 10);
-  if (Number.isNaN(parsed) || parsed <= 0) {
-    return 30;
-  }
-  return parsed;
+	const parsed = Number.parseInt(`${process.env.POLICY_CACHE_TTL_SECONDS ?? "30"}`.trim(), 10);
+	if (Number.isNaN(parsed) || parsed <= 0) {
+		return 30;
+	}
+	return parsed;
 }
 
 function isPolicyEngineEnabled() {
@@ -46,54 +47,84 @@ function isPolicyEngineEnabled() {
 }
 
 function normalizeOpaEndpoint() {
-  return ENV.opaEndpoint;
+	return ENV.opaEndpoint;
 }
 
 function getOpaAuthToken() {
-  return ENV.opaAuthToken;
+	return ENV.opaAuthToken;
 }
 
 function isOpaEnabled() {
-  return normalizeOpaEndpoint().length > 0;
+	return normalizeOpaEndpoint().length > 0;
 }
 
 function isPolicyCacheEnabled() {
-  return Boolean(ENV.redisUrl?.trim()) && isPolicyEngineEnabled();
+	return Boolean(ENV.redisUrl?.trim()) && isPolicyEngineEnabled();
 }
 
 function scopeFallbackAllows(subject: SessionUser, permission: PolicyCheckInput["permission"]) {
 	if (ENV.isProduction) return false;
-  const role = `${subject.role ?? ""}`.trim().toLowerCase();
-  if (role === "admin") return true;
+	const role = `${subject.role ?? ""}`.trim().toLowerCase();
+	if (role === "admin") return true;
 
-  const scopes = new Set((subject.scopes ?? []).map((scope) => scope.trim()));
-  const requiredScope = permission === "read_analytics" || permission === "analytics"
-    ? "analytics:read"
-    : permission === "write_analytics"
-      ? "analytics:write"
-      : permission === "write_platform" || permission === "operate"
-        ? "platform:write"
-        : "platform:read";
+	const scopes = new Set((subject.scopes ?? []).map((scope) => scope.trim()));
+	const requiredScope = permission === "read_analytics" || permission === "analytics"
+		? "analytics:read"
+		: permission === "write_analytics"
+			? "analytics:write"
+			: permission === "write_platform" || permission === "operate"
+				? "platform:write"
+				: "platform:read";
 
-  return scopes.has(requiredScope);
+	return scopes.has(requiredScope);
 }
 
 function isTenantBound(input: PolicyCheckInput) {
-  return input.resource.type !== "tenant" || !input.subject.tenantId || input.subject.tenantId === input.resource.id;
+	return input.resource.type !== "tenant" || !input.subject.tenantId || input.subject.tenantId === input.resource.id;
 }
 
 function recordPolicyDecision(input: PolicyCheckInput, allowed: boolean, source: "cache" | "permify" | "fallback" | "opa" | "tenant-boundary") {
-  console.info(JSON.stringify({
-    event: "policy.decision",
-    allowed,
-    source,
-    subject: String(input.subject.openId ?? input.subject.id),
-    tenantId: input.subject.tenantId ?? "switchos-core",
-    resourceType: input.resource.type,
-    resourceId: input.resource.id,
-    permission: input.permission,
-    mfa: Boolean(input.subject.mfaAuthenticated),
-  }));
+	console.info(JSON.stringify({
+		event: "policy.decision",
+		allowed,
+		source,
+		subject: String(input.subject.openId ?? input.subject.id),
+		tenantId: input.subject.tenantId ?? "switchos-core",
+		resourceType: input.resource.type,
+		resourceId: input.resource.id,
+		permission: input.permission,
+		mfa: Boolean(input.subject.mfaAuthenticated),
+	}));
+}
+
+/**
+ * OPA decision cache (perf wave W2, audit finding 10): checkOpaPolicy runs a
+ * POST on every checkPolicy call before the Permify check. Decisions are
+ * near-static, so cache them per (subject, permission, resource) for 15s in
+ * process. TTL is short because subject attributes (mfa, scopes) feed the
+ * decision; denial behavior is unchanged — a cached deny denies without an
+ * HTTP call.
+ */
+const OPA_DECISION_CACHE_TTL_MS = 15_000;
+
+const opaDecisionCache = createHotCache<boolean>({
+  ttlMs: OPA_DECISION_CACHE_TTL_MS,
+});
+
+function getOpaDecisionCacheKey(input: PolicyCheckInput): string {
+  return [
+    "opa",
+    input.subject.tenantId ?? "switchos-core",
+    input.subject.openId ?? input.subject.id,
+    input.permission,
+    input.resource.type,
+    input.resource.id,
+  ].join(":");
+}
+
+/** Clear cached OPA decisions (policy-bundle deploys; tests). */
+export function invalidateOpaDecisionCache(): void {
+  opaDecisionCache.clear();
 }
 
 async function checkOpaPolicy(input: PolicyCheckInput): Promise<boolean> {
@@ -104,9 +135,18 @@ async function checkOpaPolicy(input: PolicyCheckInput): Promise<boolean> {
   const authToken = getOpaAuthToken();
   if (authToken === "") throw new Error("OPA policy client requires OPA_AUTH_TOKEN when OPA_ENDPOINT is configured");
 
+  const cacheKey = getOpaDecisionCacheKey(input);
+  const cachedDecision = opaDecisionCache.get(cacheKey);
+  if (cachedDecision !== undefined) {
+    return cachedDecision;
+  }
+
   const response = await resilientFetch(`${normalizeOpaEndpoint()}/v1/data/switchos/authz/allow`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${authToken}` },
+    // Read path: bound the OPA hop at 500ms (perf wave W2) instead of the
+    // 10s resilientFetch default; failures still propagate (fail-closed).
+    timeoutMs: 500,
     body: JSON.stringify({ input: {
       subject: {
         id: String(input.subject.openId ?? input.subject.id),
@@ -122,76 +162,78 @@ async function checkOpaPolicy(input: PolicyCheckInput): Promise<boolean> {
   });
   if (!response.ok) throw new Error(`OPA policy check failed: ${response.status}`);
   const payload = await response.json() as { result?: boolean };
-  return payload.result === true;
+  const allowed = payload.result === true;
+  opaDecisionCache.set(cacheKey, allowed);
+  return allowed;
 }
 
 function getPolicyCacheKey(input: PolicyCheckInput) {
-  return [
-    "switchos",
-    "policy",
-    buildAuthzModelId(),
-    input.subject.tenantId ?? "switchos-core",
-    input.subject.openId ?? input.subject.id,
-    input.resource.type,
-    input.resource.id,
-    input.permission,
-  ].join(":");
+	return [
+		"switchos",
+		"policy",
+		buildAuthzModelId(),
+		input.subject.tenantId ?? "switchos-core",
+		input.subject.openId ?? input.subject.id,
+		input.resource.type,
+		input.resource.id,
+		input.permission,
+	].join(":");
 }
 
 async function getRedisPolicyCacheClient(): Promise<RedisPolicyCacheClient | null> {
-  if (!isPolicyCacheEnabled()) {
-    return null;
-  }
+	if (!isPolicyCacheEnabled()) {
+		return null;
+	}
 
-  if (!redisPolicyCacheClientPromise) {
-    redisPolicyCacheClientPromise = (async () => {
-      try {
-        const { createClient } = await import("redis");
-        const client = createClient({ url: ENV.redisUrl });
-        await client.connect();
-        return client as unknown as RedisPolicyCacheClient;
-      } catch (error) {
-        console.warn("[SwitchOS] Failed to initialize Redis policy cache", error);
-        redisPolicyCacheClientPromise = null;
-        return null;
-      }
-    })();
-  }
+	if (!redisPolicyCacheClientPromise) {
+		redisPolicyCacheClientPromise = (async () => {
+			try {
+				const { createClient } = await import("redis");
+				const client = createClient({ url: ENV.redisUrl });
+				await client.connect();
+				return client as unknown as RedisPolicyCacheClient;
+			} catch (error) {
+				console.warn("[SwitchOS] Failed to initialize Redis policy cache", error);
+				redisPolicyCacheClientPromise = null;
+				return null;
+			}
+		})();
+	}
 
-  return redisPolicyCacheClientPromise;
+	return redisPolicyCacheClientPromise;
 }
 
 async function readCachedPolicyDecision(input: PolicyCheckInput): Promise<boolean | null> {
-  const client = await getRedisPolicyCacheClient();
-  if (!client) {
-    return null;
-  }
+	const client = await getRedisPolicyCacheClient();
+	if (!client) {
+		return null;
+	}
 
-  try {
-    const cached = await client.get(getPolicyCacheKey(input));
-    if (cached == null) {
-      return null;
-    }
-    return cached === "1";
-  } catch (error) {
-    console.warn("[SwitchOS] Failed to read Redis policy cache", error);
-    return null;
-  }
+	try {
+		const cached = await client.get(getPolicyCacheKey(input));
+		if (cached == null) {
+			return null;
+		}
+		return cached === "1";
+	} catch (error) {
+		console.warn("[SwitchOS] Failed to read Redis policy cache", error);
+		return null;
+	}
 }
 
 async function writeCachedPolicyDecision(input: PolicyCheckInput, allowed: boolean) {
-  const client = await getRedisPolicyCacheClient();
-  if (!client) {
-    return;
-  }
+	const client = await getRedisPolicyCacheClient();
+	if (!client) {
+		return;
+	}
 
-  try {
-    await client.set(getPolicyCacheKey(input), allowed ? "1" : "0", {
-      EX: getPolicyCacheTtlSeconds(),
-    });
-  } catch (error) {
-    console.warn("[SwitchOS] Failed to write Redis policy cache", error);
-  }
+	try {
+		await client.set(getPolicyCacheKey(input), allowed ? "1" : "0", {
+			EX: getPolicyCacheTtlSeconds(),
+		});
+	} catch (error) {
+		console.warn("[SwitchOS] Failed to write Redis policy cache", error);
+	}
 }
 
 export async function checkPolicy(input: PolicyCheckInput): Promise<boolean> {
@@ -264,10 +306,10 @@ export async function checkPolicy(input: PolicyCheckInput): Promise<boolean> {
 }
 
 export function getPolicyIntegrationStatus() {
-  return {
-    enabled: isPolicyEngineEnabled(),
-    endpoint: normalizePermifyEndpoint() || null,
-    schemaVersion: buildAuthzModelId(),
+	return {
+		enabled: isPolicyEngineEnabled(),
+		endpoint: normalizePermifyEndpoint() || null,
+		schemaVersion: buildAuthzModelId(),
 		fallbackMode: !isPolicyEngineEnabled(),
 		authenticated: getPermifyAuthToken() !== "",
 		opaEnabled: isOpaEnabled(),
