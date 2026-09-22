@@ -103,7 +103,7 @@ describe("courier self-serve portal", () => {
     expect(routers).toContain("selfserve: selfserveRouter,");
 
     const app = source("client/src/App.tsx");
-    expect(app).toContain('import CourierPortal from "@/pages/CourierPortal";');
+    expect(app).toContain('import("@/pages/CourierPortal")');
     expect(app).toContain(
       '<Route path="/courier-portal" component={CourierPortal} />',
     );

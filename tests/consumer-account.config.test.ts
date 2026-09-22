@@ -85,14 +85,10 @@ describe("consumer account surface", () => {
     expect(routers).toContain("consumer: consumerRouter,");
 
     const app = source("client/src/App.tsx");
-    expect(app).toContain('import ConsumerOrders from "@/pages/ConsumerOrders";');
-    expect(app).toContain(
-      'import ConsumerOrderDetail from "@/pages/ConsumerOrderDetail";',
-    );
-    expect(app).toContain(
-      'import ConsumerSupport from "@/pages/ConsumerSupport";',
-    );
-    expect(app).toContain('import ConsumerWallet from "@/pages/ConsumerWallet";');
+    expect(app).toContain('import("@/pages/ConsumerOrders")');
+    expect(app).toContain('import("@/pages/ConsumerOrderDetail")');
+    expect(app).toContain('import("@/pages/ConsumerSupport")');
+    expect(app).toContain('import("@/pages/ConsumerWallet")');
     expect(app).toContain(
       '<Route path="/account/orders/:orderId" component={ConsumerOrderDetail} />',
     );
