@@ -20,8 +20,6 @@ if (!rootElement) {
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      // Perf wave W4 (audit finding 5): stop refetch storms — keep data fresh
-      // for 30s, retain cache for 5min, no refetch on window focus, one retry.
       staleTime: 30_000,
       gcTime: 300_000,
       refetchOnWindowFocus: false,
