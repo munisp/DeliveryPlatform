@@ -3139,9 +3139,9 @@ export async function getMerchantHubSummary(limit = 8) {
     _pool.query<any>(`
       SELECT
         COUNT(*) AS settlement_count,
-        COALESCE(SUM(total_amount), 0) FILTER (WHERE status = 'pending') AS pending_settlements,
-        COALESCE(SUM(total_amount), 0) FILTER (WHERE status = 'approved') AS approved_settlements,
-        COALESCE(SUM(total_amount), 0) FILTER (WHERE status = 'paid') AS paid_settlements
+        COALESCE(SUM(total_amount) FILTER (WHERE status = 'pending'), 0) AS pending_settlements,
+        COALESCE(SUM(total_amount) FILTER (WHERE status = 'approved'), 0) AS approved_settlements,
+        COALESCE(SUM(total_amount) FILTER (WHERE status = 'paid'), 0) AS paid_settlements
       FROM driver_settlements
     `),
     _pool.query<any>(`
@@ -3230,15 +3230,15 @@ export async function getCourierHubSummary(limit = 10) {
     `),
     _pool.query<any>(`
       SELECT
-        COALESCE(SUM(amount), 0) FILTER (WHERE status = 'pending') AS pending_incentives,
-        COALESCE(SUM(amount), 0) FILTER (WHERE status = 'approved') AS approved_incentives,
-        COALESCE(SUM(amount), 0) FILTER (WHERE status = 'paid') AS paid_incentives
+        COALESCE(SUM(amount) FILTER (WHERE status = 'pending'), 0) AS pending_incentives,
+        COALESCE(SUM(amount) FILTER (WHERE status = 'approved'), 0) AS approved_incentives,
+        COALESCE(SUM(amount) FILTER (WHERE status = 'paid'), 0) AS paid_incentives
       FROM driver_incentives
     `),
     _pool.query<any>(`
       SELECT
-        COALESCE(SUM(total_amount), 0) FILTER (WHERE status = 'pending') AS pending_payouts,
-        COALESCE(SUM(total_amount), 0) FILTER (WHERE status = 'approved') AS approved_payouts
+        COALESCE(SUM(total_amount) FILTER (WHERE status = 'pending'), 0) AS pending_payouts,
+        COALESCE(SUM(total_amount) FILTER (WHERE status = 'approved'), 0) AS approved_payouts
       FROM driver_settlements
     `),
     _pool.query<any>(`
@@ -3405,7 +3405,7 @@ export async function getConsumerMarketplaceSummary(limit = 8) {
       recent_orders: recentOrdersResult.rows.length,
       active_memberships: Number(membershipStats.active_memberships || 0),
       avg_membership_price: Number(Number(membershipStats.avg_membership_price || 0).toFixed(2)),
-      membership_savings_ytd: Number(Number(membershipStats.savings_ytd || 0).toFixed(2)),
+      membership_savings_ytd: Number(Number(membershipStats.membership_savings_ytd || 0).toFixed(2)),
       review_count: Number(reviewStats.review_count || 0),
       average_review_rating: Number(Number(reviewStats.avg_rating || 0).toFixed(2)),
     },
@@ -3928,11 +3928,11 @@ async function computeFundsReconciliationSnapshot(windowDays: number) {
     pool.query<any>(`
       SELECT
         COUNT(*) AS transaction_count,
-        COALESCE(SUM(amount::numeric), 0) FILTER (WHERE type = 'payment' AND status = 'completed') AS completed_payments,
-        COALESCE(SUM(amount::numeric), 0) FILTER (WHERE type = 'refund' AND status = 'completed') AS completed_refunds,
-        COALESCE(SUM(amount::numeric), 0) FILTER (WHERE type = 'chargeback' AND status IN ('pending', 'completed')) AS chargeback_exposure,
+        COALESCE(SUM(amount::numeric) FILTER (WHERE type = 'payment' AND status = 'completed'), 0) AS completed_payments,
+        COALESCE(SUM(amount::numeric) FILTER (WHERE type = 'refund' AND status = 'completed'), 0) AS completed_refunds,
+        COALESCE(SUM(amount::numeric) FILTER (WHERE type = 'chargeback' AND status IN ('pending', 'completed')), 0) AS chargeback_exposure,
         COUNT(*) FILTER (WHERE type = 'chargeback' AND status IN ('pending', 'completed')) AS chargeback_count,
-        COALESCE(SUM(amount::numeric), 0) FILTER (WHERE type = 'payout' AND status IN ('pending', 'approved')) AS pending_payout_exposure,
+        COALESCE(SUM(amount::numeric) FILTER (WHERE type = 'payout' AND status IN ('pending', 'approved')), 0) AS pending_payout_exposure,
         COUNT(*) FILTER (WHERE status = 'failed') AS failed_transactions,
         COUNT(*) FILTER (WHERE status = 'pending') AS pending_transactions,
         MAX(updated_at) AS last_transaction_update
@@ -3942,17 +3942,17 @@ async function computeFundsReconciliationSnapshot(windowDays: number) {
     pool.query<any>(`
       SELECT
         COUNT(*) AS settlement_count,
-        COALESCE(SUM(total_amount), 0) FILTER (WHERE status = 'pending') AS pending_settlements,
-        COALESCE(SUM(total_amount), 0) FILTER (WHERE status = 'approved') AS approved_settlements,
-        COALESCE(SUM(total_amount), 0) FILTER (WHERE status = 'completed') AS completed_settlements,
+        COALESCE(SUM(total_amount) FILTER (WHERE status = 'pending'), 0) AS pending_settlements,
+        COALESCE(SUM(total_amount) FILTER (WHERE status = 'approved'), 0) AS approved_settlements,
+        COALESCE(SUM(total_amount) FILTER (WHERE status = 'completed'), 0) AS completed_settlements,
         MAX(COALESCE(processed_at, approved_at, created_at)) AS last_settlement_event
       FROM payout_settlements
       WHERE created_at >= now() - ($1 || ' days')::interval
     `, windowParams),
     pool.query<any>(`
       SELECT
-        COALESCE(SUM(amount), 0) FILTER (WHERE status = 'approved' AND settlement_id IS NULL) AS approved_unsettled_incentives,
-        COALESCE(SUM(amount), 0) FILTER (WHERE status = 'paid') AS paid_incentives,
+        COALESCE(SUM(amount) FILTER (WHERE status = 'approved' AND settlement_id IS NULL), 0) AS approved_unsettled_incentives,
+        COALESCE(SUM(amount) FILTER (WHERE status = 'paid'), 0) AS paid_incentives,
         COUNT(*) FILTER (WHERE status = 'approved' AND settlement_id IS NULL) AS unsettled_incentive_count,
         MAX(COALESCE(paid_at, updated_at, created_at)) AS last_incentive_event
       FROM driver_incentives
@@ -3962,7 +3962,7 @@ async function computeFundsReconciliationSnapshot(windowDays: number) {
       SELECT
         COUNT(*) FILTER (WHERE status = 'cancelled') AS cancelled_orders,
         COUNT(*) FILTER (WHERE status = 'delivered') AS delivered_orders,
-        COALESCE(SUM(driver_fee), 0) FILTER (WHERE status = 'delivered') AS delivered_driver_fees,
+        COALESCE(SUM(driver_fee) FILTER (WHERE status = 'delivered'), 0) AS delivered_driver_fees,
         MAX(COALESCE(actual_delivery_time, updated_at, created_at)) AS last_order_event
       FROM orders
       WHERE created_at >= now() - ($1 || ' days')::interval
