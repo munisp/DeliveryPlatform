@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from "react";
-import { Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { FlatList, Pressable, Text, TextInput, View } from "react-native";
 
 import { SectionCard } from "@/components/mobile/operations-ui";
 import { ScreenContainer } from "@/components/screen-container";
@@ -281,114 +281,161 @@ function EarningsCard() {
   );
 }
 
-function OperatorSOSQueue() {
-  const active = useActiveSOS(true);
-  const resolveSOS = useResolveSOS();
-  const invalidation = useEconomicsSafetyInvalidation();
+type SosAlertRowProps = {
+  alert: SosEvent;
+  resolving: boolean;
+  onResolve: (sosId: string) => void;
+};
 
+const SosAlertRow = memo(function SosAlertRow({
+  alert,
+  resolving,
+  onResolve,
+}: SosAlertRowProps) {
+  const handlePress = useCallback(() => onResolve(alert.id), [alert.id, onResolve]);
   return (
-    <SectionCard
-      title="Operator SOS queue"
-      subtitle="Active SOS alerts across the platform. Resolving records your operator identity."
-    >
-      {active.isLoading ? (
-        <Text className="text-sm text-muted">Loading active SOS alerts…</Text>
-      ) : active.isError ? (
-        <Notice
-          tone="warning"
-          title="Active SOS list unavailable"
-          body={active.error?.message ?? "Try again."}
-        />
-      ) : (active.data ?? []).length === 0 ? (
-        <Notice tone="success" title="No active SOS alerts" />
-      ) : (
-        (active.data ?? []).map((alert) => (
-          <View
-            key={alert.id}
-            className="flex-row flex-wrap items-center justify-between gap-2 rounded-[16px] border border-error/40 bg-error/5 px-3 py-3"
-          >
-            <View className="shrink">
-              <Text className="text-xs text-muted">{alert.id}</Text>
-              <Text className="text-sm font-medium text-error">
-                {alert.role} · {alert.status} ·{" "}
-                {formatDateTime(alert.created_at)}
-              </Text>
-            </View>
-            <Pressable
-              onPress={() =>
-                resolveSOS.mutate(
-                  { sosId: alert.id },
-                  { onSuccess: () => invalidation.safety() },
-                )
-              }
-              disabled={resolveSOS.isPending}
-              className="rounded-full border border-success/40 px-3 py-1.5 disabled:opacity-50"
-            >
-              <Text className="text-xs font-semibold text-success">
-                Resolve
-              </Text>
-            </Pressable>
-          </View>
-        ))
-      )}
-    </SectionCard>
+    <View className="flex-row flex-wrap items-center justify-between gap-2 rounded-[16px] border border-error/40 bg-error/5 px-3 py-3">
+      <View className="shrink">
+        <Text className="text-xs text-muted">{alert.id}</Text>
+        <Text className="text-sm font-medium text-error">
+          {alert.role} · {alert.status} · {formatDateTime(alert.created_at)}
+        </Text>
+      </View>
+      <Pressable
+        onPress={handlePress}
+        disabled={resolving}
+        className="rounded-full border border-success/40 px-3 py-1.5 disabled:opacity-50"
+      >
+        <Text className="text-xs font-semibold text-success">Resolve</Text>
+      </Pressable>
+    </View>
   );
-}
+});
+
+const sosAlertKeyExtractor = (alert: SosEvent) => alert.id;
+
+// Stable empty list so the non-operator path never re-renders the FlatList.
+const EMPTY_ALERTS: SosEvent[] = [];
 
 export default function SafetyScreen() {
   const { role, isLoading } = useNativeOperatorSession();
   const isOperator = !isLoading && role === "admin";
   const [tripId, setTripId] = useState("");
 
+  // Wave W4: the operator SOS queue query is enabled only once a verified
+  // operator session resolves — the driver/rider fast path never fires it.
+  const activeSOS = useActiveSOS(isOperator);
+  const { mutate: resolveSOSMutate, isPending: resolveSOSPending } =
+    useResolveSOS();
+  const invalidation = useEconomicsSafetyInvalidation();
+  const invalidationRef = useRef(invalidation);
+  invalidationRef.current = invalidation;
+
+  const handleResolveSOS = useCallback(
+    (sosId: string) => {
+      resolveSOSMutate(
+        { sosId },
+        { onSuccess: () => invalidationRef.current.safety() },
+      );
+    },
+    [resolveSOSMutate],
+  );
+
+  const renderSosAlert = useCallback(
+    ({ item }: { item: SosEvent }) => (
+      <SosAlertRow
+        alert={item}
+        resolving={resolveSOSPending}
+        onResolve={handleResolveSOS}
+      />
+    ),
+    [resolveSOSPending, handleResolveSOS],
+  );
+
+  const alerts = useMemo(() => activeSOS.data ?? [], [activeSOS.data]);
+
   return (
     <ScreenContainer className="px-4 pb-6">
-      <ScrollView
+      <FlatList
+        data={isOperator ? alerts : EMPTY_ALERTS}
+        keyExtractor={sosAlertKeyExtractor}
+        renderItem={renderSosAlert}
+        windowSize={7}
+        maxToRenderPerBatch={8}
+        removeClippedSubviews
         contentContainerStyle={{ gap: 16, paddingTop: 20, paddingBottom: 24 }}
-      >
-        <View>
-          <Text className="text-3xl font-bold text-foreground">
-            Driver Safety Center
-          </Text>
-          <Text className="mt-2 text-sm leading-6 text-muted">
-            Trigger an SOS with a three-second hold, review who is riding
-            before pickup against the verified passenger manifest, and see
-            exactly what you net after platform fees.
-          </Text>
-        </View>
+        ListHeaderComponent={
+          <View className="gap-4">
+            <View>
+              <Text className="text-3xl font-bold text-foreground">
+                Driver Safety Center
+              </Text>
+              <Text className="mt-2 text-sm leading-6 text-muted">
+                Trigger an SOS with a three-second hold, review who is riding
+                before pickup against the verified passenger manifest, and see
+                exactly what you net after platform fees.
+              </Text>
+            </View>
 
-        <SectionCard
-          title="Emergency SOS"
-          subtitle="Press and hold for three seconds. Releasing early cancels the alert before it is sent."
-        >
-          <TextInput
-            value={tripId}
-            onChangeText={setTripId}
-            placeholder="Trip ID (optional context for SOS and manifest)"
-            placeholderTextColor={trustPlaceholderColor}
-            className={trustInputClass}
-          />
-          <SOSButton tripId={tripId.trim()} />
-        </SectionCard>
+            <SectionCard
+              title="Emergency SOS"
+              subtitle="Press and hold for three seconds. Releasing early cancels the alert before it is sent."
+            >
+              <TextInput
+                value={tripId}
+                onChangeText={setTripId}
+                placeholder="Trip ID (optional context for SOS and manifest)"
+                placeholderTextColor={trustPlaceholderColor}
+                className={trustInputClass}
+              />
+              <SOSButton tripId={tripId.trim()} />
+            </SectionCard>
 
-        <SectionCard
-          title="Trip passenger manifest"
-          subtitle="Per-rider verification chips for the trip above, as the driver will see them before pickup."
-        >
-          <ManifestPanel tripId={tripId.trim()} />
-        </SectionCard>
+            <SectionCard
+              title="Trip passenger manifest"
+              subtitle="Per-rider verification chips for the trip above, as the driver will see them before pickup."
+            >
+              <ManifestPanel tripId={tripId.trim()} />
+            </SectionCard>
 
-        <EarningsCard />
+            <EarningsCard />
 
-        {isOperator ? (
-          <OperatorSOSQueue />
-        ) : (
-          <Notice
-            tone="neutral"
-            title="Operator SOS queue hidden"
-            body="The operator SOS queue is only visible to trust and operations roles. Server-side authorization is enforced independently of this view."
-          />
-        )}
-      </ScrollView>
+            {isOperator ? (
+              <View className="gap-1">
+                <Text className="text-lg font-semibold text-foreground">
+                  Operator SOS queue
+                </Text>
+                <Text className="text-sm leading-5 text-muted">
+                  Active SOS alerts across the platform. Resolving records your
+                  operator identity.
+                </Text>
+                {activeSOS.isLoading ? (
+                  <Text className="mt-2 text-sm text-muted">
+                    Loading active SOS alerts…
+                  </Text>
+                ) : activeSOS.isError ? (
+                  <Notice
+                    tone="warning"
+                    title="Active SOS list unavailable"
+                    body={activeSOS.error?.message ?? "Try again."}
+                  />
+                ) : null}
+              </View>
+            ) : (
+              <Notice
+                tone="neutral"
+                title="Operator SOS queue hidden"
+                body="The operator SOS queue is only visible to trust and operations roles. Server-side authorization is enforced independently of this view."
+              />
+            )}
+          </View>
+        }
+        ListEmptyComponent={
+          isOperator && !activeSOS.isLoading && !activeSOS.isError ? (
+            <Notice tone="success" title="No active SOS alerts" />
+          ) : null
+        }
+      />
     </ScreenContainer>
   );
 }
