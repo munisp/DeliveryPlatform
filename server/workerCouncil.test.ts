@@ -9,6 +9,7 @@ vi.mock("../server/db", () => dbMocks);
 import {
   activateConsultation,
   addCouncilMember,
+  listConsultations,
   postConsultation,
   requireConsultationGate,
   respondToConsultation,
@@ -247,5 +248,43 @@ describe("postConsultation / addCouncilMember / requireConsultationGate", () => 
     ]);
     dbMocks.getPool.mockResolvedValue(emptyPool);
     await expect(requireConsultationGate("commission")).resolves.toBeNull();
+  });
+});
+
+describe("listConsultations", () => {
+  it("uses a single LEFT JOIN + GROUP BY instead of a per-row count subquery", async () => {
+    const rows = [
+      { id: "cons-1", kind: "pricing", status: "open", response_count: 3 },
+      { id: "cons-2", kind: "safety_policy", status: "open", response_count: 0 },
+    ];
+    const pool = createPool([
+      { match: /FROM public\.consultation_objects/, result: { rows } },
+    ]);
+    dbMocks.getPool.mockResolvedValue(pool);
+
+    const result = await listConsultations();
+
+    expect(result).toEqual(rows);
+    expect(pool.calls).toHaveLength(1);
+    const sql = pool.calls[0]?.text ?? "";
+    expect(sql).toContain("LEFT JOIN public.consultation_responses");
+    expect(sql).toContain("GROUP BY c.id");
+    expect(sql).toContain("ORDER BY c.created_at DESC");
+    expect(sql).toContain("LIMIT 200");
+    expect(sql).not.toContain("(SELECT count(*)");
+  });
+
+  it("keeps the status filter parameterized", async () => {
+    const pool = createPool([
+      { match: /FROM public\.consultation_objects/, result: { rows: [] } },
+    ]);
+    dbMocks.getPool.mockResolvedValue(pool);
+
+    await listConsultations({ status: "closed" });
+
+    expect(pool.calls).toHaveLength(1);
+    expect(pool.calls[0]?.text).toContain("WHERE c.status = $1");
+    expect(pool.calls[0]?.text).toContain("GROUP BY c.id");
+    expect(pool.calls[0]?.values).toEqual(["closed"]);
   });
 });

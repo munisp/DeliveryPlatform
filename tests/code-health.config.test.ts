@@ -18,7 +18,10 @@ function source(relativePath: string) {
 // 162 exports at base (audit: 97 dead) -> 66 after pruning
 // (95 removed: 91 full deletions + 4 unexported-keepalive; 2 test-pinned exports
 // getFinancialAdminSnapshot/triggerJobManually restored, 2 borderline utilities kept).
-const DB_EXPORTS_POST_PRUNE = 66;
+// Perf wave W1 (audit findings 6 + 14) added exactly 2: CAMPAIGN_AUDIENCE_PAGE_SIZE
+// and invalidateFundsReconciliationSnapshotCache (TTL/window constants stay
+// module-private). Bump only with an equally specific justification.
+const DB_EXPORTS_POST_PRUNE = 68;
 
 describe("code-health: dead-export pruning (H-1)", () => {
   it("keeps server/db.ts export count at or below the post-prune baseline", () => {
