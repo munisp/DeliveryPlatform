@@ -133,7 +133,7 @@ def evaluate(
         raise HTTPException(status_code=422, detail=str(error)) from error
     elapsed_ms = round((time.perf_counter() - started) * 1000, 2)
     logger.info(
-        "incentives_event=evaluate_complete trace_id=%s role=%d events=%d rewards=%d duration_ms=%s",
+        "incentives_event=evaluate_complete trace_id=%s role=%s events=%d rewards=%d duration_ms=%s",
         trace_id,
         request.streak_state.role,
         len(request.events),
