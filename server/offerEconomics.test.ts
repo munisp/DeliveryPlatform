@@ -15,6 +15,9 @@ import {
   getMyNetEarningsSummary,
   getOfferBreakdown,
 } from "./_core/offerEconomics";
+// economicsPolicy reads (take rate / fare floor) are cached in-process
+// (perf wave W2); clear the cache so tests stay isolated.
+import { invalidateEconomicsPolicyCache } from "./_core/economicsPolicy";
 
 type QueryResult = { rows: unknown[]; rowCount?: number };
 
@@ -49,6 +52,7 @@ const OFFER_SOURCE = {
 
 beforeEach(() => {
   vi.resetAllMocks();
+  invalidateEconomicsPolicyCache();
 });
 
 describe("computeDeadheadMinor", () => {
