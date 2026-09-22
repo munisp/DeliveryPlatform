@@ -829,12 +829,15 @@ export async function rejectFinancialDeadLetterHeadResolution(input: {
   caseId: string;
   reason: string;
   idempotencyKey: string;
-}): Promise<{ state: string }> {
+}): Promise<{ resolutionId: string; state: string }> {
   const result = await requirePool().query(
     `SELECT * FROM mojaloop_reject_dead_letter_head_resolution(
       $1::integer, $2::uuid, $3::text, $4::text, clock_timestamp()
     )`,
     [input.actorId, input.caseId, input.reason, input.idempotencyKey],
   );
-  return { state: String(result.rows[0]?.state ?? "") };
+  return {
+    resolutionId: String(result.rows[0]?.resolution_id ?? ""),
+    state: String(result.rows[0]?.state ?? ""),
+  };
 }
