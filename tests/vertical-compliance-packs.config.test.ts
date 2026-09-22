@@ -85,9 +85,7 @@ describe("vertical compliance packs", () => {
     expect(page).toContain("Verticals without a compliance pack");
     expect(page).toContain("Age restriction:");
     const app = source("client/src/App.tsx");
-    expect(app).toContain(
-      'import VerticalCompliance from "@/pages/VerticalCompliance";',
-    );
+    expect(app).toContain('import("@/pages/VerticalCompliance")');
     expect(app).toContain('path="/compliance/vertical-packs"');
   });
 });

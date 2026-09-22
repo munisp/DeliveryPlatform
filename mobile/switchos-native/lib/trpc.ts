@@ -23,6 +23,12 @@ export function createTRPCClient() {
     links: [
       httpBatchLink({
         url: `${getApiBaseUrl()}/api/trpc`,
+        // Wave W4: httpBatchLink batches concurrent queries into one HTTP
+        // request. React Native's fetch (whatwg-fetch/OkHttp under the hood)
+        // exposes no keep-alive/agent option, so connection reuse cannot be
+        // configured from JS — batching plus the QueryClient staleTime/gcTime
+        // defaults in app/_layout.tsx are the effective request-reduction
+        // levers on native.
         // tRPC v11: transformer MUST be inside httpBatchLink, not at root
         transformer: superjson,
         async headers() {

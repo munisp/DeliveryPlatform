@@ -1,5 +1,5 @@
 import { useRouter } from "expo-router";
-import { useState } from "react";
+import { memo, useState } from "react";
 import { FlatList, Pressable, Text, View } from "react-native";
 
 import { SectionCard } from "@/components/mobile/operations-ui";
@@ -58,7 +58,11 @@ function slaLabel(consultation: ConsultationRow) {
   return { text: `${hours}h ${minutes}m to respond`, overdue: false };
 }
 
-function ConsultationCard({ consultation }: { consultation: ConsultationRow }) {
+const ConsultationCard = memo(function ConsultationCard({
+  consultation,
+}: {
+  consultation: ConsultationRow;
+}) {
   const router = useRouter();
   const sla = slaLabel(consultation);
 
@@ -110,7 +114,13 @@ function ConsultationCard({ consultation }: { consultation: ConsultationRow }) {
       </Pressable>
     </View>
   );
-}
+});
+
+const renderConsultation = ({ item }: { item: ConsultationRow }) => (
+  <ConsultationCard consultation={item} />
+);
+
+const consultationKeyExtractor = (item: ConsultationRow) => item.id;
 
 export default function CouncilScreen() {
   const [statusFilter, setStatusFilter] = useState<
@@ -122,7 +132,10 @@ export default function CouncilScreen() {
     <ScreenContainer className="px-4 pb-6">
       <FlatList
         data={consultations.data ?? []}
-        keyExtractor={(item) => item.id}
+        keyExtractor={consultationKeyExtractor}
+        windowSize={7}
+        maxToRenderPerBatch={8}
+        removeClippedSubviews
         contentContainerStyle={{ gap: 16, paddingTop: 20, paddingBottom: 24 }}
         ListHeaderComponent={
           <View className="gap-4">
@@ -167,7 +180,7 @@ export default function CouncilScreen() {
             ) : null}
           </View>
         }
-        renderItem={({ item }) => <ConsultationCard consultation={item} />}
+        renderItem={renderConsultation}
         ListEmptyComponent={
           consultations.isLoading || consultations.isError ? null : (
             <SectionCard title="No consultations in this state">

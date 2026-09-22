@@ -9,10 +9,8 @@ const source = (path: string) => readFileSync(resolve(root, path), "utf8");
 describe("wave A3 trust UI surfaces (R1 rider verification, R4 appeals, R5 council)", () => {
   it("routes the worker council and deactivation appeals workspaces", () => {
     const app = source("client/src/App.tsx");
-    expect(app).toContain('import WorkerCouncil from "@/pages/WorkerCouncil"');
-    expect(app).toContain(
-      'import DeactivationAppeals from "@/pages/DeactivationAppeals"',
-    );
+    expect(app).toContain('import("@/pages/WorkerCouncil")');
+    expect(app).toContain('import("@/pages/DeactivationAppeals")');
     expect(app).toContain('path="/council" component={WorkerCouncil}');
     expect(app).toContain('path="/appeals" component={DeactivationAppeals}');
   });

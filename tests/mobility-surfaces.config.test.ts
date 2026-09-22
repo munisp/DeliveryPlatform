@@ -99,7 +99,7 @@ describe("mobility surfaces gap closure (0073)", () => {
     ];
     for (const [path, component, hook] of routes) {
       expect(app).toContain(`path="${path}"`);
-      expect(app).toContain(`import ${component} from "@/pages/${component}";`);
+      expect(app).toContain(`import("@/pages/${component}")`);
       const page = source(`client/src/pages/${component}.tsx`);
       expect(page).toContain(hook);
       expect(page).toContain("DashboardLayout");

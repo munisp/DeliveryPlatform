@@ -65,7 +65,7 @@ describe("operations consoles wiring contracts", () => {
     ];
     for (const [path, component] of routes) {
       expect(app).toContain(`path="${path}" component={${component}}`);
-      expect(app).toContain(`import ${component} from "@/pages/${component}";`);
+      expect(app).toContain(`import("@/pages/${component}")`);
     }
   });
 

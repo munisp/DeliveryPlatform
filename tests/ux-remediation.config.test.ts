@@ -43,9 +43,7 @@ describe("UX remediation: orphaned routes, error boundary, error/empty states", 
     const channels = read("client/src/pages/MerchantChannels.tsx");
     const routers = read("server/routers.ts");
 
-    expect(app).toContain(
-      'import MerchantCommercePortal from "@/pages/MerchantCommercePortal";',
-    );
+    expect(app).toContain('import("@/pages/MerchantCommercePortal")');
     expect(app).toContain('path="/merchant-commerce"');
     expect(channels).toContain('href="/merchant-commerce"');
     // Backing procedures must exist; the page must never fake them.

@@ -4,64 +4,163 @@ import { Link, Redirect, Route, Switch } from "wouter";
 
 import DashboardLayout from "@/components/DashboardLayout";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
-import Analytics from "@/pages/Analytics";
-import DriverMobility from "@/pages/DriverMobility";
-import DriverOfferFairness from "@/pages/DriverOfferFairness";
-import CourierPortal from "@/pages/CourierPortal";
-import FieldServiceOperations from "@/pages/FieldServiceOperations";
-import DeveloperPlatform from "@/pages/DeveloperPlatform";
-import CommerceFulfillment from "@/pages/CommerceFulfillment";
-import VehicleAccessOperations from "@/pages/VehicleAccessOperations";
-import StakeholderVerification from "@/pages/StakeholderVerification";
-import LogisticsControlTower from "@/pages/LogisticsControlTower";
-import LogisticsOperations from "@/pages/LogisticsOperations";
-import ComplianceReview from "@/pages/ComplianceReview";
-import VerticalCompliance from "@/pages/VerticalCompliance";
-import PartnerIntegrations from "@/pages/PartnerIntegrations";
-import FinancialOperations from "@/pages/FinancialOperations";
-import TablesideCommerce from "@/pages/TablesideCommerce";
-import WhiteLabelApps from "@/pages/WhiteLabelApps";
-import MerchantChannels from "@/pages/MerchantChannels";
-import ServiceRecovery from "@/pages/ServiceRecovery";
-import MobilityOverview from "@/pages/MobilityOverview";
-import RiderApp from "@/pages/RiderApp";
-import BusinessTravel from "@/pages/BusinessTravel";
-import FreightOperations from "@/pages/FreightOperations";
-import HealthcareTransport from "@/pages/HealthcareTransport";
-import MerchantHub from "@/pages/MerchantHub";
-import CheckoutInsights from "@/pages/CheckoutInsights";
-import CourierTripRadar from "@/pages/CourierTripRadar";
-import TrustConsole from "@/pages/TrustConsole";
-import WorkerCouncil from "@/pages/WorkerCouncil";
-import DeactivationAppeals from "@/pages/DeactivationAppeals";
-import DriverSafetyCenter from "@/pages/DriverSafetyCenter";
-import MarketEconomics from "@/pages/MarketEconomics";
-import ExperimentConsole from "@/pages/ExperimentConsole";
-import MerchantAdsStudio from "@/pages/MerchantAdsStudio";
-import MerchantCommercePortal from "@/pages/MerchantCommercePortal";
-import PhoneOrderingStudio from "@/pages/PhoneOrderingStudio";
-import ConsumerOrders from "@/pages/ConsumerOrders";
-import ConsumerOrderDetail from "@/pages/ConsumerOrderDetail";
-import ConsumerSupport from "@/pages/ConsumerSupport";
-import ConsumerWallet from "@/pages/ConsumerWallet";
-import TenantAdminActions from "@/pages/TenantAdminActions";
-import SecurityProfilePage, {
-  SecurityBlockedPage,
-} from "@/pages/SecurityProfile";
-import FinancialAdministration from "@/pages/FinancialAdministration";
-import {
-  CustomerDeliveryTracking,
-  DriverProofOfDelivery,
-  FinancialTopologyPage,
-} from "@/pages/DeliveryExperience";
-import {
-  InvitationAcceptancePage,
-  InviteTeamPage,
-  OnboardingPage,
-  PasswordResetPage,
-  SignupPage,
-  VerifyEmailPage,
-} from "@/pages/AccountLifecycle";
+
+function RouteFallback() {
+  return (
+    <div
+      className="flex min-h-[40vh] items-center justify-center"
+      role="status"
+      aria-label="Loading page"
+    >
+      <div className="h-8 w-8 animate-spin rounded-full border-2 border-cyan-400/30 border-t-cyan-400" />
+    </div>
+  );
+}
+
+function lazyRoute(
+  factory: () => Promise<{ default: React.ComponentType<any> }>,
+) {
+  const LazyPage = React.lazy(factory);
+  function LazyRoute(props: any) {
+    return (
+      <React.Suspense fallback={<RouteFallback />}>
+        <LazyPage {...props} />
+      </React.Suspense>
+    );
+  }
+  LazyRoute.displayName = "LazyRoute";
+  return LazyRoute;
+}
+
+const Analytics = lazyRoute(() => import("@/pages/Analytics"));
+const DriverMobility = lazyRoute(() => import("@/pages/DriverMobility"));
+const DriverOfferFairness = lazyRoute(
+  () => import("@/pages/DriverOfferFairness"),
+);
+const CourierPortal = lazyRoute(() => import("@/pages/CourierPortal"));
+const FieldServiceOperations = lazyRoute(
+  () => import("@/pages/FieldServiceOperations"),
+);
+const DeveloperPlatform = lazyRoute(() => import("@/pages/DeveloperPlatform"));
+const CommerceFulfillment = lazyRoute(
+  () => import("@/pages/CommerceFulfillment"),
+);
+const VehicleAccessOperations = lazyRoute(
+  () => import("@/pages/VehicleAccessOperations"),
+);
+const StakeholderVerification = lazyRoute(
+  () => import("@/pages/StakeholderVerification"),
+);
+const LogisticsControlTower = lazyRoute(
+  () => import("@/pages/LogisticsControlTower"),
+);
+const LogisticsOperations = lazyRoute(
+  () => import("@/pages/LogisticsOperations"),
+);
+const ComplianceReview = lazyRoute(() => import("@/pages/ComplianceReview"));
+const VerticalCompliance = lazyRoute(
+  () => import("@/pages/VerticalCompliance"),
+);
+const PartnerIntegrations = lazyRoute(
+  () => import("@/pages/PartnerIntegrations"),
+);
+const FinancialOperations = lazyRoute(
+  () => import("@/pages/FinancialOperations"),
+);
+const TablesideCommerce = lazyRoute(() => import("@/pages/TablesideCommerce"));
+const WhiteLabelApps = lazyRoute(() => import("@/pages/WhiteLabelApps"));
+const MerchantChannels = lazyRoute(() => import("@/pages/MerchantChannels"));
+const ServiceRecovery = lazyRoute(() => import("@/pages/ServiceRecovery"));
+const MobilityOverview = lazyRoute(() => import("@/pages/MobilityOverview"));
+const RiderApp = lazyRoute(() => import("@/pages/RiderApp"));
+const BusinessTravel = lazyRoute(() => import("@/pages/BusinessTravel"));
+const FreightOperations = lazyRoute(() => import("@/pages/FreightOperations"));
+const HealthcareTransport = lazyRoute(
+  () => import("@/pages/HealthcareTransport"),
+);
+const MerchantHub = lazyRoute(() => import("@/pages/MerchantHub"));
+const CheckoutInsights = lazyRoute(() => import("@/pages/CheckoutInsights"));
+const CourierTripRadar = lazyRoute(() => import("@/pages/CourierTripRadar"));
+const TrustConsole = lazyRoute(() => import("@/pages/TrustConsole"));
+const WorkerCouncil = lazyRoute(() => import("@/pages/WorkerCouncil"));
+const DeactivationAppeals = lazyRoute(
+  () => import("@/pages/DeactivationAppeals"),
+);
+const DriverSafetyCenter = lazyRoute(
+  () => import("@/pages/DriverSafetyCenter"),
+);
+const MarketEconomics = lazyRoute(() => import("@/pages/MarketEconomics"));
+const ExperimentConsole = lazyRoute(() => import("@/pages/ExperimentConsole"));
+const MerchantAdsStudio = lazyRoute(() => import("@/pages/MerchantAdsStudio"));
+const MerchantCommercePortal = lazyRoute(
+  () => import("@/pages/MerchantCommercePortal"),
+);
+const PhoneOrderingStudio = lazyRoute(
+  () => import("@/pages/PhoneOrderingStudio"),
+);
+const ConsumerOrders = lazyRoute(() => import("@/pages/ConsumerOrders"));
+const ConsumerOrderDetail = lazyRoute(
+  () => import("@/pages/ConsumerOrderDetail"),
+);
+const ConsumerSupport = lazyRoute(() => import("@/pages/ConsumerSupport"));
+const ConsumerWallet = lazyRoute(() => import("@/pages/ConsumerWallet"));
+const TenantAdminActions = lazyRoute(
+  () => import("@/pages/TenantAdminActions"),
+);
+const SecurityProfilePage = lazyRoute(() => import("@/pages/SecurityProfile"));
+const SecurityBlockedPage = lazyRoute(() =>
+  import("@/pages/SecurityProfile").then((module) => ({
+    default: module.SecurityBlockedPage,
+  })),
+);
+const FinancialAdministration = lazyRoute(
+  () => import("@/pages/FinancialAdministration"),
+);
+const CustomerDeliveryTracking = lazyRoute(() =>
+  import("@/pages/DeliveryExperience").then((module) => ({
+    default: module.CustomerDeliveryTracking,
+  })),
+);
+const DriverProofOfDelivery = lazyRoute(() =>
+  import("@/pages/DeliveryExperience").then((module) => ({
+    default: module.DriverProofOfDelivery,
+  })),
+);
+const FinancialTopologyPage = lazyRoute(() =>
+  import("@/pages/DeliveryExperience").then((module) => ({
+    default: module.FinancialTopologyPage,
+  })),
+);
+const InvitationAcceptancePage = lazyRoute(() =>
+  import("@/pages/AccountLifecycle").then((module) => ({
+    default: module.InvitationAcceptancePage,
+  })),
+);
+const InviteTeamPage = lazyRoute(() =>
+  import("@/pages/AccountLifecycle").then((module) => ({
+    default: module.InviteTeamPage,
+  })),
+);
+const OnboardingPage = lazyRoute(() =>
+  import("@/pages/AccountLifecycle").then((module) => ({
+    default: module.OnboardingPage,
+  })),
+);
+const PasswordResetPage = lazyRoute(() =>
+  import("@/pages/AccountLifecycle").then((module) => ({
+    default: module.PasswordResetPage,
+  })),
+);
+const SignupPage = lazyRoute(() =>
+  import("@/pages/AccountLifecycle").then((module) => ({
+    default: module.SignupPage,
+  })),
+);
+const VerifyEmailPage = lazyRoute(() =>
+  import("@/pages/AccountLifecycle").then((module) => ({
+    default: module.VerifyEmailPage,
+  })),
+);
 import {
   Card,
   CardContent,

@@ -289,7 +289,7 @@ export default function FinancialAdministration() {
       fetchAdmin<{ escalations: Escalation[] }>(
         "/api/admin/finance/alert-escalations",
       ),
-    refetchInterval: 30_000,
+    refetchInterval: 60_000,
   });
   const settings = useQuery<{
     settings: {
@@ -316,7 +316,7 @@ export default function FinancialAdministration() {
   }>({
     queryKey: ["finance-admin-receipts"],
     queryFn: () => fetchAdmin("/api/admin/finance/alert-delivery-receipts"),
-    refetchInterval: 15_000,
+    refetchInterval: 60_000,
   });
   useEffect(() => {
     const value = settings.data?.settings;
@@ -425,17 +425,17 @@ export default function FinancialAdministration() {
       fetchAdmin<FinancialOverview>(
         `/api/admin/finance/overview?${filterQuery}`,
       ),
-    refetchInterval: 20_000,
+    refetchInterval: 60_000,
   });
   const health = useQuery({
     queryKey: ["finance-admin-health"],
     queryFn: () => fetchAdmin<Health>("/api/admin/finance/health"),
-    refetchInterval: 15_000,
+    refetchInterval: 60_000,
   });
   const alerts = useQuery({
     queryKey: ["finance-admin-alerts"],
     queryFn: () => fetchAdmin<{ alerts: Alert[] }>("/api/admin/finance/alerts"),
-    refetchInterval: 15_000,
+    refetchInterval: 60_000,
   });
   const coverage = useQuery({
     queryKey: ["finance-admin-coverage"],
@@ -449,7 +449,7 @@ export default function FinancialAdministration() {
   const deadLetterCases = useQuery<{ cases: DeadLetterCase[] }>({
     queryKey: ["finance-admin-dead-letter-cases"],
     queryFn: () => fetchAdmin("/api/admin/finance/dead-letter-cases?limit=100"),
-    refetchInterval: 20_000,
+    refetchInterval: 60_000,
   });
   const deadLetterAction = useMutation({
     mutationFn: ({ path, body }: DeadLetterAction) =>
