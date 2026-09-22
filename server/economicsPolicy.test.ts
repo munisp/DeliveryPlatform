@@ -72,7 +72,7 @@ describe("computeFareFloorMinor", () => {
     ).toBe(110000);
     expect(
       computeFareFloorMinor(
-        { fuel_price_minor: 100000, cpi_bp: 11000, maintenance_index_bp: 10500 },
+        { fuel_price_minor: 100000, cpi_bp: 10000, maintenance_index_bp: 10500 },
         "1.200",
       ),
     ).toBe(126000);
