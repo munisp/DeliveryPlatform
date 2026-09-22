@@ -180,7 +180,14 @@ func main() {
 	mux.HandleFunc("/inventory/position", service.positionHandler)
 
 	addr := fmt.Sprintf("%s:%s", getenv("BIND_HOST", "127.0.0.1"), getenv("PORT", "8117"))
-	server := &http.Server{Addr: addr, Handler: httpMetrics.Middleware(mux), ReadHeaderTimeout: 5 * time.Second}
+	server := &http.Server{
+		Addr:              addr,
+		Handler:           httpMetrics.Middleware(mux),
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      15 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -1057,7 +1064,7 @@ func (s *inventoryService) middlewareStatus() map[string]any {
 	return map[string]any{
 		"dapr":     map[string]any{"configured": getenv("DAPR_HTTP_PORT", "") != "" && getenv("DAPR_PUBSUB_NAME", "") != "" && getenv("DAPR_INVENTORY_TOPIC", "") != ""},
 		"kafka":    map[string]any{"configured": getenv("KAFKA_BROKERS", "") != "" && getenv("KAFKA_INVENTORY_TOPIC", "") != ""},
-		"fluvio":   map[string]any{"configured": getenv("FLUVIO_KAFKA_BROKERS", "") != "" && getenv("FLUVIO_INVENTORY_TOPIC", "") != ""},
+		"fluvio":   map[string]any{"configured": getenv("FLUVIO_KAFKA_BROKERS", "") != "" && getenv("FLUVIO_LOCAL_COMMERCE_TOPIC", "") != ""},
 		"temporal": map[string]any{"configured": getenv("TEMPORAL_BRIDGE_URL", "") != "" || getenv("TEMPORAL_TASK_QUEUE", "") != ""},
 	}
 }
