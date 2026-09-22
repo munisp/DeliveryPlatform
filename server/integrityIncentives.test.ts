@@ -404,9 +404,7 @@ describe("grantReward / revokeReward", () => {
 
   it("rejects granting a reward that is not pending", async () => {
     const pool = createPool([
-      {
-        match: /UPDATE public\.integrity_rewards/, result: { rows: [] },
-      },
+      { match: /UPDATE public\.integrity_rewards/, result: { rows: [] } },
     ]);
     dbMocks.getPool.mockResolvedValue(pool);
     await expect(grantReward(7, { rewardId: "reward-1" })).rejects.toMatchObject({
