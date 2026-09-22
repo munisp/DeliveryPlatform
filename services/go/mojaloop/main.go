@@ -1405,6 +1405,9 @@ func main() {
 			Addr:              bindHost + ":" + httpPort,
 			Handler:           httpMetrics.Middleware(mux),
 			ReadHeaderTimeout: 5 * time.Second,
+			ReadTimeout:       10 * time.Second,
+			WriteTimeout:      15 * time.Second,
+			IdleTimeout:       60 * time.Second,
 		}
 		serverErrors := make(chan error, 1)
 		go func() {
@@ -1468,6 +1471,9 @@ func serveWithGracefulShutdown(addr string, handler http.Handler) error {
 		Addr:              addr,
 		Handler:           handler,
 		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      15 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
