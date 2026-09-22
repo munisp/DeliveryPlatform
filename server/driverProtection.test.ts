@@ -17,6 +17,8 @@ import {
   enroll,
   fileClaim,
   getMyRemittanceSchedule,
+  getPolicy,
+  invalidateProtectionPolicyCache,
   listMaintenanceProviders,
   notifyRemittanceChange,
   optOut,
@@ -95,6 +97,7 @@ const NOTICE = {
 
 beforeEach(() => {
   vi.resetAllMocks();
+  invalidateProtectionPolicyCache(); // hot-read cache must not leak between tests
 });
 
 describe("canEnforceRemittance (pure gate)", () => {
@@ -622,5 +625,90 @@ describe("remittance notices", () => {
       /FROM public\.remittance_schedules\s+WHERE driver_id/.test(call.text),
     );
     expect(scheduleCall!.text).toContain("ORDER BY version DESC");
+  });
+});
+
+describe("protection policy hot-read cache", () => {
+  it("serves repeated getPolicy reads from cache (one DB query)", async () => {
+    const pool = createPool([
+      {
+        match: /FROM public\.protection_policies WHERE market_id/,
+        result: { rows: [POLICY] },
+      },
+    ]);
+    dbMocks.getPool.mockResolvedValue(pool);
+
+    const first = await getPolicy("lagos");
+    const second = await getPolicy("lagos");
+    expect(first?.id).toBe("policy-1");
+    expect(second).toEqual(first);
+    expect(
+      pool.calls.filter((call) =>
+        /FROM public\.protection_policies WHERE market_id/.test(call.text),
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("caches the null (no policy) result", async () => {
+    const pool = createPool([
+      {
+        match: /FROM public\.protection_policies WHERE market_id/,
+        result: { rows: [] },
+      },
+    ]);
+    dbMocks.getPool.mockResolvedValue(pool);
+
+    expect(await getPolicy("kano")).toBeNull();
+    expect(await getPolicy("kano")).toBeNull();
+    expect(
+      pool.calls.filter((call) =>
+        /FROM public\.protection_policies WHERE market_id/.test(call.text),
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("upsertPolicy invalidates the cached policy for the market", async () => {
+    const pool = createPool([
+      {
+        match: /SELECT \* FROM public\.protection_policies WHERE market_id/,
+        result: { rows: [POLICY] },
+      },
+      {
+        match: /INSERT INTO public\.protection_policies/,
+        result: { rows: [{ ...POLICY, micro_premium_minor: 3000 }] },
+      },
+    ]);
+    dbMocks.getPool.mockResolvedValue(pool);
+    councilMocks.postConsultation.mockResolvedValue({ id: "cons-1" });
+
+    await getPolicy("lagos"); // prime cache
+    await upsertPolicy(7, { marketId: "lagos", microPremiumMinor: 3000 });
+    await getPolicy("lagos"); // must re-read after invalidation
+    expect(
+      pool.calls.filter((call) =>
+        /SELECT \* FROM public\.protection_policies WHERE market_id/.test(call.text),
+      ),
+    ).toHaveLength(2);
+  });
+
+  it("invalidation is scoped per market", async () => {
+    const pool = createPool([
+      {
+        match: /FROM public\.protection_policies WHERE market_id/,
+        result: { rows: [POLICY] },
+      },
+    ]);
+    dbMocks.getPool.mockResolvedValue(pool);
+
+    await getPolicy("lagos");
+    await getPolicy("kano"); // cached null
+    invalidateProtectionPolicyCache("lagos");
+    await getPolicy("lagos"); // re-reads
+    await getPolicy("kano"); // still cached
+    expect(
+      pool.calls.filter((call) =>
+        /FROM public\.protection_policies WHERE market_id/.test(call.text),
+      ),
+    ).toHaveLength(3);
   });
 });

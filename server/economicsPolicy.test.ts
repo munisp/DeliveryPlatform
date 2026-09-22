@@ -9,6 +9,9 @@ vi.mock("../server/db", () => dbMocks);
 import {
   checkFareAgainstFloor,
   computeFareFloorMinor,
+  getFareFloorPolicy,
+  getLatestTakeRate,
+  invalidateEconomicsPolicyCache,
   publishTakeRate,
   recordFloorOverride,
   updateCostIndex,
@@ -50,6 +53,7 @@ const ACTIVE_POLICY = {
 
 beforeEach(() => {
   vi.resetAllMocks();
+  invalidateEconomicsPolicyCache(); // hot-read cache must not leak between tests
 });
 
 describe("computeFareFloorMinor", () => {
@@ -299,5 +303,102 @@ describe("recordFloorOverride", () => {
       fare_minor: 90000,
       floor_minor: 110000,
     });
+  });
+});
+
+describe("economics policy hot-read cache", () => {
+  it("serves repeated getFareFloorPolicy reads from cache (one DB query)", async () => {
+    const pool = createPool([
+      { match: /FROM public\.fare_floor_policies/, result: { rows: [ACTIVE_POLICY] } },
+    ]);
+    dbMocks.getPool.mockResolvedValue(pool);
+
+    const first = await getFareFloorPolicy("lagos");
+    const second = await getFareFloorPolicy("lagos");
+    expect(first?.floor_minor).toBe(110000);
+    expect(second).toEqual(first);
+    expect(
+      pool.calls.filter((call) => /FROM public\.fare_floor_policies/.test(call.text)),
+    ).toHaveLength(1);
+  });
+
+  it("caches the null (no active policy) result too", async () => {
+    const pool = createPool([
+      { match: /FROM public\.fare_floor_policies/, result: { rows: [] } },
+    ]);
+    dbMocks.getPool.mockResolvedValue(pool);
+
+    expect(await getFareFloorPolicy("kano")).toBeNull();
+    expect(await getFareFloorPolicy("kano")).toBeNull();
+    expect(
+      pool.calls.filter((call) => /FROM public\.fare_floor_policies/.test(call.text)),
+    ).toHaveLength(1);
+  });
+
+  it("serves repeated getLatestTakeRate reads from cache", async () => {
+    const takeRate = {
+      id: "tr-1",
+      market_id: "lagos",
+      rate_bps: 1800,
+      basis: "gross",
+      effective_from: "2026-09-01T00:00:00.000Z",
+      consultation_id: null,
+      version: 3,
+      created_by: 7,
+      created_at: "2026-09-01T00:00:00.000Z",
+    };
+    const pool = createPool([
+      { match: /FROM public\.take_rate_registry/, result: { rows: [takeRate] } },
+    ]);
+    dbMocks.getPool.mockResolvedValue(pool);
+
+    expect((await getLatestTakeRate("lagos"))?.rate_bps).toBe(1800);
+    expect((await getLatestTakeRate("lagos"))?.version).toBe(3);
+    expect(
+      pool.calls.filter((call) => /FROM public\.take_rate_registry/.test(call.text)),
+    ).toHaveLength(1);
+  });
+
+  it("updateCostIndex invalidates the cached floor for the market", async () => {
+    const pool = createPool([
+      {
+        match: /SELECT \* FROM public\.fare_floor_policies/,
+        result: { rows: [ACTIVE_POLICY] },
+      },
+      {
+        match: /UPDATE public\.fare_floor_policies/,
+        result: { rows: [{ ...ACTIVE_POLICY }] },
+      },
+    ]);
+    dbMocks.getPool.mockResolvedValue(pool);
+
+    await getFareFloorPolicy("lagos"); // prime cache
+    await updateCostIndex(7, {
+      marketId: "lagos",
+      fuelPriceMinor: 200000,
+      cpiBp: 10000,
+      maintenanceIndexBp: 10000,
+      source: "nms",
+    });
+    await getFareFloorPolicy("lagos"); // must re-read after invalidation
+    expect(
+      pool.calls.filter((call) => /SELECT \* FROM public\.fare_floor_policies/.test(call.text)),
+    ).toHaveLength(2);
+  });
+
+  it("invalidation is scoped per market", async () => {
+    const pool = createPool([
+      { match: /FROM public\.fare_floor_policies/, result: { rows: [ACTIVE_POLICY] } },
+    ]);
+    dbMocks.getPool.mockResolvedValue(pool);
+
+    await getFareFloorPolicy("lagos");
+    await getFareFloorPolicy("kano"); // cached null
+    invalidateEconomicsPolicyCache("lagos");
+    await getFareFloorPolicy("lagos"); // re-reads
+    await getFareFloorPolicy("kano"); // still cached
+    expect(
+      pool.calls.filter((call) => /FROM public\.fare_floor_policies/.test(call.text)),
+    ).toHaveLength(3);
   });
 });

@@ -2,8 +2,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   CircuitBreaker,
   CircuitOpenError,
+  FAIL_OPEN_FAST,
   breakerFor,
   resetBreakers,
+  resetFailOpenFastBreaker,
   resilientFetch,
 } from "./_core/resilientFetch";
 
@@ -143,5 +145,104 @@ describe("resilientFetch", () => {
       }),
     ).rejects.toThrow(/abort/i);
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("FAIL_OPEN_FAST preset", () => {
+  afterEach(() => {
+    resetFailOpenFastBreaker();
+  });
+
+  it("carries a 1500ms timeout and a failureThreshold-2 breaker", () => {
+    expect(FAIL_OPEN_FAST.timeoutMs).toBe(1_500);
+    expect(FAIL_OPEN_FAST.breaker).toBeInstanceOf(CircuitBreaker);
+  });
+
+  it("fails fast after 2 probes: the third call never reaches fetch (~0ms)", async () => {
+    const fetchMock = vi.fn().mockRejectedValue(new TypeError("fetch failed"));
+    vi.stubGlobal("fetch", fetchMock);
+
+    for (let i = 0; i < 2; i += 1) {
+      await expect(
+        resilientFetch("http://optional.test/screen", {
+          ...FAIL_OPEN_FAST,
+          method: "POST",
+          body: "{}",
+          sleep: noSleep,
+        }),
+      ).rejects.toThrow("fetch failed");
+    }
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    const startedAt = Date.now();
+    await expect(
+      resilientFetch("http://optional.test/screen", {
+        ...FAIL_OPEN_FAST,
+        method: "POST",
+        body: "{}",
+        sleep: noSleep,
+      }),
+    ).rejects.toBeInstanceOf(CircuitOpenError);
+    expect(Date.now() - startedAt).toBeLessThan(50);
+    expect(fetchMock).toHaveBeenCalledTimes(2); // open breaker: no HTTP attempt
+  });
+
+  it("aborts a hung dependency after 1500ms instead of the 10s default", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchMock = vi.fn().mockImplementation(
+        (_url: string, init?: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener("abort", () => {
+              reject(new DOMException("The operation was aborted.", "AbortError"));
+            });
+          }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+
+      const pending = resilientFetch("http://optional.test/hang", {
+        ...FAIL_OPEN_FAST,
+        method: "POST",
+        body: "{}",
+      });
+      const assertion = expect(pending).rejects.toThrow(/abort/i);
+      await vi.advanceTimersByTimeAsync(1_499);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(2);
+      await assertion;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a success after a failure keeps the breaker closed", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError("fetch failed"))
+      .mockResolvedValueOnce(jsonResponse(200, '{"ok":true}'))
+      .mockRejectedValue(new TypeError("fetch failed"));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      resilientFetch("http://optional.test/screen", { ...FAIL_OPEN_FAST, method: "POST", body: "{}" }),
+    ).rejects.toThrow("fetch failed");
+    const ok = await resilientFetch("http://optional.test/screen", {
+      ...FAIL_OPEN_FAST,
+      method: "POST",
+      body: "{}",
+    });
+    expect(ok.status).toBe(200);
+    // The success reset the consecutive-failure count, so a single failure
+    // is tolerated again...
+    await expect(
+      resilientFetch("http://optional.test/screen", { ...FAIL_OPEN_FAST, method: "POST", body: "{}" }),
+    ).rejects.toThrow("fetch failed");
+    expect(FAIL_OPEN_FAST.breaker?.getState()).toBe("closed");
+    // ...and the second consecutive failure opens it.
+    await expect(
+      resilientFetch("http://optional.test/screen", { ...FAIL_OPEN_FAST, method: "POST", body: "{}" }),
+    ).rejects.toThrow("fetch failed");
+    expect(FAIL_OPEN_FAST.breaker?.getState()).toBe("open");
+    expect(fetchMock).toHaveBeenCalledTimes(4);
   });
 });

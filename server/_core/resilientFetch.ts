@@ -86,6 +86,14 @@ export class CircuitBreaker {
     }
   }
 
+  /** Return to closed with no recorded failures (test support). */
+  reset(): void {
+    this.state = "closed";
+    this.consecutiveFailures = 0;
+    this.openedAt = 0;
+    this.halfOpenInFlight = 0;
+  }
+
   private open(): void {
     this.state = "open";
     this.openedAt = this.now();
@@ -129,6 +137,37 @@ export type ResilientFetchOptions = {
 };
 
 const defaultSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/**
+ * FAIL_OPEN_FAST — options preset for callers that treat a dependency as
+ * optional (fail-open/fail-fast semantics; perf wave W2, audit finding 16).
+ *
+ *   { timeoutMs: 1500, breaker failureThreshold: 2 }
+ *
+ * Rationale: the defaults (10s timeout, breaker opens after 5 consecutive
+ * failures) mean the first ~5 requests to a dead dependency each burn up to
+ * 10s before the breaker opens. With this preset a dead dependency costs at
+ * most 2 probes of <=1.5s, then every call fails in ~0ms (CircuitOpenError)
+ * until the breaker half-opens after the reset timeout.
+ *
+ * The preset's breaker is SHARED across all FAIL_OPEN_FAST callers (not
+ * per-host): once the environment has killed two optional-dependency calls,
+ * all fail-open callers fail fast together. Spread it into the call:
+ * `resilientFetch(url, { ...FAIL_OPEN_FAST, method: "POST", ... })`.
+ * Whether the caller then fails open or closed is its own decision — the
+ * preset only bounds the latency of finding out.
+ */
+const failOpenFastBreaker = new CircuitBreaker({ failureThreshold: 2 });
+
+export const FAIL_OPEN_FAST: ResilientFetchOptions = Object.freeze({
+  timeoutMs: 1_500,
+  breaker: failOpenFastBreaker,
+});
+
+/** Reset the shared FAIL_OPEN_FAST breaker (test support). */
+export function resetFailOpenFastBreaker(): void {
+  failOpenFastBreaker.reset();
+}
 
 function backoffMs(retryIndex: number, base: number, cap: number): number {
   const ceiling = Math.min(cap, base * 2 ** (retryIndex - 1));

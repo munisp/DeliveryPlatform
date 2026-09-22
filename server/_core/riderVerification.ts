@@ -4,7 +4,8 @@ import { TRPCError } from "@trpc/server";
 
 import { getPool } from "../db";
 import { ENV } from "./env";
-import { resilientFetch } from "./resilientFetch";
+import { createHotCache } from "./hotCache";
+import { FAIL_OPEN_FAST, resilientFetch } from "./resilientFetch";
 
 /**
  * Verified rider identity (R1).
@@ -16,7 +17,11 @@ import { resilientFetch } from "./resilientFetch";
  * service (`POST /screen-name`). The service is FAIL-CLOSED (Audit A P0-2):
  * on outage/timeout the screening is marked `unavailable` and treated as
  * NOT plausible, so an outage can never auto-verify anyone. The screening
- * service never throws into the request path.
+ * service never throws into the request path. The fetch itself uses the
+ * FAIL_OPEN_FAST preset (perf wave W2): a dead service costs one probe of
+ * <=1.5s and then ~0ms until the breaker half-opens — the fail-CLOSED
+ * decision logic above is unchanged, only the latency of detecting the
+ * outage is bounded.
  */
 
 export type RiderVerificationStatus =
@@ -74,11 +79,11 @@ export async function screenName(name: string): Promise<NameScreeningResult> {
   const base = ENV.verificationIntelligenceUrl.replace(/\/$/, "");
   try {
     const response = await resilientFetch(`${base}/screen-name`, {
+      ...FAIL_OPEN_FAST,
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ name }),
-      timeoutMs: 5_000,
-      maxAttempts: 1,
+      // POST is non-idempotent: a single attempt regardless of maxAttempts.
     });
     if (!response.ok) {
       throw new Error(`screen-name returned status ${response.status}`);
@@ -145,17 +150,49 @@ async function ensureVerificationRow(userId: number): Promise<VerificationRow> {
   return racedRow;
 }
 
-export async function getMyVerificationStatus(userId: number): Promise<{
+/**
+ * Hot-read cache (perf wave W2, audit finding 9): getMyVerificationStatus is
+ * a single SELECT by unique user_id polled by the rider app on every home
+ * render, written only by submitVerification and operator decisions. TTL 30s
+ * per userId + write-through invalidation.
+ */
+const VERIFICATION_STATUS_CACHE_TTL_MS = 30_000;
+
+type VerificationStatusView = {
   status: RiderVerificationStatus;
   badgeLevel: "none" | "verified";
   flags: string[];
-}> {
+};
+
+const verificationStatusCache = createHotCache<VerificationStatusView>({
+  ttlMs: VERIFICATION_STATUS_CACHE_TTL_MS,
+});
+
+/**
+ * Invalidate cached verification status. Called by submitVerification;
+ * exported so operator decision flows (and tests) can invalidate too
+ * (no argument = clear everything).
+ */
+export function invalidateVerificationStatusCache(userId?: number): void {
+  if (userId === undefined) {
+    verificationStatusCache.clear();
+    return;
+  }
+  verificationStatusCache.invalidate(String(userId));
+}
+
+export async function getMyVerificationStatus(userId: number): Promise<VerificationStatusView> {
+  const cacheKey = String(userId);
+  const cached = verificationStatusCache.get(cacheKey);
+  if (cached !== undefined) return cached;
   const row = await ensureVerificationRow(userId);
-  return {
+  const view: VerificationStatusView = {
     status: row.status,
     badgeLevel: row.status === "verified" ? "verified" : "none",
     flags: parseFlags(row.name_screening_flags),
   };
+  verificationStatusCache.set(cacheKey, view);
+  return view;
 }
 
 export type RiderAutoDecision = "verified" | "pending" | "rejected";
@@ -264,6 +301,7 @@ export async function submitVerification(
       JSON.stringify(flags),
     ],
   );
+  invalidateVerificationStatusCache(userId);
   return { status };
 }
 

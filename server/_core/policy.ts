@@ -1,5 +1,6 @@
 import { ENV } from "./env";
 import type { SessionUser } from "./trpc";
+import { createHotCache } from "./hotCache";
 import { resilientFetch } from "./resilientFetch";
 
 type RedisPolicyCacheClient = {
@@ -96,6 +97,36 @@ function recordPolicyDecision(input: PolicyCheckInput, allowed: boolean, source:
   }));
 }
 
+/**
+ * OPA decision cache (perf wave W2, audit finding 10): checkOpaPolicy runs a
+ * POST on every checkPolicy call before the Permify check. Decisions are
+ * near-static, so cache them per (subject, permission, resource) for 15s in
+ * process. TTL is short because subject attributes (mfa, scopes) feed the
+ * decision; denial behavior is unchanged — a cached deny denies without an
+ * HTTP call.
+ */
+const OPA_DECISION_CACHE_TTL_MS = 15_000;
+
+const opaDecisionCache = createHotCache<boolean>({
+  ttlMs: OPA_DECISION_CACHE_TTL_MS,
+});
+
+function getOpaDecisionCacheKey(input: PolicyCheckInput): string {
+  return [
+    "opa",
+    input.subject.tenantId ?? "switchos-core",
+    input.subject.openId ?? input.subject.id,
+    input.permission,
+    input.resource.type,
+    input.resource.id,
+  ].join(":");
+}
+
+/** Clear cached OPA decisions (policy-bundle deploys; tests). */
+export function invalidateOpaDecisionCache(): void {
+  opaDecisionCache.clear();
+}
+
 async function checkOpaPolicy(input: PolicyCheckInput): Promise<boolean> {
   if (!isOpaEnabled()) {
     if (ENV.isProduction) throw new Error("OPA policy endpoint is required in production");
@@ -104,9 +135,18 @@ async function checkOpaPolicy(input: PolicyCheckInput): Promise<boolean> {
   const authToken = getOpaAuthToken();
   if (authToken === "") throw new Error("OPA policy client requires OPA_AUTH_TOKEN when OPA_ENDPOINT is configured");
 
+  const cacheKey = getOpaDecisionCacheKey(input);
+  const cachedDecision = opaDecisionCache.get(cacheKey);
+  if (cachedDecision !== undefined) {
+    return cachedDecision;
+  }
+
   const response = await resilientFetch(`${normalizeOpaEndpoint()}/v1/data/switchos/authz/allow`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${authToken}` },
+    // Read path: bound the OPA hop at 500ms (perf wave W2) instead of the
+    // 10s resilientFetch default; failures still propagate (fail-closed).
+    timeoutMs: 500,
     body: JSON.stringify({ input: {
       subject: {
         id: String(input.subject.openId ?? input.subject.id),
@@ -122,7 +162,9 @@ async function checkOpaPolicy(input: PolicyCheckInput): Promise<boolean> {
   });
   if (!response.ok) throw new Error(`OPA policy check failed: ${response.status}`);
   const payload = await response.json() as { result?: boolean };
-  return payload.result === true;
+  const allowed = payload.result === true;
+  opaDecisionCache.set(cacheKey, allowed);
+  return allowed;
 }
 
 function getPolicyCacheKey(input: PolicyCheckInput) {

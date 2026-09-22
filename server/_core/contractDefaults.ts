@@ -1,6 +1,7 @@
 import { TRPCError } from "@trpc/server";
 
 import { getPool } from "../db";
+import { createHotCache } from "./hotCache";
 import {
   assertConsultationEligible,
   postConsultation,
@@ -46,6 +47,32 @@ export type ContractDefaults = {
 };
 
 /**
+ * Hot-read cache (perf wave W2, audit finding 9): getContractDefaults is a
+ * single SELECT by unique market_id read on contract/offer paths, written
+ * only by setContractDefaults/publishContractDefaults. TTL 5m +
+ * write-through invalidation. The resolved defaults (including the
+ * Nigerian-law fallback for markets with no row) are cached as-is.
+ */
+const CONTRACT_DEFAULTS_CACHE_TTL_MS = 5 * 60_000;
+
+const contractDefaultsCache = createHotCache<ContractDefaults>({
+  ttlMs: CONTRACT_DEFAULTS_CACHE_TTL_MS,
+});
+
+/**
+ * Invalidate cached contract-default reads. Called by setContractDefaults /
+ * publishContractDefaults; exported (no argument = clear everything) for
+ * tests.
+ */
+export function invalidateContractDefaultsCache(marketId?: string): void {
+  if (marketId === undefined) {
+    contractDefaultsCache.clear();
+    return;
+  }
+  contractDefaultsCache.invalidate(marketId);
+}
+
+/**
  * Read the contract defaults for a market. Markets without a jurisdiction
  * row resolve to the Nigerian-law defaults (R15: never an absent/foreign
  * default).
@@ -53,6 +80,8 @@ export type ContractDefaults = {
 export async function getContractDefaults(
   marketId: string,
 ): Promise<ContractDefaults> {
+  const cached = contractDefaultsCache.get(marketId);
+  if (cached !== undefined) return cached;
   const pool = await getPool();
   const result = await pool.query<ContractJurisdictionRow>(
     `SELECT * FROM public.contract_jurisdictions WHERE market_id = $1`,
@@ -60,7 +89,7 @@ export async function getContractDefaults(
   );
   const row = result.rows[0];
   if (!row) {
-    return {
+    const defaults: ContractDefaults = {
       marketId,
       governingLaw: DEFAULT_GOVERNING_LAW,
       disputeForum: DEFAULT_DISPUTE_FORUM,
@@ -70,8 +99,10 @@ export async function getContractDefaults(
       consultationId: null,
       isDefault: true,
     };
+    contractDefaultsCache.set(marketId, defaults);
+    return defaults;
   }
-  return {
+  const resolved: ContractDefaults = {
     marketId: row.market_id,
     governingLaw: row.governing_law,
     disputeForum: row.dispute_forum,
@@ -81,6 +112,8 @@ export async function getContractDefaults(
     consultationId: row.consultation_id,
     isDefault: false,
   };
+  contractDefaultsCache.set(marketId, resolved);
+  return resolved;
 }
 
 /**
@@ -155,6 +188,7 @@ export async function setContractDefaults(
       message: "contract_jurisdiction_upsert_failed",
     });
   }
+  invalidateContractDefaultsCache(input.marketId);
   const consultationId = await autoPostContractConsultation({
     actorUserId,
     title: `Contract defaults ${input.marketId}`,
@@ -208,5 +242,6 @@ export async function publishContractDefaults(
       message: "contract_jurisdiction_not_found",
     });
   }
+  invalidateContractDefaultsCache(input.marketId);
   return row;
 }

@@ -10,6 +10,37 @@ const rateWindowMs = 60_000;
 const localBuckets = new Map<string, Bucket>();
 type RedisClient = ReturnType<typeof createClient>;
 
+/**
+ * Local-fallback bucket hygiene (perf wave W2, audit finding 15): expired
+ * buckets were only dropped lazily when the same key was hit again, so
+ * one-shot keys (IPs, subjects) accumulated for the life of the process.
+ * Sweep expired buckets every 5 minutes; the timer is unref'd so it never
+ * keeps the process alive. The Redis path is untouched (TTLs there).
+ */
+const LOCAL_BUCKET_SWEEP_INTERVAL_MS = 5 * 60_000;
+
+/** Drop expired local-fallback buckets; returns how many were removed. */
+export function sweepLocalRateLimitBuckets(now: number = Date.now()): number {
+  let removed = 0;
+  for (const [key, bucket] of localBuckets) {
+    if (bucket.resetAt <= now) {
+      localBuckets.delete(key);
+      removed += 1;
+    }
+  }
+  return removed;
+}
+
+const localBucketSweepTimer = setInterval(() => {
+  sweepLocalRateLimitBuckets();
+}, LOCAL_BUCKET_SWEEP_INTERVAL_MS);
+localBucketSweepTimer.unref?.();
+
+/** Current local-fallback bucket count (test/observability support). */
+export function getLocalRateLimitBucketCount(): number {
+  return localBuckets.size;
+}
+
 let redisClientPromise: Promise<RedisClient | null> | null = null;
 
 async function getRedisClient(): Promise<RedisClient | null> {
