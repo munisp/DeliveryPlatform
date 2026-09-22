@@ -17,8 +17,9 @@ function requirePool() {
             }
           : false,
       max: 5,
-      idleTimeoutMillis: 30_000,
-      connectionTimeoutMillis: 5_000,
+      idleTimeoutMillis: 30000,
+      connectionTimeoutMillis: 3000,
+      options: "-c statement_timeout=10000",
     });
   }
   return pool;
@@ -828,15 +829,12 @@ export async function rejectFinancialDeadLetterHeadResolution(input: {
   caseId: string;
   reason: string;
   idempotencyKey: string;
-}): Promise<{ resolutionId: string; state: string }> {
+}): Promise<{ state: string }> {
   const result = await requirePool().query(
     `SELECT * FROM mojaloop_reject_dead_letter_head_resolution(
       $1::integer, $2::uuid, $3::text, $4::text, clock_timestamp()
     )`,
     [input.actorId, input.caseId, input.reason, input.idempotencyKey],
   );
-  return {
-    resolutionId: String(result.rows[0]?.resolution_id ?? ""),
-    state: String(result.rows[0]?.state ?? ""),
-  };
+  return { state: String(result.rows[0]?.state ?? "") };
 }
