@@ -2,7 +2,8 @@ import { TRPCError } from "@trpc/server";
 
 import { getPool } from "../db";
 import { ENV } from "./env";
-import { resilientFetch } from "./resilientFetch";
+import { FAIL_OPEN_FAST, resilientFetch } from "./resilientFetch";
+
 import { hashIdReference } from "./riderVerification";
 
 /**
@@ -100,7 +101,7 @@ export async function scoreTripRisk(tripId: string): Promise<TripRiskScore | nul
       {
         method: "GET",
         headers: { "X-Internal-Service-Token": ENV.internalServiceToken },
-        timeoutMs: 5_000,
+        ...FAIL_OPEN_FAST,
         maxAttempts: 1,
       },
     );
@@ -181,7 +182,7 @@ export async function verifyManifestPassengers(
       body: JSON.stringify({
         passengers: passengers.map((p) => ({ name: p.name })),
       }),
-      timeoutMs: 5_000,
+      ...FAIL_OPEN_FAST,
       maxAttempts: 1,
     });
     if (!response.ok) {
