@@ -12,9 +12,11 @@ import {
   getMyVerificationStatus,
   getOfferRiderBadge,
   hashIdReference,
+  invalidateVerificationStatusCache,
   screenName,
   submitVerification,
 } from "./_core/riderVerification";
+import { resetFailOpenFastBreaker } from "./_core/resilientFetch";
 
 type QueryResult = { rows: unknown[]; rowCount?: number };
 
@@ -40,6 +42,8 @@ function jsonResponse(body: unknown, status = 200): Response {
 
 beforeEach(() => {
   vi.resetAllMocks();
+  invalidateVerificationStatusCache(); // hot-read cache must not leak between tests
+  resetFailOpenFastBreaker(); // shared screening breaker must not leak either
 });
 
 afterEach(() => {
@@ -359,5 +363,119 @@ describe("getOfferRiderBadge", () => {
     await expect(
       getOfferRiderBadge("11111111-1111-4111-8111-111111111111"),
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+});
+
+describe("verification status hot-read cache", () => {
+  it("serves repeated status reads per userId from cache (one DB read)", async () => {
+    const pool = createPool([
+      {
+        match: /SELECT \* FROM public\.rider_verifications WHERE user_id/,
+        result: {
+          rows: [
+            {
+              id: "v-1",
+              user_id: 42,
+              status: "verified",
+              name_screening_flags: ["reviewed"],
+            },
+          ],
+        },
+      },
+    ]);
+    dbMocks.getPool.mockResolvedValue(pool);
+
+    const first = await getMyVerificationStatus(42);
+    const second = await getMyVerificationStatus(42);
+    expect(first).toEqual({ status: "verified", badgeLevel: "verified", flags: ["reviewed"] });
+    expect(second).toEqual(first);
+    expect(
+      pool.calls.filter((call) =>
+        /SELECT \* FROM public\.rider_verifications WHERE user_id/.test(call.text),
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("submitVerification invalidates the cached status for the user", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse({ score: 0.95, flags: [], plausible: true })),
+    );
+    let status = "unverified";
+    const pool = createPool([
+      {
+        match: /SELECT \* FROM public\.rider_verifications WHERE user_id/,
+        result: {
+          rows: [
+            { id: "v-1", user_id: 42, status, name_screening_flags: [] },
+          ],
+        },
+      },
+      { match: /UPDATE public\.rider_verifications/, result: { rows: [], rowCount: 1 } },
+      { match: /INSERT INTO public\.rider_name_screenings/, result: { rows: [], rowCount: 1 } },
+    ]);
+    // Recompute the SELECT row on each read so the re-read reflects the write.
+    pool.query = vi.fn(async (text: string, values: unknown[] = []) => {
+      pool.calls.push({ text, values });
+      if (/SELECT \* FROM public\.rider_verifications WHERE user_id/.test(text)) {
+        return { rows: [{ id: "v-1", user_id: 42, status, name_screening_flags: [] }] };
+      }
+      if (/status = 'pending'/.test(text)) {
+        return { rows: [], rowCount: 1 };
+      }
+      if (/UPDATE public\.rider_verifications/.test(text)) {
+        status = (values[1] as string) ?? status;
+        return { rows: [], rowCount: 1 };
+      }
+      return { rows: [], rowCount: 1 };
+    });
+    dbMocks.getPool.mockResolvedValue(pool);
+
+    const before = await getMyVerificationStatus(42); // prime cache
+    expect(before.status).toBe("unverified");
+    const submitted = await submitVerification(42, {
+      idType: "nin",
+      idRef: "12345678901",
+      name: "Adaeze Okafor",
+      consentVersion: "rider-id-consent-v1",
+    });
+    expect(submitted.status).toBe("verified");
+    const after = await getMyVerificationStatus(42); // must re-read
+    expect(after.status).toBe("verified");
+    // SELECTs: 1 cache-priming read + 1 ensureVerificationRow inside submit +
+    // 1 re-read after invalidation. Without invalidation the third read would
+    // have been served stale from cache.
+    expect(
+      pool.calls.filter((call) =>
+        /SELECT \* FROM public\.rider_verifications WHERE user_id/.test(call.text),
+      ),
+    ).toHaveLength(3);
+  });
+});
+
+describe("screenName FAIL_OPEN_FAST wiring", () => {
+  it("fails fast (~0ms, no HTTP) once the shared breaker opens after 2 failures", async () => {
+    const fetchMock = vi.fn(async () => {
+      throw new Error("connection refused");
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    const first = await screenName("Adaeze Okafor");
+    const second = await screenName("Adaeze Okafor");
+    expect(first.unavailable).toBe(true);
+    expect(second.unavailable).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    const startedAt = Date.now();
+    const third = await screenName("Adaeze Okafor");
+    expect(Date.now() - startedAt).toBeLessThan(50);
+    expect(third).toEqual({
+      score: null,
+      flags: ["service_unavailable"],
+      plausible: false,
+      unavailable: true,
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2); // breaker open: no HTTP attempt
   });
 });
