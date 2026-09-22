@@ -365,6 +365,12 @@ export const ENV = {
   lakehouseServiceUrl:
     process.env.LAKEHOUSE_SERVICE_URL ?? "http://127.0.0.1:8007",
   lakehousePath: process.env.LAKEHOUSE_PATH ?? "/tmp/switchos-lakehouse",
+  // Background Postgres→lakehouse sync cadence (ops-tunable). Reads no longer
+  // sync inline (perf finding 1); this is the only freshness lever.
+  lakehouseSyncIntervalMs: parseInteger(
+    process.env.LAKEHOUSE_SYNC_INTERVAL_MS,
+    45_000,
+  ),
   dispatchOptimizerUrl:
     process.env.DISPATCH_OPTIMIZER_URL ?? "http://127.0.0.1:8090",
   notificationDispatcherUrl: getLifecycleNotificationDispatcherUrl(
