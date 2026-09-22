@@ -43,11 +43,15 @@ const databaseUrl =
   "postgresql://postgres@/deliveryplatform?host=/tmp/pgdata-perf";
 
 /** DDL-only prefix of scripts/init-local-postgres.sql (drop its seed INSERTs —
- *  the harness owns seeding so user id=1 stays the operator). */
+ *  the harness owns seeding so user id=1 stays the operator).
+ *  Known drift fix: the server's bootstrap loyalty_rewards seed omits
+ *  points_required, so the stub makes it nullable. */
 function stubDdlFromInitScript() {
   const raw = readFileSync(resolve(repoRoot, "scripts/init-local-postgres.sql"), "utf8");
   const idx = raw.search(/^\s*INSERT INTO/m);
-  return idx === -1 ? raw : raw.slice(0, idx);
+  let ddl = idx === -1 ? raw : raw.slice(0, idx);
+  ddl = ddl.replace("points_required INTEGER NOT NULL", "points_required INTEGER");
+  return ddl;
 }
 
 /** longcat_voice_* DDL — mirrors server/_core/longcatVoice.ts ensureSchema(). */
@@ -436,6 +440,14 @@ async function main() {
       INSERT INTO contract_jurisdictions (market_id, governing_law, dispute_forum, consumer_protection_overrides, effective_from, published)
       SELECT m, 'Federal Republic of Nigeria', 'Lagos, Nigeria courts', '{}'::jsonb, now() - interval '90 days', true
       FROM unnest(ARRAY['NG-LAGOS','NG-ABUJA','NG-KANO','NG-IBADAN','NG-PH']) m;
+    `);
+
+    // ---- 1 active marketing campaign for the send-trigger benchmark ----
+    await run(client, "marketing_campaign x1 (bench trigger)", `
+      INSERT INTO marketing_campaigns (id, campaign_name, campaign_type, email_template, sms_template, target_audience, status, is_active, channel)
+      VALUES (1, 'Perf Bench Campaign', 'promo', 'Hello {{name}}, you have {{points}} points.', 'Hi {{name}}', 'all', 'active', true, 'email')
+      ON CONFLICT (id) DO NOTHING;
+      SELECT setval(pg_get_serial_sequence('marketing_campaigns','id'), GREATEST((SELECT max(id) FROM marketing_campaigns), 1), true);
     `);
 
     // ---- driver_applications 501 + work_record_exports 500 ----
