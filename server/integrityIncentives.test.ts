@@ -8,6 +8,9 @@ const councilMocks = vi.hoisted(() => ({
 }));
 const fetchMocks = vi.hoisted(() => ({
   resilientFetch: vi.fn(),
+  // Mirrors the FAIL_OPEN_FAST preset shape (merged to main with PR #46);
+  // the mocked resilientFetch ignores the options either way.
+  FAIL_OPEN_FAST: { timeoutMs: 1_500 },
 }));
 
 vi.mock("../server/db", () => dbMocks);
@@ -401,7 +404,9 @@ describe("grantReward / revokeReward", () => {
 
   it("rejects granting a reward that is not pending", async () => {
     const pool = createPool([
-      { match: /UPDATE public\.integrity_rewards/, result: { rows: [] } },
+      {
+        match: /UPDATE public\.integrity_rewards/, result: { rows: [] },
+      },
     ]);
     dbMocks.getPool.mockResolvedValue(pool);
     await expect(grantReward(7, { rewardId: "reward-1" })).rejects.toMatchObject({

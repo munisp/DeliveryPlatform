@@ -12,6 +12,9 @@ const dbMocks = vi.hoisted(() => ({
 
 const fetchMocks = vi.hoisted(() => ({
   resilientFetch: vi.fn(),
+  // Mirrors the FAIL_OPEN_FAST preset shape (merged to main with PR #46);
+  // the mocked resilientFetch ignores the options either way.
+  FAIL_OPEN_FAST: { timeoutMs: 1_500 },
 }));
 
 vi.mock("../server/db", () => dbMocks);
