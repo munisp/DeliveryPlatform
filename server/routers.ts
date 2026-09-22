@@ -24,6 +24,7 @@ import {
 } from "./lib/platformWorkspaces";
 import {
   getLakehouseAnalyticsSummary,
+  getLakehouseDataFreshnessSeconds,
   getLakehouseDriverStats,
   getLakehouseMarketplaceOverview,
   getLakehouseOrderStats,
@@ -146,6 +147,7 @@ import { driverOnboardingRouter } from "./_core/driverOnboardingRouter";
 import { approveExternalOperator } from "./_core/operatorAuthStore";
 import { consumerRouter } from "./_core/consumerRouter";
 import { riderVerificationRouter } from "./_core/riderVerificationRouter";
+import { invalidateVerificationStatusCache } from "./_core/riderVerification";
 import { verificationRouter } from "./_core/verificationRouter";
 import { deactivationRouter } from "./_core/deactivationRouter";
 import { councilRouter } from "./_core/councilRouter";
@@ -189,10 +191,28 @@ const listInput = z
   .object({ limit: z.number().min(1).max(25).optional() })
   .optional();
 
-async function requireLakehouseAnalytics<T>(loader: () => Promise<T>) {
+/**
+ * Lakehouse analytics reads are decoupled from the Postgres→lakehouse sync
+ * (perf finding 1): a background interval syncer started at server boot
+ * (startLakehouseSyncer in server/lib/lakehouse.ts) keeps the lakehouse warm,
+ * so these procedures read the lakehouse directly and report
+ * `dataFreshnessSeconds` (seconds since the last completed sync, null when
+ * the first sync has not finished yet). Only an explicit operator
+ * `forceRefresh: true` runs the sync inline.
+ */
+async function requireLakehouseAnalytics<T extends Record<string, unknown>>(
+  loader: () => Promise<T>,
+  options: { forceRefresh?: boolean } = {},
+) {
   try {
-    await syncLakehouseFromPostgres();
-    return await loader();
+    if (options.forceRefresh) {
+      await syncLakehouseFromPostgres();
+    }
+    const data = await loader();
+    return {
+      ...data,
+      dataFreshnessSeconds: getLakehouseDataFreshnessSeconds(),
+    };
   } catch (error) {
     console.warn("[SwitchOS] Lakehouse analytics unavailable:", error);
     throw new TRPCError({
@@ -202,6 +222,10 @@ async function requireLakehouseAnalytics<T>(loader: () => Promise<T>) {
     });
   }
 }
+
+const lakehouseAnalyticsInput = z
+  .object({ forceRefresh: z.boolean().optional() })
+  .optional();
 
 async function requireWorkspaceData<T>(
   workspace: string,
@@ -249,18 +273,34 @@ export const appRouter = router({
   }),
 
   analytics: router({
-    summary: analyticsReadProcedure.query(() =>
-      requireLakehouseAnalytics(() => getLakehouseAnalyticsSummary()),
-    ),
-    orderStats: analyticsReadProcedure.query(() =>
-      requireLakehouseAnalytics(() => getLakehouseOrderStats()),
-    ),
-    driverStats: analyticsReadProcedure.query(() =>
-      requireLakehouseAnalytics(() => getLakehouseDriverStats()),
-    ),
-    marketplaceOverview: analyticsReadProcedure.query(() =>
-      requireLakehouseAnalytics(() => getLakehouseMarketplaceOverview()),
-    ),
+    summary: analyticsReadProcedure
+      .input(lakehouseAnalyticsInput)
+      .query(({ input }) =>
+        requireLakehouseAnalytics(() => getLakehouseAnalyticsSummary(), {
+          forceRefresh: input?.forceRefresh,
+        }),
+      ),
+    orderStats: analyticsReadProcedure
+      .input(lakehouseAnalyticsInput)
+      .query(({ input }) =>
+        requireLakehouseAnalytics(() => getLakehouseOrderStats(), {
+          forceRefresh: input?.forceRefresh,
+        }),
+      ),
+    driverStats: analyticsReadProcedure
+      .input(lakehouseAnalyticsInput)
+      .query(({ input }) =>
+        requireLakehouseAnalytics(() => getLakehouseDriverStats(), {
+          forceRefresh: input?.forceRefresh,
+        }),
+      ),
+    marketplaceOverview: analyticsReadProcedure
+      .input(lakehouseAnalyticsInput)
+      .query(({ input }) =>
+        requireLakehouseAnalytics(() => getLakehouseMarketplaceOverview(), {
+          forceRefresh: input?.forceRefresh,
+        }),
+      ),
     fundsReconciliation: analyticsReadProcedure.query(async () =>
       getFundsReconciliationSnapshot(),
     ),
@@ -954,9 +994,15 @@ export const appRouter = router({
             .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
         }),
       )
-      .mutation(({ ctx, input }) =>
-        decideVerificationCase({ actorUserId: ctx.user!.id, ...input }),
-      ),
+      .mutation(async ({ ctx, input }) => {
+        const state = await decideVerificationCase({ actorUserId: ctx.user!.id, ...input });
+        // Perf W2 (cross-branch): an operator decision can change a rider's
+        // verification status; drop the cached status views (W2a hot cache,
+        // 30s TTL) so riders see the decision immediately. No argument clears
+        // the whole (small, TTL-bounded) cache; decisions are rare.
+        invalidateVerificationStatusCache();
+        return state;
+      }),
   }),
   vehicleAccess: router({
     listOffers: authenticatedProcedure
