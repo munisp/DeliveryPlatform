@@ -1,255 +1,362 @@
-import { createHash, randomUUID } from "node:crypto";
-
 import { Kafka, logLevel, type Producer } from "kafkajs";
-import pg from "pg";
-
+import { Pool } from "pg";
 import { ENV } from "./env";
+import { resilientFetch } from "./resilientFetch";
 
-const { Pool } = pg;
-
-type OperationalEventInput = {
+type OperationalEvent = {
   eventType: string;
   actorId?: string | null;
   actorRole?: string | null;
   tenantId?: string | null;
   route?: string | null;
-  outcome?: string | null;
-  payload?: Record<string, unknown> | null;
+  outcome: "success" | "failure" | "info";
+  payload?: Record<string, unknown>;
 };
 
-type OperationalEventRecord = {
-  event_id: string;
-  event_type: string;
-  actor_id: string | null;
-  actor_role: string | null;
-  tenant_id: string;
-  route: string | null;
-  outcome: string;
-  occurred_at: string;
-  payload: Record<string, unknown>;
-};
-
-const KAFKA_CLIENT_ID = ENV.kafkaClientId;
-const KAFKA_OPERATIONAL_EVENTS_TOPIC = ENV.kafkaOperationalEventsTopic;
-const DAPR_PUBSUB_NAME = ENV.daprPubsubName;
-const DAPR_OPERATIONAL_EVENTS_TOPIC = ENV.daprOperationalEventsTopic;
-const OPENSEARCH_OPERATIONAL_EVENTS_INDEX = ENV.opensearchOperationalEventsIndex;
-
-const pool = new Pool({
-  connectionString: ENV.databaseUrl,
-  max: 2,
-  idleTimeoutMillis: 10000,
-  options: "-c statement_timeout=15000",
-});
-
+let pool: Pool | null = null;
+let tablesEnsured = false;
 let kafkaProducer: Producer | null = null;
-let kafkaProducerConnectPromise: Promise<void> | null = null;
+let kafkaProducerConnectPromise: Promise<Producer | null> | null = null;
 
-function getKafkaBrokers() {
-  return ENV.kafkaBrokers
-    .split(",")
-    .map((broker) => broker.trim())
-    .filter(Boolean);
-}
-
-async function persistOperationalEvent(record: OperationalEventRecord) {
-  if (!ENV.databaseUrl) {
-    return false;
+// TLS verification is always on for database connections. The only way to
+// disable it is the development-only DATABASE_TLS_SKIP_VERIFY flag, which
+// env.ts refuses to honor in production.
+function buildDatabaseSsl(useSsl: boolean) {
+  if (!useSsl) return false;
+  if (ENV.databaseTlsSkipVerify) {
+    console.warn(
+      "[SECURITY] DATABASE_TLS_SKIP_VERIFY=true: TLS certificate verification is DISABLED for the operational events database connection. This is a development-only override and is rejected in production.",
+    );
+    return { rejectUnauthorized: false as const };
   }
-
-  await pool.query(
-    `INSERT INTO operational_event_bridge
-      (event_id, event_type, actor_id, actor_role, tenant_id, route, outcome, occurred_at, payload)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb)`,
-    [
-      record.event_id,
-      record.event_type,
-      record.actor_id,
-      record.actor_role,
-      record.tenant_id,
-      record.route,
-      record.outcome,
-      record.occurred_at,
-      JSON.stringify(record.payload),
-    ],
-  );
-
-  return true;
-}
-
-async function getKafkaProducer() {
-  const brokers = getKafkaBrokers();
-  if (brokers.length === 0) {
-    return null;
-  }
-
-  if (!kafkaProducer) {
-    kafkaProducer = new Kafka({
-      clientId: KAFKA_CLIENT_ID,
-      brokers,
-      logLevel: logLevel.NOTHING,
-    }).producer();
-    kafkaProducerConnectPromise = kafkaProducer.connect();
-  }
-
-  await kafkaProducerConnectPromise;
-  return kafkaProducer;
-}
-
-function buildHeaders(record: OperationalEventRecord) {
   return {
-    "event-id": record.event_id,
-    "event-type": record.event_type,
-    "tenant-id": record.tenant_id,
-    outcome: record.outcome,
+    rejectUnauthorized: true as const,
+    ...(ENV.databaseSslCa ? { ca: ENV.databaseSslCa } : {}),
   };
 }
 
-async function publishKafka(record: OperationalEventRecord) {
-  const producer = await getKafkaProducer();
-  if (!producer) {
-    return false;
+function getPool() {
+  if (!ENV.databaseUrl) {
+    return null;
   }
 
+  if (!pool) {
+    const useSsl = ENV.isProduction && !ENV.databaseUrl.includes("sslmode=disable");
+    pool = new Pool({
+      connectionString: ENV.databaseUrl,
+      ssl: buildDatabaseSsl(useSsl),
+      max: 10,
+      idleTimeoutMillis: 30000,
+      connectionTimeoutMillis: 5000,
+      // Bound every statement server-side so a stuck INSERT/DDL cannot pin
+      // one of the 10 pool connections indefinitely (perf finding 10).
+      options: "-c statement_timeout=15000",
+    });
+  }
+
+  return pool;
+}
+
+function buildEventEnvelope(event: OperationalEvent) {
+  return {
+    source: "switchos-operator-dashboard",
+    timestamp: new Date().toISOString(),
+    ...event,
+  };
+}
+
+function parseKafkaBrokers() {
+  return ENV.kafkaBrokers
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+}
+
+async function getKafkaProducer() {
+  const brokers = parseKafkaBrokers();
+  if (brokers.length === 0 || !ENV.kafkaOperationalEventsTopic.trim()) {
+    return null;
+  }
+
+  if (kafkaProducer) {
+    return kafkaProducer;
+  }
+
+  if (!kafkaProducerConnectPromise) {
+    kafkaProducerConnectPromise = (async () => {
+      const kafka = new Kafka({
+        clientId: ENV.kafkaClientId,
+        brokers,
+        logLevel: logLevel.NOTHING,
+      });
+      const producer = kafka.producer();
+      await producer.connect();
+      kafkaProducer = producer;
+      return producer;
+    })().catch((error) => {
+      kafkaProducerConnectPromise = null;
+      throw error;
+    });
+  }
+
+  return kafkaProducerConnectPromise;
+}
+
+async function ensureTables() {
+  const db = getPool();
+  if (!db || tablesEnsured) return;
+
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS operational_events (
+      id BIGSERIAL PRIMARY KEY,
+      event_type VARCHAR(128) NOT NULL,
+      actor_id VARCHAR(128),
+      actor_role VARCHAR(64),
+      tenant_id VARCHAR(128),
+      route VARCHAR(255),
+      outcome VARCHAR(32) NOT NULL,
+      payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_operational_events_event_type
+      ON operational_events(event_type);
+    CREATE INDEX IF NOT EXISTS idx_operational_events_created_at
+      ON operational_events(created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_operational_events_tenant_id
+      ON operational_events(tenant_id);
+  `);
+
+  tablesEnsured = true;
+}
+
+async function persistEvent(event: OperationalEvent) {
+  const db = getPool();
+  if (!db) return { persisted: false };
+
+  await ensureTables();
+  await db.query(
+    `
+      INSERT INTO operational_events (
+        event_type,
+        actor_id,
+        actor_role,
+        tenant_id,
+        route,
+        outcome,
+        payload
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
+    `,
+    [
+      event.eventType,
+      event.actorId ?? null,
+      event.actorRole ?? null,
+      event.tenantId ?? null,
+      event.route ?? null,
+      event.outcome,
+      JSON.stringify(event.payload ?? {}),
+    ],
+  );
+
+  return { persisted: true };
+}
+
+async function publishToKafka(event: OperationalEvent) {
+  const producer = await getKafkaProducer();
+  if (!producer) {
+    return { attempted: false };
+  }
+
+  const envelope = buildEventEnvelope(event);
+  const messageKey = event.tenantId ?? event.actorId ?? event.eventType;
+
   await producer.send({
-    topic: KAFKA_OPERATIONAL_EVENTS_TOPIC,
+    topic: ENV.kafkaOperationalEventsTopic,
     messages: [
       {
-        key: record.tenant_id,
-        value: JSON.stringify(record),
-        headers: buildHeaders(record),
+        key: messageKey,
+        value: JSON.stringify(envelope),
+        headers: {
+          "event-type": event.eventType,
+          outcome: event.outcome,
+          source: "switchos-operator-dashboard",
+        },
       },
     ],
   });
 
-  return true;
+  return { attempted: true, published: true };
 }
 
-async function publishDapr(record: OperationalEventRecord) {
-  if (!ENV.daprHttpPort) {
-    return false;
+async function publishToDapr(event: OperationalEvent) {
+  if (!ENV.daprHttpPort || !ENV.daprPubsubName || !ENV.daprOperationalEventsTopic) {
+    return { attempted: false };
   }
 
-  const response = await fetch(
-    `http://127.0.0.1:${ENV.daprHttpPort}/v1.0/publish/${DAPR_PUBSUB_NAME}/${DAPR_OPERATIONAL_EVENTS_TOPIC}`,
-    {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(record),
-    },
-  );
-
-  if (!response.ok) {
-    throw new Error(`Dapr publish failed with ${response.status}: ${await response.text()}`);
-  }
-
-  return true;
-}
-
-async function indexOpenSearch(record: OperationalEventRecord) {
-  if (!ENV.opensearchUrl) {
-    return false;
-  }
-
-  const auth =
-    ENV.opensearchUsername && ENV.opensearchPassword
-      ? `Basic ${Buffer.from(`${ENV.opensearchUsername}:${ENV.opensearchPassword}`).toString("base64")}`
-      : null;
-
-  const response = await fetch(
-    `${ENV.opensearchUrl.replace(/\/$/, "")}/${OPENSEARCH_OPERATIONAL_EVENTS_INDEX}/_doc`,
+  const response = await resilientFetch(
+    `http://127.0.0.1:${ENV.daprHttpPort}/v1.0/publish/${ENV.daprPubsubName}/${ENV.daprOperationalEventsTopic}`,
     {
       method: "POST",
       headers: {
-        "content-type": "application/json",
-        ...(auth ? { authorization: auth } : {}),
+        "Content-Type": "application/json",
       },
-      body: JSON.stringify(record),
+      body: JSON.stringify(buildEventEnvelope(event)),
     },
   );
 
   if (!response.ok) {
-    throw new Error(`OpenSearch indexing failed with ${response.status}: ${await response.text()}`);
+    const text = await response.text().catch(() => "");
+    throw new Error(`Dapr publish failed: ${response.status} ${text}`.trim());
   }
 
-  return true;
+  return { attempted: true, published: true };
 }
 
-// Perf finding 3: broker/search publishes must not block the request path.
-// recordOperationalEvent returns after the durable persist; the fan-out legs
-// run on a per-event queue tracked here so failures can never reject the
-// caller (they settle warn-only) and shutdown/tests can await the queue.
-const pendingPublishes = new Set<Promise<void>>();
+async function indexInOpenSearch(event: OperationalEvent) {
+  if (!ENV.opensearchUrl || !ENV.opensearchOperationalEventsIndex) {
+    return { attempted: false };
+  }
 
-function queuePublishLeg(run: () => Promise<boolean>, label: string) {
-  const pending = Promise.resolve()
-    .then(run)
-    .then(() => undefined)
-    .catch((error) => {
-      console.warn(`[SwitchOS] ${label} publish failed; continuing`, error);
-    })
-    .finally(() => {
-      pendingPublishes.delete(pending);
-    });
-  pendingPublishes.add(pending);
+  const baseUrl = ENV.opensearchUrl.replace(/\/$/, "");
+  const response = await resilientFetch(`${baseUrl}/${ENV.opensearchOperationalEventsIndex}/_doc`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(ENV.opensearchUsername && ENV.opensearchPassword
+        ? {
+            Authorization: `Basic ${Buffer.from(`${ENV.opensearchUsername}:${ENV.opensearchPassword}`).toString("base64")}`,
+          }
+        : {}),
+    },
+    body: JSON.stringify(buildEventEnvelope(event)),
+  });
+
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw new Error(`OpenSearch index failed: ${response.status} ${text}`.trim());
+  }
+
+  return { attempted: true, indexed: true };
 }
 
+/**
+ * Broker/search publish legs (Kafka, Dapr, OpenSearch) are best-effort
+ * fan-out: they must never add latency to the request that produced the
+ * event. recordOperationalEvent awaits ONLY the durable Postgres INSERT and
+ * dispatches each publish leg through this bounded in-process queue
+ * (max MAX_PUBLISH_IN_FLIGHT concurrent legs, backlog capped at
+ * MAX_PUBLISH_BACKLOG with drop-oldest-on-overflow semantics — a saturated
+ * broker must not grow memory without bound).
+ */
+const MAX_PUBLISH_IN_FLIGHT = 4;
+const MAX_PUBLISH_BACKLOG = 500;
+let publishInFlight = 0;
+const pendingPublishJobs: Array<() => Promise<void>> = [];
+
+function drainPublishJobs() {
+  while (
+    publishInFlight < MAX_PUBLISH_IN_FLIGHT &&
+    pendingPublishJobs.length > 0
+  ) {
+    const job = pendingPublishJobs.shift();
+    if (!job) return;
+    publishInFlight += 1;
+    void job()
+      .catch((error) =>
+        console.warn("[SwitchOS] Operational event publish leg failed", error),
+      )
+      .finally(() => {
+        publishInFlight -= 1;
+        drainPublishJobs();
+      });
+  }
+}
+
+function schedulePublishJob(job: () => Promise<void>) {
+  if (pendingPublishJobs.length >= MAX_PUBLISH_BACKLOG) {
+    console.warn(
+      "[SwitchOS] Operational event publish backlog full; dropping publish leg",
+    );
+    return;
+  }
+  pendingPublishJobs.push(job);
+  drainPublishJobs();
+}
+
+/** Test/drain support: resolves once every queued publish leg has settled. */
 export async function drainOperationalEventPublishes() {
-  while (pendingPublishes.size > 0) {
-    await Promise.allSettled(Array.from(pendingPublishes));
+  while (publishInFlight > 0 || pendingPublishJobs.length > 0) {
+    await new Promise((resolve) => setImmediate(resolve));
   }
 }
 
-export async function recordOperationalEvent(input: OperationalEventInput) {
-  const record: OperationalEventRecord = {
-    event_id: createHash("sha256").update(randomUUID()).digest("hex"),
-    event_type: input.eventType,
-    actor_id: input.actorId ?? null,
-    actor_role: input.actorRole ?? null,
-    tenant_id: input.tenantId ?? "switchos-core",
-    route: input.route ?? null,
-    outcome: input.outcome ?? "success",
-    occurred_at: new Date().toISOString(),
-    payload: input.payload ?? {},
+export async function recordOperationalEvent(event: OperationalEvent) {
+  const result = {
+    persisted: false,
+    kafkaPublished: false,
+    daprPublished: false,
+    openSearchIndexed: false,
   };
 
-  const [persisted, kafkaPublished, daprPublished, openSearchIndexed] = await Promise.all([
-    persistOperationalEvent(record),
-    Promise.resolve(
-      queuePublishLeg(() => publishKafka(record), "Kafka operational event"),
-      true,
-    ),
-    Promise.resolve(
-      queuePublishLeg(() => publishDapr(record), "Dapr operational event"),
-      true,
-    ),
-    Promise.resolve(
-      queuePublishLeg(() => indexOpenSearch(record), "OpenSearch operational event"),
-      true,
-    ),
-  ]);
+  try {
+    const persisted = await persistEvent(event);
+    result.persisted = persisted.persisted;
+  } catch (error) {
+    console.warn("[SwitchOS] Failed to persist operational event", error);
+  }
 
-  return {
-    eventId: record.event_id,
-    persisted,
-    kafkaPublished,
-    daprPublished,
-    openSearchIndexed,
-  };
+  // Non-blocking publish legs: schedule and return immediately. The result
+  // flags report whether each leg was scheduled (i.e. configured), not the
+  // asynchronous delivery outcome; failures are logged inside the leg.
+  result.kafkaPublished =
+    parseKafkaBrokers().length > 0 &&
+    Boolean(ENV.kafkaOperationalEventsTopic.trim());
+  result.daprPublished = Boolean(
+    ENV.daprHttpPort && ENV.daprPubsubName && ENV.daprOperationalEventsTopic,
+  );
+  result.openSearchIndexed = Boolean(
+    ENV.opensearchUrl && ENV.opensearchOperationalEventsIndex,
+  );
+  schedulePublishJob(async () => {
+    try {
+      await publishToKafka(event);
+    } catch (error) {
+      console.warn("[SwitchOS] Failed to publish operational event to Kafka", error);
+    }
+  });
+  schedulePublishJob(async () => {
+    try {
+      await publishToDapr(event);
+    } catch (error) {
+      console.warn("[SwitchOS] Failed to publish operational event to Dapr", error);
+    }
+  });
+  schedulePublishJob(async () => {
+    try {
+      await indexInOpenSearch(event);
+    } catch (error) {
+      console.warn("[SwitchOS] Failed to index operational event in OpenSearch", error);
+    }
+  });
+
+  return result;
 }
 
 export function getOperationalEventStatus() {
+  const kafkaConfigured = parseKafkaBrokers().length > 0 && Boolean(ENV.kafkaOperationalEventsTopic.trim());
+
   return {
     postgresConfigured: Boolean(ENV.databaseUrl),
-    kafkaConfigured: getKafkaBrokers().length > 0,
-    kafkaClientId: KAFKA_CLIENT_ID,
-    kafkaBrokers: getKafkaBrokers(),
-    kafkaOperationalEventsTopic: KAFKA_OPERATIONAL_EVENTS_TOPIC,
-    daprConfigured: Boolean(ENV.daprHttpPort),
-    daprHttpPort: ENV.daprHttpPort,
-    daprPubsubName: DAPR_PUBSUB_NAME,
-    daprOperationalEventsTopic: DAPR_OPERATIONAL_EVENTS_TOPIC,
-    openSearchConfigured: Boolean(ENV.opensearchUrl),
-    openSearchOperationalEventsIndex: OPENSEARCH_OPERATIONAL_EVENTS_INDEX,
+    kafkaConfigured,
+    daprConfigured: Boolean(ENV.daprHttpPort && ENV.daprPubsubName && ENV.daprOperationalEventsTopic),
+    openSearchConfigured: Boolean(ENV.opensearchUrl && ENV.opensearchOperationalEventsIndex),
+    kafkaClientId: kafkaConfigured ? ENV.kafkaClientId : null,
+    kafkaBrokers: kafkaConfigured ? parseKafkaBrokers() : [],
+    kafkaOperationalEventsTopic: kafkaConfigured ? ENV.kafkaOperationalEventsTopic : null,
+    daprHttpPort: ENV.daprHttpPort || null,
+    daprPubsubName: ENV.daprPubsubName || null,
+    daprOperationalEventsTopic: ENV.daprOperationalEventsTopic || null,
+    openSearchUrl: ENV.opensearchUrl || null,
+    openSearchOperationalEventsIndex: ENV.opensearchOperationalEventsIndex || null,
   };
 }
