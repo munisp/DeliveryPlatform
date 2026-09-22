@@ -63,15 +63,15 @@ describe("vehicle tracker bulk idempotency source integration", () => {
     expect(geotabComplete).toBeGreaterThan(geotabPersist);
   });
 
-  it("uses a dedicated bounded four-to-eight connection tracker pool rather than scaling the general vehicle-access pool", () => {
+  it("uses a dedicated tracker pool hard-capped at five connections rather than scaling the general vehicle-access pool", () => {
     expect(environment).toContain("VEHICLE_TRACKER_DATABASE_POOL_MAX");
-    expect(environment).toContain(
-      '"VEHICLE_TRACKER_DATABASE_POOL_MAX",\n    4,\n    4,\n    8',
-    );
     expect(store).toContain("function trackerDatabase()");
-    expect(store).toContain("max: ENV.vehicleTrackerDatabasePoolMax");
-    expect(store).toContain("connectionTimeoutMillis: 5_000");
-    expect(store).toContain("idleTimeoutMillis: 30_000");
+    // Perf finding 10: hard cap at 5 regardless of the env knob, with bounded
+    // connect/idle and a server-side statement_timeout like every satellite pool.
+    expect(store).toContain("max: Math.min(ENV.vehicleTrackerDatabasePoolMax, 5)");
+    expect(store).toContain("connectionTimeoutMillis: 3000");
+    expect(store).toContain("idleTimeoutMillis: 30000");
+    expect(store).toContain("statement_timeout");
   });
 
   it("proves the disposable authority rejects altered event replay and direct registry access", () => {
