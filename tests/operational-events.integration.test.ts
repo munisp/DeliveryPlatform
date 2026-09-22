@@ -101,8 +101,11 @@ describe("SwitchOS operational event bridge", () => {
       .mockResolvedValueOnce({ ok: true, text: async () => "" })
       .mockResolvedValueOnce({ ok: true, text: async () => "" });
 
-    const { recordOperationalEvent, getOperationalEventStatus } = await loadModule();
+    const { recordOperationalEvent, drainOperationalEventPublishes, getOperationalEventStatus } = await loadModule();
 
+    // The call returns after the durable persist without waiting on the
+    // broker/search fan-out (perf finding 3); the flags report that each
+    // configured leg was scheduled.
     await expect(
       recordOperationalEvent({
         eventType: "auth.local.login",
@@ -119,6 +122,9 @@ describe("SwitchOS operational event bridge", () => {
       daprPublished: true,
       openSearchIndexed: true,
     });
+
+    // The non-blocking legs still deliver asynchronously.
+    await drainOperationalEventPublishes();
 
     expect(kafkaMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -167,8 +173,10 @@ describe("SwitchOS operational event bridge", () => {
       .mockResolvedValueOnce({ ok: false, status: 500, text: async () => "dapr unavailable" })
       .mockResolvedValueOnce({ ok: false, status: 503, text: async () => "opensearch unavailable" });
 
-    const { recordOperationalEvent } = await loadModule();
+    const { recordOperationalEvent, drainOperationalEventPublishes } = await loadModule();
 
+    // The caller is never blocked by — or exposed to — publish-leg failures:
+    // the promise resolves as soon as the legs are scheduled.
     await expect(
       recordOperationalEvent({
         eventType: "system.health.checked",
@@ -176,9 +184,14 @@ describe("SwitchOS operational event bridge", () => {
         outcome: "info",
       }),
     ).resolves.toMatchObject({
-      kafkaPublished: false,
-      daprPublished: false,
-      openSearchIndexed: false,
+      kafkaPublished: true,
+      daprPublished: true,
+      openSearchIndexed: true,
     });
+
+    // Failing legs settle without rejecting anywhere (warn-only).
+    await expect(drainOperationalEventPublishes()).resolves.toBeUndefined();
+    expect(kafkaProducerMock.send).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });
