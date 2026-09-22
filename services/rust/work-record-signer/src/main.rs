@@ -254,6 +254,44 @@ fn route(config: &AppConfig, request: &mut tiny_http::Request) -> Response<std::
     }
 }
 
+/// Number of worker threads pulling accepted requests off the shared
+/// `Arc<Server>`. tiny_http's accept queue is process-wide, so all workers
+/// call `Server::recv()` on the same server handle and the OS listener
+/// backlog is drained concurrently — a slow or stalled request on one
+/// connection no longer head-of-line blocks every other caller.
+///
+/// NOTE: tiny_http 0.12 exposes no per-connection read/write timeout knobs,
+/// so a single idle-in-body client can still pin ONE worker; with 4 workers
+/// the other three keep serving (previously the whole service stalled).
+const WORKER_THREADS: usize = 4;
+
+/// Runs the recv/respond loop on `workers` threads sharing one `Arc<Server>`.
+/// Returns only when every worker observes a recv error (server dropped).
+fn serve(server: Arc<Server>, config: Arc<AppConfig>, workers: usize) {
+    let mut handles = Vec::with_capacity(workers);
+    for worker_id in 0..workers {
+        let server = Arc::clone(&server);
+        let config = Arc::clone(&config);
+        let handle = std::thread::Builder::new()
+            .name(format!("{SERVICE_NAME}-worker-{worker_id}"))
+            .spawn(move || loop {
+                match server.recv() {
+                    Ok(mut request) => {
+                        let response = route(&config, &mut request);
+                        let _ = request.respond(response);
+                    }
+                    // recv only errors when the listener is gone; stop the worker.
+                    Err(_) => break,
+                }
+            })
+            .expect("failed to spawn signer worker thread");
+        handles.push(handle);
+    }
+    for handle in handles {
+        let _ = handle.join();
+    }
+}
+
 fn main() {
     let config = match load_boot_configuration() {
         Ok(config) => Arc::new(config),
@@ -269,11 +307,11 @@ fn main() {
         eprintln!("{SERVICE_NAME}: failed to bind {addr}: {error}");
         exit(1);
     });
-    eprintln!("{SERVICE_NAME}: listening on {addr} key_id={}", config.key_id);
-    for mut request in server.incoming_requests() {
-        let response = route(&config, &mut request);
-        let _ = request.respond(response);
-    }
+    eprintln!(
+        "{SERVICE_NAME}: listening on {addr} key_id={} workers={WORKER_THREADS}",
+        config.key_id
+    );
+    serve(Arc::new(server), config, WORKER_THREADS);
 }
 
 #[cfg(test)]
@@ -423,5 +461,63 @@ mod tests {
     fn verify_rejects_garbage_inputs_without_panicking() {
         assert!(!verify_payload(b"x", "!!!not-base64!!!", "also-bad"));
         assert!(!verify_payload(b"x", &B64.encode([1u8; 10]), &B64.encode([2u8; 64])));
+    }
+
+    /// Minimal HTTP POST using std::net (tests only — no extra dev-dependency).
+    fn http_post(host_port: &str, path: &str, token: &str, body: &str) -> String {
+        use std::io::{Read, Write};
+        let mut stream = std::net::TcpStream::connect(host_port).expect("connect");
+        write!(
+            stream,
+            "POST {path} HTTP/1.0\r\nHost: {host_port}\r\nX-Internal-Service-Token: {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        )
+        .expect("write");
+        let mut buf = String::new();
+        stream.read_to_string(&mut buf).expect("read");
+        buf
+    }
+
+    #[test]
+    fn worker_pool_serves_parallel_sign_requests() {
+        let config = Arc::new(test_config());
+        let server = Server::http("127.0.0.1:0").unwrap();
+        let addr = server.server_addr();
+        let port = match addr {
+            tiny_http::ListenAddr::IP(socket) => socket.port(),
+            _ => panic!("unexpected listen addr"),
+        };
+        let host_port = format!("127.0.0.1:{port}");
+        // Detached: serve() joins its workers forever; the test process exit
+        // reaps everything.
+        std::thread::spawn(move || serve(Arc::new(server), config, WORKER_THREADS));
+
+        // Two clients arrive at exactly the same time; with the old
+        // single-threaded loop the second would queue behind the first — here
+        // both must complete, each with a valid signature for its own payload.
+        let barrier = Arc::new(std::sync::Barrier::new(2));
+        let mut handles = Vec::new();
+        for payload_id in 1..=2u32 {
+            let barrier = Arc::clone(&barrier);
+            let host_port = host_port.clone();
+            handles.push(std::thread::spawn(move || {
+                barrier.wait();
+                let body = format!("{{\"payload\":\"work-record-{payload_id}\"}}");
+                http_post(&host_port, "/sign", TEST_TOKEN, &body)
+            }));
+        }
+        for (idx, handle) in handles.into_iter().enumerate() {
+            let response = handle.join().expect("client thread panicked");
+            assert!(
+                response.contains("200") && response.contains("\"signature_b64\""),
+                "parallel sign request {} failed: {response}",
+                idx + 1
+            );
+            assert!(
+                response.contains("\"payload_hash\""),
+                "parallel sign request {} missing hash: {response}",
+                idx + 1
+            );
+        }
     }
 }

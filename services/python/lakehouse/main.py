@@ -159,4 +159,13 @@ async def analytics_marketplace_overview(x_internal_service_token: str | None = 
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host=os.getenv("BIND_HOST", "127.0.0.1"), port=int(os.getenv("PORT", "8007")))
+    # UVICORN_WORKERS (default 2): workers > 1 requires the app as an import
+    # string, so pass "main:app" — the service directory is on sys.path when
+    # run as `python main.py` (see services/python/Dockerfile layout).
+    uvicorn.run(
+        "main:app",
+        host=os.getenv("BIND_HOST", "127.0.0.1"),
+        port=int(os.getenv("PORT", "8007")),
+        workers=int(os.getenv("UVICORN_WORKERS", "2")),
+        timeout_keep_alive=30,
+    )

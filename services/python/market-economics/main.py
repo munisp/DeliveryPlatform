@@ -116,8 +116,13 @@ async def latest_report(
 if __name__ == "__main__":
     import uvicorn
 
+    # UVICORN_WORKERS (default 2): workers > 1 requires the app as an import
+    # string, so pass "main:app" — the service directory is on sys.path when
+    # run as `python main.py` (see services/python/Dockerfile layout).
     uvicorn.run(
-        app,
+        "main:app",
         host=os.getenv("BIND_HOST", "127.0.0.1"),
         port=int(os.getenv("PORT", "8110")),
+        workers=int(os.getenv("UVICORN_WORKERS", "2")),
+        timeout_keep_alive=30,
     )
