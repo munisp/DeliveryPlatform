@@ -1,3 +1,4 @@
+import compression from "compression";
 import cookieParser from "cookie-parser";
 import express from "express";
 import { createHTTPHandler } from "@trpc/server/adapters/standalone";
@@ -74,7 +75,7 @@ import {
   revokeOtherOperatorSecuritySessions,
 } from "./operatorAuthStore";
 import { recordOperationalEvent } from "./operationalEvents";
-import { consumeRateLimit, getRateLimiterStatus } from "./rateLimiter";
+import { consumeRateLimit } from "./rateLimiter";
 import {
   getFilteredFinancialAdminSnapshot,
   getFinancialAdminAlerts,
@@ -124,6 +125,7 @@ import {
   listPublicFieldServiceWorkOrders,
 } from "./developerApi";
 import { startDeveloperWebhookDispatcher } from "./developerWebhookDispatcher";
+import { startLakehouseSyncer } from "../lib/lakehouse";
 import { developerOpenApi } from "./developerOpenApi";
 import { ingestMedusaWebhook, MedusaCommerceError } from "./medusaCommerce";
 import { ingestExternalCommerceWebhook } from "./commerceFulfillment";
@@ -429,6 +431,17 @@ app.disable("x-powered-by");
 app.set("trust proxy", 1);
 app.use(cookieParser());
 app.use(httpMetricsMiddleware);
+// Compress JSON/HTML responses (perf finding 4). The role-scoped tracking
+// SSE stream (GET /api/tracking/live/:scope) is excluded: buffering compressed
+// chunks would delay/break server-sent event delivery.
+app.use(
+  compression({
+    filter: (req, res) => {
+      if (/^\/api\/tracking\/live\/[^/]+$/.test(req.path)) return false;
+      return compression.filter(req, res);
+    },
+  }),
+);
 
 app.use((req, res, next) => {
   const request = req as AppRequest;
@@ -477,24 +490,24 @@ app.post(
         rawBody,
         signature: req.header("X-Medusa-Signature"),
       });
-      await recordOperationalEvent({
+      void recordOperationalEvent({
         eventType: "commerce.medusa_event.received",
         route: req.path,
         outcome: "success",
         payload: { eventId, eventType, storeId, eventRecordId: event.id },
-      });
+      }).catch(() => {});
       res.status(202).json({ accepted: true, eventId: event.id });
     } catch (error) {
       const reason =
         error instanceof Error
           ? error.message
           : "medusa_event_ingestion_failed";
-      await recordOperationalEvent({
+      void recordOperationalEvent({
         eventType: "commerce.medusa_event.received",
         route: req.path,
         outcome: "failure",
         payload: { eventId, eventType, storeId, reason },
-      });
+      }).catch(() => {});
       if (
         error instanceof MedusaCommerceError &&
         reason.includes("signature")
@@ -537,21 +550,21 @@ app.post(
         rawBody,
         parsedBody: rawBody.length ? JSON.parse(rawBody.toString("utf8")) : null,
       });
-      await recordOperationalEvent({
+      void recordOperationalEvent({
         eventType: "commerce.external_platform_event.received",
         route: req.path,
         outcome: "success",
         payload: { connectionKey: req.params.connectionKey, eventId, eventType, eventRecordId: event.id },
-      });
+      }).catch(() => {});
       res.status(202).json({ accepted: true, eventId: event.id });
     } catch (error) {
       const reason = error instanceof Error ? error.message : "external_commerce_event_ingestion_failed";
-      await recordOperationalEvent({
+      void recordOperationalEvent({
         eventType: "commerce.external_platform_event.received",
         route: req.path,
         outcome: "failure",
         payload: { connectionKey: req.params.connectionKey, eventId, eventType, reason },
-      });
+      }).catch(() => {});
       if (reason.includes("signature") || reason.includes("not_configured")) {
         res.status(401).json({ error: "external_commerce_signature_invalid" });
       } else if (reason.includes("identity") || reason.includes("payload") || reason.includes("input")) {
@@ -577,28 +590,20 @@ app.use(express.urlencoded({ extended: true, limit: ENV.apiBodyLimit }));
 
 app.get("/metrics", httpMetricsHandler);
 
-app.get("/api/health", async (req, res) => {
-  const discovery = ENV.enableExternalOidc
-    ? await getOidcDiscoveryDocument()
-    : null;
-  const rateLimiter = await getRateLimiterStatus();
-  await recordOperationalEvent({
-    eventType: "system.health.checked",
-    route: req.path,
-    outcome: "info",
-    payload: {
-      externalOidcEnabled: ENV.enableExternalOidc,
-      rateLimiterMode: rateLimiter.mode,
-      medusaMerchantConfigured: ENV.medusaMerchantConfigured,
-    },
-  });
+app.get("/api/health", (_req, res) => {
+  // Pure in-memory liveness status (perf finding 3, /api/health p95 < 10ms):
+  // no operational-event DB write + broker fan-out, no Redis round-trip, no
+  // OIDC discovery fetch. Values are read from already-loaded process config.
   res.json({
     ok: true,
     service: "switchos-operator-dashboard",
     timestamp: new Date().toISOString(),
     externalOidcEnabled: ENV.enableExternalOidc,
-    oidcIssuer: (discovery?.issuer ?? ENV.oidcIssuerUrl) || null,
-    rateLimiter,
+    oidcIssuer: ENV.oidcIssuerUrl || null,
+    rateLimiter: {
+      redisConfigured: Boolean(ENV.redisUrl),
+      mode: ENV.redisUrl ? "redis" : "local-fallback",
+    },
     medusaMerchantConfigured: ENV.medusaMerchantConfigured,
   });
 });
@@ -647,20 +652,20 @@ app.post("/api/auth/signup", rateLimit(5), async (req, res) => {
       name: `${req.body?.name ?? ""}`,
       password: `${req.body?.password ?? ""}`,
     });
-    await recordOperationalEvent({
+    void recordOperationalEvent({
       eventType: "auth.signup.requested",
       route: req.path,
       outcome: "info",
-    });
+    }).catch(() => {});
     res.status(202).json(result);
   } catch (error) {
     const mapped = lifecycleErrorStatus(error);
-    await recordOperationalEvent({
+    void recordOperationalEvent({
       eventType: "auth.signup.requested",
       route: req.path,
       outcome: "failure",
       payload: { code: mapped.code },
-    });
+    }).catch(() => {});
     res.status(mapped.status).json({ error: mapped.code });
   }
 });
@@ -688,13 +693,13 @@ app.post(
         `${req.body?.token ?? ""}`,
       );
       await issueOperatorSession(req, res, operator);
-      await recordOperationalEvent({
+      void recordOperationalEvent({
         eventType: "auth.email_verified",
         actorId: `${operator.id}`,
         actorRole: operator.role,
         route: req.path,
         outcome: "success",
-      });
+      }).catch(() => {});
       res
         .status(200)
         .json({ ok: true, user: operator, redirect: "/onboarding" });
@@ -724,11 +729,11 @@ app.post(
         token: `${req.body?.token ?? ""}`,
         password: `${req.body?.password ?? ""}`,
       });
-      await recordOperationalEvent({
+      void recordOperationalEvent({
         eventType: "auth.password_reset",
         route: req.path,
         outcome: "success",
-      });
+      }).catch(() => {});
       res.status(200).json({ ok: true, redirect: "/portal" });
     } catch (error) {
       const mapped = lifecycleErrorStatus(error);
@@ -745,14 +750,14 @@ app.post("/api/auth/invitations/accept", rateLimit(10), async (req, res) => {
       password: `${req.body?.password ?? ""}`,
     });
     await issueOperatorSession(req, res, result.operator);
-    await recordOperationalEvent({
+    void recordOperationalEvent({
       eventType: "auth.invitation_accepted",
       actorId: `${result.operator.id}`,
       actorRole: result.operator.role,
       tenantId: result.operator.tenantId,
       route: req.path,
       outcome: "success",
-    });
+    }).catch(() => {});
     res
       .status(200)
       .json({ ok: true, user: result.operator, redirect: "/dashboard" });
@@ -792,25 +797,25 @@ app.get("/api/auth/oidc/start", rateLimit(20), async (req, res) => {
       authorization.returnTo,
       transientCookieOptions,
     );
-    await recordOperationalEvent({
+    void recordOperationalEvent({
       eventType: "auth.oidc.start",
       route: req.path,
       outcome: "info",
       payload: {
         returnTo,
       },
-    });
+    }).catch(() => {});
     res.redirect(302, authorization.authorizationUrl);
   } catch (error) {
     console.error("[SwitchOS] Failed to start OIDC login", error);
-    await recordOperationalEvent({
+    void recordOperationalEvent({
       eventType: "auth.oidc.start",
       route: req.path,
       outcome: "failure",
       payload: {
         error: error instanceof Error ? error.message : "unknown_error",
       },
-    });
+    }).catch(() => {});
     res.status(500).json({ error: "oidc_start_failed" });
   }
 });
@@ -852,14 +857,14 @@ app.get("/api/auth/oidc/callback", rateLimit(30), async (req, res) => {
 
     if (!identity?.email) {
       clearOidcFlowCookies(res);
-      await recordOperationalEvent({
+      void recordOperationalEvent({
         eventType: "auth.oidc.callback",
         route: req.path,
         outcome: "failure",
         payload: {
           reason: "identity_missing_email",
         },
-      });
+      }).catch(() => {});
       res.status(403).json({ error: "oidc_identity_missing_email" });
       return;
     }
@@ -874,7 +879,7 @@ app.get("/api/auth/oidc/callback", rateLimit(30), async (req, res) => {
     // session is issued until an existing operator approves the account via
     // operatorOnboarding.approveExternalOperator.
     if (!operator.isActive) {
-      await recordOperationalEvent({
+      void recordOperationalEvent({
         eventType: "auth.oidc.callback",
         actorId: `${operator.id}`,
         actorRole: operator.role,
@@ -885,7 +890,7 @@ app.get("/api/auth/oidc/callback", rateLimit(30), async (req, res) => {
           email: operator.email,
           reason: "operator_pending_approval",
         },
-      });
+      }).catch(() => {});
       clearOidcFlowCookies(res);
       res.status(403).json({ error: "operator_pending_approval" });
       return;
@@ -895,7 +900,7 @@ app.get("/api/auth/oidc/callback", rateLimit(30), async (req, res) => {
       mfaAuthenticated: Boolean(identity.mfaAuthenticated),
       assuranceLevel: identity.assuranceLevel ?? null,
     });
-    await recordOperationalEvent({
+    void recordOperationalEvent({
       eventType: "auth.oidc.callback",
       actorId: `${operator.id}`,
       actorRole: operator.role,
@@ -905,19 +910,19 @@ app.get("/api/auth/oidc/callback", rateLimit(30), async (req, res) => {
       payload: {
         email: operator.email,
       },
-    });
+    }).catch(() => {});
     clearOidcFlowCookies(res);
     res.redirect(302, returnTo);
   } catch (error) {
     console.error("[SwitchOS] Failed to complete OIDC callback", error);
-    await recordOperationalEvent({
+    void recordOperationalEvent({
       eventType: "auth.oidc.callback",
       route: req.path,
       outcome: "failure",
       payload: {
         error: error instanceof Error ? error.message : "unknown_error",
       },
-    });
+    }).catch(() => {});
     clearOidcFlowCookies(res);
     res.status(500).json({ error: "oidc_callback_failed" });
   }
@@ -936,7 +941,7 @@ app.post("/api/auth/login", rateLimit(15), async (req, res) => {
 
     const operator = await authenticateOperator(email, password);
     if (!operator) {
-      await recordOperationalEvent({
+      void recordOperationalEvent({
         eventType: "auth.local.login",
         route: req.path,
         outcome: "failure",
@@ -944,13 +949,13 @@ app.post("/api/auth/login", rateLimit(15), async (req, res) => {
           email,
           reason: "invalid_credentials",
         },
-      });
+      }).catch(() => {});
       res.status(401).json({ error: "invalid_credentials" });
       return;
     }
 
     await issueOperatorSession(req, res, operator);
-    await recordOperationalEvent({
+    void recordOperationalEvent({
       eventType: "auth.local.login",
       actorId: `${operator.id}`,
       actorRole: operator.role,
@@ -960,18 +965,18 @@ app.post("/api/auth/login", rateLimit(15), async (req, res) => {
       payload: {
         email: operator.email,
       },
-    });
+    }).catch(() => {});
     res.status(200).json({ ok: true, user: operator });
   } catch (error) {
     console.error("[SwitchOS] Operator login failed", error);
-    await recordOperationalEvent({
+    void recordOperationalEvent({
       eventType: "auth.local.login",
       route: req.path,
       outcome: "failure",
       payload: {
         error: error instanceof Error ? error.message : "unknown_error",
       },
-    });
+    }).catch(() => {});
     res.status(500).json({ error: "login_failed" });
   }
 });
@@ -1004,7 +1009,7 @@ app.post("/api/auth/logout", rateLimit(20), async (req, res) => {
         }
       }
     }
-    await recordOperationalEvent({
+    void recordOperationalEvent({
       eventType: "auth.logout",
       actorId: session?.user
         ? `${session.user.operatorCredentialId ?? session.user.id}`
@@ -1013,7 +1018,7 @@ app.post("/api/auth/logout", rateLimit(20), async (req, res) => {
       tenantId: session?.user?.tenantId ?? null,
       route: req.path,
       outcome: "info",
-    });
+    }).catch(() => {});
   } catch (error) {
     console.warn("[SwitchOS] Session revocation on logout failed", error);
   }
@@ -1333,18 +1338,18 @@ async function operationsRoute(
   if (!actor) return;
   try {
     const result = await operation(actor);
-    await recordOperationalEvent({
+    void recordOperationalEvent({
       eventType: "operations.api",
       actorId: `${actor.id}`,
       actorRole: actor.role,
       tenantId: actor.tenantId,
       route: req.path,
       outcome: "success",
-    });
+    }).catch(() => {});
     res.status(200).json(result);
   } catch (error) {
     const mapped = logisticsErrorStatus(error);
-    await recordOperationalEvent({
+    void recordOperationalEvent({
       eventType: "operations.api",
       actorId: `${actor.id}`,
       actorRole: actor.role,
@@ -1352,7 +1357,7 @@ async function operationsRoute(
       route: req.path,
       outcome: "failure",
       payload: { code: mapped.code },
-    });
+    }).catch(() => {});
     res.status(mapped.status).json({ error: mapped.code });
   }
 }
@@ -1504,7 +1509,7 @@ app.post(
         });
         return;
       }
-      await recordOperationalEvent({
+      void recordOperationalEvent({
         eventType: "operations.route_plan.created",
         actorId: `${actor.id}`,
         actorRole: actor.role,
@@ -1512,7 +1517,7 @@ app.post(
         route: req.path,
         outcome: "success",
         payload: { workOrderId },
-      });
+      }).catch(() => {});
       res.status(201).json(payload);
     } catch (error) {
       const mapped = logisticsErrorStatus(error);
@@ -1593,14 +1598,14 @@ app.post(
         `/evidence/${encodeURIComponent(req.params.id)}/verify`,
         "POST",
       );
-      await recordOperationalEvent({
+      void recordOperationalEvent({
         eventType: "compliance.evidence.verify",
         actorId: `${actor.id}`,
         actorRole: actor.role,
         tenantId: actor.tenantId,
         route: req.path,
         outcome: response.ok ? "success" : "failure",
-      });
+      }).catch(() => {});
       res.status(response.status >= 500 ? 503 : response.status).json(body);
     } catch {
       res.status(503).json({ error: "compliance_service_unavailable" });
@@ -1625,14 +1630,14 @@ app.post(
         "POST",
         payload,
       );
-      await recordOperationalEvent({
+      void recordOperationalEvent({
         eventType: "compliance.evidence.decision",
         actorId: `${actor.id}`,
         actorRole: actor.role,
         tenantId: actor.tenantId,
         route: req.path,
         outcome: response.ok ? "success" : "failure",
-      });
+      }).catch(() => {});
       res.status(response.status >= 500 ? 503 : response.status).json(body);
     } catch {
       res.status(503).json({ error: "compliance_service_unavailable" });
@@ -1676,14 +1681,14 @@ app.post("/api/compliance/reconcile-expiry", rateLimit(5), async (req, res) => {
       "/reconcile-expiry",
       "POST",
     );
-    await recordOperationalEvent({
+    void recordOperationalEvent({
       eventType: "compliance.expiry.reconciled",
       actorId: `${actor.id}`,
       actorRole: actor.role,
       tenantId: actor.tenantId,
       route: req.path,
       outcome: response.ok ? "success" : "failure",
-    });
+    }).catch(() => {});
     res.status(response.status >= 500 ? 503 : response.status).json(body);
   } catch {
     res.status(503).json({ error: "compliance_service_unavailable" });
@@ -1723,7 +1728,7 @@ app.post("/api/integrations/clients", rateLimit(8), async (req, res) => {
       callbackSecretRef: req.body?.callbackSecretRef,
       expiresAt: req.body?.expiresAt,
     });
-    await recordOperationalEvent({
+    void recordOperationalEvent({
       eventType: "integration.client.created",
       actorId: `${actor.id}`,
       actorRole: actor.role,
@@ -1734,7 +1739,7 @@ app.post("/api/integrations/clients", rateLimit(8), async (req, res) => {
         clientId: result.client.id,
         credentialPrefix: result.credential.credential_prefix,
       },
-    });
+    }).catch(() => {});
     res.status(201).json(result);
   } catch (error) {
     const mapped = partnerErrorStatus(error);
@@ -1749,7 +1754,7 @@ app.post(
     if (!actor) return;
     try {
       const result = await revokePartnerCredential(actor, req.params.id);
-      await recordOperationalEvent({
+      void recordOperationalEvent({
         eventType: "integration.credential.revoked",
         actorId: `${actor.id}`,
         actorRole: actor.role,
@@ -1757,7 +1762,7 @@ app.post(
         route: req.path,
         outcome: "success",
         payload: { credentialId: result.id },
-      });
+      }).catch(() => {});
       res.status(200).json(result);
     } catch (error) {
       const mapped = partnerErrorStatus(error);
@@ -1894,18 +1899,18 @@ async function financialOperationsRoute(
   if (!actor) return;
   try {
     const result = await operation(actor);
-    await recordOperationalEvent({
+    void recordOperationalEvent({
       eventType: "financial_operations.api",
       actorId: `${actor.id}`,
       actorRole: actor.role,
       tenantId: actor.tenantId,
       route: req.path,
       outcome: "success",
-    });
+    }).catch(() => {});
     res.status(status).json(result);
   } catch (error) {
     const mapped = financialOperationsErrorStatus(error);
-    await recordOperationalEvent({
+    void recordOperationalEvent({
       eventType: "financial_operations.api",
       actorId: `${actor.id}`,
       actorRole: actor.role,
@@ -1913,7 +1918,7 @@ async function financialOperationsRoute(
       route: req.path,
       outcome: "failure",
       payload: { code: mapped.code },
-    });
+    }).catch(() => {});
     res.status(mapped.status).json({ error: mapped.code });
   }
 }
@@ -2253,7 +2258,7 @@ app.post(
         signal: AbortSignal.timeout(10_000),
       });
       if (!response.ok) throw new Error("executor_unavailable");
-      await recordOperationalEvent({
+      void recordOperationalEvent({
         eventType: "quality.playwright.requested",
         actorId: `${user.id}`,
         actorRole: user.role ?? null,
@@ -2261,7 +2266,7 @@ app.post(
         route: req.path,
         outcome: "success",
         payload: {},
-      });
+      }).catch(() => {});
       res.status(202).json({ status: "submitted" });
     } catch {
       res.status(503).json({ error: "playwright_executor_unavailable" });
@@ -2326,7 +2331,7 @@ app.post(
         investigationDigestHex,
         idempotencyKey,
       });
-      await recordOperationalEvent({
+      void recordOperationalEvent({
         eventType: "finance.dead_letter.case.opened",
         actorId: `${user.id}`,
         actorRole: user.role ?? null,
@@ -2334,7 +2339,7 @@ app.post(
         route: req.path,
         outcome: "success",
         payload: { outboxId, caseId: result.caseId },
-      });
+      }).catch(() => {});
       res.status(201).json(result);
     } catch (error) {
       console.error(
@@ -2412,7 +2417,7 @@ app.post(
         replacementExpiration,
         idempotencyKey,
       });
-      await recordOperationalEvent({
+      void recordOperationalEvent({
         eventType: "finance.dead_letter.remediation.requested",
         actorId: `${user.id}`,
         actorRole: user.role ?? null,
@@ -2420,7 +2425,7 @@ app.post(
         route: req.path,
         outcome: "success",
         payload: { caseId, ledgerDisposition, replacementTransferId },
-      });
+      }).catch(() => {});
       res.status(202).json(result);
     } catch (error) {
       console.error(
@@ -2459,7 +2464,7 @@ app.post(
         approvalReason,
         idempotencyKey,
       });
-      await recordOperationalEvent({
+      void recordOperationalEvent({
         eventType: "finance.dead_letter.remediation.approved",
         actorId: `${user.id}`,
         actorRole: user.role ?? null,
@@ -2471,7 +2476,7 @@ app.post(
           remediationOutboxId: result.remediationOutboxId,
           replacementTransferId: result.replacementTransferId,
         },
-      });
+      }).catch(() => {});
       res.status(201).json(result);
     } catch (error) {
       console.error(
@@ -2552,7 +2557,7 @@ app.post(
         reconciliationDigestHex,
         idempotencyKey,
       });
-      await recordOperationalEvent({
+      void recordOperationalEvent({
         eventType: "finance.dead_letter.head_resolution.requested",
         actorId: `${user.id}`,
         actorRole: user.role ?? null,
@@ -2560,7 +2565,7 @@ app.post(
         route: req.path,
         outcome: "success",
         payload: { caseId, resolutionDisposition, resolutionId: result.resolutionId },
-      });
+      }).catch(() => {});
       res.status(202).json(result);
     } catch (error) {
       console.error("[SwitchOS] Unable to request financial dead-letter head resolution", error);
@@ -2594,7 +2599,7 @@ app.post(
         reason,
         idempotencyKey,
       });
-      await recordOperationalEvent({
+      void recordOperationalEvent({
         eventType: "finance.dead_letter.head_resolution.approved",
         actorId: `${user.id}`,
         actorRole: user.role ?? null,
@@ -2606,7 +2611,7 @@ app.post(
           resolutionId: result.resolutionId,
           resolutionDisposition: result.resolutionDisposition,
         },
-      });
+      }).catch(() => {});
       res.status(201).json(result);
     } catch (error) {
       console.error("[SwitchOS] Unable to approve financial dead-letter head resolution", error);
@@ -2640,7 +2645,7 @@ app.post(
         reason,
         idempotencyKey,
       });
-      await recordOperationalEvent({
+      void recordOperationalEvent({
         eventType: "finance.dead_letter.head_resolution.rejected",
         actorId: `${user.id}`,
         actorRole: user.role ?? null,
@@ -2648,7 +2653,7 @@ app.post(
         route: req.path,
         outcome: "success",
         payload: { caseId, resolutionId: result.resolutionId },
-      });
+      }).catch(() => {});
       res.status(200).json(result);
     } catch (error) {
       console.error("[SwitchOS] Unable to reject financial dead-letter head resolution", error);
@@ -2682,7 +2687,7 @@ app.post(
         reason,
         idempotencyKey,
       });
-      await recordOperationalEvent({
+      void recordOperationalEvent({
         eventType: "finance.dead_letter.remediation.rejected",
         actorId: `${user.id}`,
         actorRole: user.role ?? null,
@@ -2690,7 +2695,7 @@ app.post(
         route: req.path,
         outcome: "success",
         payload: { caseId },
-      });
+      }).catch(() => {});
       res.status(200).json(result);
     } catch (error) {
       console.error("[SwitchOS] Unable to reject financial remediation", error);
@@ -2785,7 +2790,7 @@ app.post("/api/admin/finance/settings", rateLimit(5), async (req, res) => {
       healthRetentionDays,
       actorId: Number(user.id),
     });
-    await recordOperationalEvent({
+    void recordOperationalEvent({
       eventType: "finance.admin.settings.updated",
       actorId: `${user.id}`,
       actorRole: user.role ?? null,
@@ -2799,7 +2804,7 @@ app.post("/api/admin/finance/settings", rateLimit(5), async (req, res) => {
         approvedHostCount: approvedWebhookHosts.length,
         healthRetentionDays,
       },
-    });
+    }).catch(() => {});
     res.status(200).json({ settings });
   } catch {
     res.status(503).json({ error: "financial_admin_settings_unavailable" });
@@ -2916,7 +2921,7 @@ app.post(
           escalationDeadline,
           actorId: Number(user.id),
         });
-        await recordOperationalEvent({
+        void recordOperationalEvent({
           eventType: "finance.alert.assign",
           actorId: `${user.id}`,
           actorRole: user.role ?? null,
@@ -2929,7 +2934,7 @@ app.post(
             assignedTo,
             escalationDeadline,
           },
-        });
+        }).catch(() => {});
         res.status(200).json({
           ok: true,
           alertId,
@@ -2939,7 +2944,7 @@ app.post(
         });
         return;
       }
-      await recordOperationalEvent({
+      void recordOperationalEvent({
         eventType: "finance.alert.action",
         actorId: `${user.id}`,
         actorRole: user.role ?? null,
@@ -2947,7 +2952,7 @@ app.post(
         route: req.path,
         outcome: "success",
         payload: { alertId, action },
-      });
+      }).catch(() => {});
       res.status(200).json({ ok: true });
     } catch (error) {
       console.error(
@@ -3102,7 +3107,7 @@ app.get("/api/admin/finance/report.csv", rateLimit(10), async (req, res) => {
           .join(","),
       ),
     ];
-    await recordOperationalEvent({
+    void recordOperationalEvent({
       eventType: "finance.report.exported",
       actorId: `${user.id}`,
       actorRole: user.role ?? null,
@@ -3110,7 +3115,7 @@ app.get("/api/admin/finance/report.csv", rateLimit(10), async (req, res) => {
       route: req.path,
       outcome: "success",
       payload: { rowCount: rows.length - 1 },
-    });
+    }).catch(() => {});
     res.setHeader("Content-Type", "text/csv; charset=utf-8");
     res.setHeader(
       "Content-Disposition",
@@ -3171,7 +3176,7 @@ app.post(
         },
       );
       if (!response.ok) throw new Error(`executor returned ${response.status}`);
-      await recordOperationalEvent({
+      void recordOperationalEvent({
         eventType: "finance.simulation.requested",
         actorId: `${user.id}`,
         actorRole: user.role ?? null,
@@ -3179,7 +3184,7 @@ app.post(
         route: req.path,
         outcome: "success",
         payload: { scenario },
-      });
+      }).catch(() => {});
       res.status(202).json({ scenario, status: "submitted" });
     } catch (error) {
       console.error(
@@ -3227,22 +3232,22 @@ app.post(
         idempotencyKey,
         ...parseDeveloperWorkOrder(req.body),
       });
-      await recordOperationalEvent({
+      void recordOperationalEvent({
         eventType: "developer.field_service.work_order.created",
         route: req.path,
         outcome: "success",
         payload: { workOrderId: outcome.body.id, status: outcome.status },
-      });
+      }).catch(() => {});
       res.status(outcome.status).json(outcome.body);
     } catch (error) {
-      await recordOperationalEvent({
+      void recordOperationalEvent({
         eventType: "developer.field_service.work_order.created",
         route: req.path,
         outcome: "failure",
         payload: {
           error: error instanceof Error ? error.message : "unknown_error",
         },
-      });
+      }).catch(() => {});
       developerApiFailure(res, error);
     }
   },
@@ -3275,22 +3280,22 @@ app.get(
         limit,
         updatedBefore,
       });
-      await recordOperationalEvent({
+      void recordOperationalEvent({
         eventType: "developer.field_service.work_order.list",
         route: req.path,
         outcome: "success",
         payload: { count: workOrders.length },
-      });
+      }).catch(() => {});
       res.status(200).json({ workOrders });
     } catch (error) {
-      await recordOperationalEvent({
+      void recordOperationalEvent({
         eventType: "developer.field_service.work_order.list",
         route: req.path,
         outcome: "failure",
         payload: {
           error: error instanceof Error ? error.message : "unknown_error",
         },
-      });
+      }).catch(() => {});
       developerApiFailure(res, error);
     }
   },
@@ -3312,15 +3317,15 @@ app.get(
         rawApiKey,
         workOrderId,
       });
-      await recordOperationalEvent({
+      void recordOperationalEvent({
         eventType: "developer.field_service.work_order.read",
         route: req.path,
         outcome: "success",
         payload: { workOrderId },
-      });
+      }).catch(() => {});
       res.status(200).json(workOrder);
     } catch (error) {
-      await recordOperationalEvent({
+      void recordOperationalEvent({
         eventType: "developer.field_service.work_order.read",
         route: req.path,
         outcome: "failure",
@@ -3328,7 +3333,7 @@ app.get(
           workOrderId,
           error: error instanceof Error ? error.message : "unknown_error",
         },
-      });
+      }).catch(() => {});
       developerApiFailure(res, error);
     }
   },
@@ -3398,14 +3403,14 @@ app.delete(
       }
       if (user.sessionId === sessionId)
         res.clearCookie(COOKIE_NAME, getCookieOptions());
-      await recordOperationalEvent({
+      void recordOperationalEvent({
         eventType: "auth.security.session_revoked",
         actorId: `${user.id}`,
         actorRole: user.role ?? null,
         tenantId: user.tenantId ?? null,
         route: req.path,
         outcome: "success",
-      });
+      }).catch(() => {});
       res.status(200).json({
         ok: true,
         currentSessionRevoked: user.sessionId === sessionId,
@@ -3459,7 +3464,7 @@ app.get(
             .join(","),
         ),
       ].join("\n");
-      await recordOperationalEvent({
+      void recordOperationalEvent({
         eventType: "auth.security.login_activity_exported",
         actorId: `${user.id}`,
         actorRole: user.role ?? null,
@@ -3467,7 +3472,7 @@ app.get(
         route: req.path,
         outcome: "success",
         payload: { rowCount: activity.length },
-      });
+      }).catch(() => {});
       res.setHeader("Content-Type", "text/csv; charset=utf-8");
       res.setHeader(
         "Content-Disposition",
@@ -3497,7 +3502,7 @@ app.post(
         operatorCredentialIdOf(user),
         user.sessionId,
       );
-      await recordOperationalEvent({
+      void recordOperationalEvent({
         eventType: "auth.security.other_sessions_revoked",
         actorId: `${user.id}`,
         actorRole: user.role ?? null,
@@ -3505,7 +3510,7 @@ app.post(
         route: req.path,
         outcome: "success",
         payload: { revokedSessions },
-      });
+      }).catch(() => {});
       res.status(200).json({ ok: true, revokedSessions });
     } catch (error) {
       console.error(
@@ -3578,14 +3583,14 @@ app.post(
         mfaAuthenticated: Boolean(user.mfaAuthenticated),
         assuranceLevel: user.assuranceLevel ?? null,
       });
-      await recordOperationalEvent({
+      void recordOperationalEvent({
         eventType: "auth.organization_created",
         actorId: `${user.id}`,
         actorRole: user.role,
         tenantId: result.tenantId,
         route: req.path,
         outcome: "success",
-      });
+      }).catch(() => {});
       res
         .status(201)
         .json({ ok: true, ...result, redirect: "/onboarding?step=branding" });
@@ -3608,14 +3613,14 @@ app.post("/api/auth/invitations", rateLimit(20), async (req, res) => {
         | "operator"
         | "viewer",
     });
-    await recordOperationalEvent({
+    void recordOperationalEvent({
       eventType: "auth.invitation_created",
       actorId: `${user.id}`,
       actorRole: user.role,
       tenantId: user.tenantId,
       route: req.path,
       outcome: "success",
-    });
+    }).catch(() => {});
     res.status(202).json(result);
   } catch (error) {
     const mapped = lifecycleErrorStatus(error);
@@ -3662,7 +3667,7 @@ app.get(
         endDate,
         columns,
       });
-      await recordOperationalEvent({
+      void recordOperationalEvent({
         eventType: "auth.invitation_activity_exported",
         actorId: `${user.id}`,
         actorRole: user.role,
@@ -3676,7 +3681,7 @@ app.get(
           columns,
           rowCount: exported.rowCount,
         },
-      });
+      }).catch(() => {});
       res.setHeader("Content-Type", "text/csv; charset=utf-8");
       res.setHeader(
         "Content-Disposition",
@@ -3704,14 +3709,14 @@ app.post(
         inviterId: operatorCredentialIdOf(user),
         invitationId: `${req.params.id ?? ""}`,
       });
-      await recordOperationalEvent({
+      void recordOperationalEvent({
         eventType: "auth.invitation_resent",
         actorId: `${user.id}`,
         actorRole: user.role,
         tenantId: user.tenantId,
         route: req.path,
         outcome: "success",
-      });
+      }).catch(() => {});
       res.status(202).json(result);
     } catch (error) {
       const mapped = lifecycleErrorStatus(error);
@@ -3733,14 +3738,14 @@ app.post(
         inviterId: operatorCredentialIdOf(user),
         invitationId: `${req.params.id ?? ""}`,
       });
-      await recordOperationalEvent({
+      void recordOperationalEvent({
         eventType: "auth.invitation_revoked",
         actorId: `${user.id}`,
         actorRole: user.role,
         tenantId: user.tenantId,
         route: req.path,
         outcome: "success",
-      });
+      }).catch(() => {});
       res.status(200).json(result);
     } catch (error) {
       const mapped = lifecycleErrorStatus(error);
@@ -3766,7 +3771,7 @@ app.post(
             )
           : [],
       });
-      await recordOperationalEvent({
+      void recordOperationalEvent({
         eventType: "auth.invitations_bulk_resent",
         actorId: `${user.id}`,
         actorRole: user.role,
@@ -3778,7 +3783,7 @@ app.post(
           succeeded: result.succeeded.length,
           failed: result.failed.length,
         },
-      });
+      }).catch(() => {});
       res.status(202).json(result);
     } catch (error) {
       const mapped = lifecycleErrorStatus(error);
@@ -3804,7 +3809,7 @@ app.post(
             )
           : [],
       });
-      await recordOperationalEvent({
+      void recordOperationalEvent({
         eventType: "auth.invitations_bulk_revoked",
         actorId: `${user.id}`,
         actorRole: user.role,
@@ -3816,7 +3821,7 @@ app.post(
           succeeded: result.succeeded.length,
           failed: result.failed.length,
         },
-      });
+      }).catch(() => {});
       res.status(200).json(result);
     } catch (error) {
       const mapped = lifecycleErrorStatus(error);
@@ -3844,7 +3849,7 @@ app.post(
         memberIds,
         role: `${req.body?.role ?? ""}` as "admin" | "operator" | "viewer",
       });
-      await recordOperationalEvent({
+      void recordOperationalEvent({
         eventType: "auth.members_bulk_role_changed",
         actorId: `${user.id}`,
         actorRole: user.role,
@@ -3852,7 +3857,7 @@ app.post(
         route: req.path,
         outcome: "success",
         payload: result,
-      });
+      }).catch(() => {});
       res.status(200).json(result);
     } catch (error) {
       const mapped = lifecycleErrorStatus(error);
@@ -4000,7 +4005,7 @@ app.get(
         startDate,
         endDate,
       });
-      await recordOperationalEvent({
+      void recordOperationalEvent({
         eventType: "auth.notification_delivery_history_exported",
         actorId: `${user.id}`,
         actorRole: user.role,
@@ -4008,7 +4013,7 @@ app.get(
         route: req.path,
         outcome: "success",
         payload: { status, startDate, endDate, rowCount: exported.rowCount },
-      });
+      }).catch(() => {});
       res.setHeader("Content-Type", "text/csv; charset=utf-8");
       res.setHeader(
         "Content-Disposition",
@@ -4056,7 +4061,7 @@ app.post(
         operatorId: operatorCredentialIdOf(user),
         retentionDays: Number(req.body?.retentionDays),
       });
-      await recordOperationalEvent({
+      void recordOperationalEvent({
         eventType: "auth.notification_delivery_retention_updated",
         actorId: `${user.id}`,
         actorRole: user.role,
@@ -4067,7 +4072,7 @@ app.post(
           retentionDays: retention.retentionDays,
           pruned: retention.pruned,
         },
-      });
+      }).catch(() => {});
       res.status(200).json(retention);
     } catch (error) {
       const mapped = lifecycleErrorStatus(error);
@@ -4092,14 +4097,14 @@ app.post(
           req.body?.presetOwnershipTransferEmail,
         ),
       });
-      await recordOperationalEvent({
+      void recordOperationalEvent({
         eventType: "auth.tenant_admin_notification_preferences_updated",
         actorId: `${user.id}`,
         actorRole: user.role,
         tenantId: user.tenantId,
         route: req.path,
         outcome: "success",
-      });
+      }).catch(() => {});
       res.status(200).json(preferences);
     } catch (error) {
       const mapped = lifecycleErrorStatus(error);
@@ -4193,7 +4198,7 @@ app.post(
         presetId: `${req.params.id ?? ""}`,
         shared: Boolean(req.body?.shared),
       });
-      await recordOperationalEvent({
+      void recordOperationalEvent({
         eventType: result.organizationShared
           ? "auth.tenant_branding_preset_shared"
           : "auth.tenant_branding_preset_unshared",
@@ -4202,7 +4207,7 @@ app.post(
         tenantId: user.tenantId,
         route: req.path,
         outcome: "success",
-      });
+      }).catch(() => {});
       res.status(200).json(result);
     } catch (error) {
       const mapped = lifecycleErrorStatus(error);
@@ -4225,7 +4230,7 @@ app.post(
         presetId: `${req.params.id ?? ""}`,
         recipientEmail: `${req.body?.recipientEmail ?? ""}`,
       });
-      await recordOperationalEvent({
+      void recordOperationalEvent({
         eventType: "auth.tenant_branding_preset_ownership_transferred",
         actorId: `${user.id}`,
         actorRole: user.role,
@@ -4236,7 +4241,7 @@ app.post(
           presetId: result.id,
           ownerOperatorId: result.ownerOperatorId,
         },
-      });
+      }).catch(() => {});
       res.status(200).json(result);
     } catch (error) {
       const mapped = lifecycleErrorStatus(error);
@@ -4280,14 +4285,14 @@ app.post("/api/auth/tenant-branding", rateLimit(20), async (req, res) => {
       primaryColor: `${req.body?.primaryColor ?? ""}`,
       accentColor: `${req.body?.accentColor ?? ""}`,
     });
-    await recordOperationalEvent({
+    void recordOperationalEvent({
       eventType: "auth.tenant_branding_updated",
       actorId: `${user.id}`,
       actorRole: user.role,
       tenantId: user.tenantId,
       route: req.path,
       outcome: "success",
-    });
+    }).catch(() => {});
     res.status(200).json(branding);
   } catch (error) {
     const mapped = lifecycleErrorStatus(error);
@@ -4457,13 +4462,19 @@ const stopDeveloperWebhookDispatcher = startDeveloperWebhookDispatcher();
 const stopVehicleTrackerProviderConsumers = ENV.vehicleTrackerConsumerEmbedded
   ? startVehicleTrackerProviderConsumers({ workerIdPrefix: "central-app" })
   : () => undefined;
+// Background Postgres->lakehouse sync (perf finding 1): analytics reads are
+// decoupled from syncing; this overlap-guarded interval syncer keeps the
+// lakehouse warm instead.
+const stopLakehouseSyncer = startLakehouseSyncer();
 process.once("SIGTERM", () => {
   stopDeveloperWebhookDispatcher();
   stopVehicleTrackerProviderConsumers();
+  stopLakehouseSyncer();
 });
 process.once("SIGINT", () => {
   stopDeveloperWebhookDispatcher();
   stopVehicleTrackerProviderConsumers();
+  stopLakehouseSyncer();
 });
 
 if (ENV.isProduction) {
