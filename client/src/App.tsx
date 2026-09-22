@@ -1,48 +1,35 @@
-import React, {
-  ComponentProps,
-  ComponentType,
-  FormEvent,
-  Suspense,
-  lazy,
-  useMemo,
-  useState,
-} from "react";
+import React, { FormEvent, useMemo, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link, Redirect, Route, Switch } from "wouter";
-import { RefreshCw } from "lucide-react";
 
 import DashboardLayout from "@/components/DashboardLayout";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 
-/**
- * Perf wave W4 (audit finding 15): every workspace page is code-split behind
- * React.lazy and each route renders inside its own <Suspense> boundary, so
- * the initial bundle only carries the shell (DashboardLayout stays eager).
- */
-function RouteLoadingFallback() {
+function RouteFallback() {
   return (
     <div
       className="flex min-h-[40vh] items-center justify-center"
       role="status"
-      aria-label="Loading workspace"
+      aria-label="Loading page"
     >
-      <RefreshCw className="h-6 w-6 animate-spin text-cyan-400" />
-      <span className="sr-only">Loading workspace…</span>
+      <div className="h-8 w-8 animate-spin rounded-full border-2 border-cyan-400/30 border-t-cyan-400" />
     </div>
   );
 }
 
-function lazyRoute<T extends ComponentType<any>>(
-  factory: () => Promise<{ default: T }>,
-): ComponentType<ComponentProps<T>> {
-  const Component = lazy(factory);
-  return function LazyRouteComponent(props: ComponentProps<T>) {
+function lazyRoute(
+  factory: () => Promise<{ default: React.ComponentType<any> }>,
+) {
+  const LazyPage = React.lazy(factory);
+  function LazyRoute(props: any) {
     return (
-      <Suspense fallback={<RouteLoadingFallback />}>
-        <Component {...props} />
-      </Suspense>
+      <React.Suspense fallback={<RouteFallback />}>
+        <LazyPage {...props} />
+      </React.Suspense>
     );
-  };
+  }
+  LazyRoute.displayName = "LazyRoute";
+  return LazyRoute;
 }
 
 const Analytics = lazyRoute(() => import("@/pages/Analytics"));
@@ -99,7 +86,9 @@ const WorkerCouncil = lazyRoute(() => import("@/pages/WorkerCouncil"));
 const DeactivationAppeals = lazyRoute(
   () => import("@/pages/DeactivationAppeals"),
 );
-const DriverSafetyCenter = lazyRoute(() => import("@/pages/DriverSafetyCenter"));
+const DriverSafetyCenter = lazyRoute(
+  () => import("@/pages/DriverSafetyCenter"),
+);
 const MarketEconomics = lazyRoute(() => import("@/pages/MarketEconomics"));
 const ExperimentConsole = lazyRoute(() => import("@/pages/ExperimentConsole"));
 const MerchantAdsStudio = lazyRoute(() => import("@/pages/MerchantAdsStudio"));
@@ -115,7 +104,9 @@ const ConsumerOrderDetail = lazyRoute(
 );
 const ConsumerSupport = lazyRoute(() => import("@/pages/ConsumerSupport"));
 const ConsumerWallet = lazyRoute(() => import("@/pages/ConsumerWallet"));
-const TenantAdminActions = lazyRoute(() => import("@/pages/TenantAdminActions"));
+const TenantAdminActions = lazyRoute(
+  () => import("@/pages/TenantAdminActions"),
+);
 const SecurityProfilePage = lazyRoute(() => import("@/pages/SecurityProfile"));
 const SecurityBlockedPage = lazyRoute(() =>
   import("@/pages/SecurityProfile").then((module) => ({
@@ -140,6 +131,26 @@ const FinancialTopologyPage = lazyRoute(() =>
     default: module.FinancialTopologyPage,
   })),
 );
+const InvitationAcceptancePage = lazyRoute(() =>
+  import("@/pages/AccountLifecycle").then((module) => ({
+    default: module.InvitationAcceptancePage,
+  })),
+);
+const InviteTeamPage = lazyRoute(() =>
+  import("@/pages/AccountLifecycle").then((module) => ({
+    default: module.InviteTeamPage,
+  })),
+);
+const OnboardingPage = lazyRoute(() =>
+  import("@/pages/AccountLifecycle").then((module) => ({
+    default: module.OnboardingPage,
+  })),
+);
+const PasswordResetPage = lazyRoute(() =>
+  import("@/pages/AccountLifecycle").then((module) => ({
+    default: module.PasswordResetPage,
+  })),
+);
 const SignupPage = lazyRoute(() =>
   import("@/pages/AccountLifecycle").then((module) => ({
     default: module.SignupPage,
@@ -148,26 +159,6 @@ const SignupPage = lazyRoute(() =>
 const VerifyEmailPage = lazyRoute(() =>
   import("@/pages/AccountLifecycle").then((module) => ({
     default: module.VerifyEmailPage,
-  })),
-);
-const PasswordResetPage = lazyRoute(() =>
-  import("@/pages/AccountLifecycle").then((module) => ({
-    default: module.PasswordResetPage,
-  })),
-);
-const InvitationAcceptancePage = lazyRoute(() =>
-  import("@/pages/AccountLifecycle").then((module) => ({
-    default: module.InvitationAcceptancePage,
-  })),
-);
-const OnboardingPage = lazyRoute(() =>
-  import("@/pages/AccountLifecycle").then((module) => ({
-    default: module.OnboardingPage,
-  })),
-);
-const InviteTeamPage = lazyRoute(() =>
-  import("@/pages/AccountLifecycle").then((module) => ({
-    default: module.InviteTeamPage,
   })),
 );
 import {
