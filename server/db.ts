@@ -3405,7 +3405,7 @@ export async function getConsumerMarketplaceSummary(limit = 8) {
       recent_orders: recentOrdersResult.rows.length,
       active_memberships: Number(membershipStats.active_memberships || 0),
       avg_membership_price: Number(Number(membershipStats.avg_membership_price || 0).toFixed(2)),
-      membership_savings_ytd: Number(Number(membershipStats.membership_savings_ytd || 0).toFixed(2)),
+      membership_savings_ytd: Number(Number(membershipStats.savings_ytd || 0).toFixed(2)),
       review_count: Number(reviewStats.review_count || 0),
       average_review_rating: Number(Number(reviewStats.avg_rating || 0).toFixed(2)),
     },
