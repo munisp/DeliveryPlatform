@@ -61,20 +61,23 @@ export async function listConsultations(input?: {
   status?: string;
 }): Promise<Array<ConsultationRow & { response_count: number }>> {
   const pool = await getPool();
+  // Perf audit finding 19: response counts come from a single LEFT JOIN +
+  // GROUP BY (grouping on the PK covers c.*) instead of a correlated count
+  // subquery per row, so the list is one index-supported pass regardless of
+  // the LIMIT.
   const base = `
-    SELECT c.*,
-           (SELECT count(*)::int FROM public.consultation_responses r
-             WHERE r.consultation_id = c.id) AS response_count
-    FROM public.consultation_objects c`;
+    SELECT c.*, count(r.id)::int AS response_count
+    FROM public.consultation_objects c
+    LEFT JOIN public.consultation_responses r ON r.consultation_id = c.id`;
   if (input?.status) {
     const result = await pool.query<ConsultationRow & { response_count: number }>(
-      `${base} WHERE c.status = $1 ORDER BY c.created_at DESC LIMIT 200`,
+      `${base} WHERE c.status = $1 GROUP BY c.id ORDER BY c.created_at DESC LIMIT 200`,
       [input.status],
     );
     return result.rows;
   }
   const result = await pool.query<ConsultationRow & { response_count: number }>(
-    `${base} ORDER BY c.created_at DESC LIMIT 200`,
+    `${base} GROUP BY c.id ORDER BY c.created_at DESC LIMIT 200`,
   );
   return result.rows;
 }

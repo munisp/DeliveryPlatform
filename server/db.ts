@@ -79,6 +79,11 @@ export async function getDb() {
         max: 20,
         idleTimeoutMillis: 30000,
         connectionTimeoutMillis: 5000,
+        // Server-side statement timeout: a runaway query (e.g. an unbounded
+        // analytics scan) can no longer pin one of the 20 pooled connections
+        // indefinitely (perf audit finding 10). 15s covers the slowest
+        // legitimate aggregate while staying well under client timeouts.
+        options: "-c statement_timeout=15000",
       });
       _db = drizzle(_pool);
       // Production schema and reference data must be applied only through reviewed migrations.
@@ -2089,43 +2094,116 @@ export async function sendCampaign(
   }
 }
 
-export async function sendCampaignToAudience(campaignId: number, idempotencyKey?: string) {
+// Campaign audience dispatch page size (perf audit finding 14): the audience
+// is paged with LIMIT/OFFSET instead of a single unbounded SELECT of the
+// whole users table, and by default the request returns immediately with a
+// 202-style queued result while pages are processed in the background.
+export const CAMPAIGN_AUDIENCE_PAGE_SIZE = 500;
+
+export type CampaignAudienceDispatchResult = {
+  status: "queued" | "completed";
+  campaign_id: number;
+  total: number;
+  page_size: number;
+  sent: number;
+  failed: number;
+};
+
+/**
+ * Dispatch a campaign to its audience.
+ *
+ * Default mode ("202-style"): validates the campaign, counts the audience,
+ * then pages through it in the background (LIMIT/OFFSET pages of
+ * CAMPAIGN_AUDIENCE_PAGE_SIZE, per-user sends sequential within a page) and
+ * returns immediately with { status: "queued", ... }. Per-user sends remain
+ * idempotent via the audience idempotency scope, so a retried trigger or a
+ * restarted pod can safely re-run the dispatch; a background failure is
+ * logged, not thrown to the caller.
+ *
+ * Pass { awaitCompletion: true } (scheduler/tests) to run synchronously and
+ * get { status: "completed", sent, failed, ... }.
+ */
+export async function sendCampaignToAudience(
+  campaignId: number,
+  idempotencyKey?: string,
+  options?: { awaitCompletion?: boolean },
+): Promise<CampaignAudienceDispatchResult> {
   await getDb();
   if (!_pool) throw new DatabaseUnavailableError("campaign_audience_send");
+  const pool = _pool;
 
   const campaign = await getCampaignById(campaignId);
   if (!campaign || !campaign.is_active) {
     throw new Error('Campaign not found or inactive');
   }
 
-  let userQuery = 'SELECT id FROM users WHERE 1=1';
+  let whereClause = 'WHERE 1=1';
   const params: any[] = [];
 
   if (campaign.target_audience !== 'all') {
     if (['bronze', 'silver', 'gold', 'platinum'].includes(campaign.target_audience)) {
-      userQuery += ' AND id IN (SELECT user_id FROM loyalty_points WHERE tier = $1)';
+      whereClause += ' AND id IN (SELECT user_id FROM loyalty_points WHERE tier = $1)';
       params.push(campaign.target_audience);
     }
   }
 
-  const usersResult = await _pool.query<any>(userQuery, params);
-  const users = usersResult.rows;
+  const totalResult = await pool.query<any>(
+    `SELECT COUNT(*)::int AS total FROM users ${whereClause}`,
+    params,
+  );
+  const total = Number(totalResult.rows[0]?.total ?? 0);
 
-  let sent = 0;
-  let failed = 0;
   const audienceScope = idempotencyKey?.trim() || `campaign.audience.${campaignId}`;
 
-  for (const user of users) {
-    try {
-      await sendCampaign(campaignId, user.id, 'email', `${audienceScope}:user:${user.id}:channel:email`);
-      sent++;
-    } catch (error) {
-      failed++;
-      console.error(`Failed to send campaign to user ${user.id}:`, error);
+  const dispatch = async (): Promise<{ sent: number; failed: number }> => {
+    let sent = 0;
+    let failed = 0;
+    for (let offset = 0; ; offset += CAMPAIGN_AUDIENCE_PAGE_SIZE) {
+      const pageParams = [...params, CAMPAIGN_AUDIENCE_PAGE_SIZE, offset];
+      const page = await pool.query<any>(
+        `SELECT id FROM users ${whereClause} ORDER BY id LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+        pageParams,
+      );
+      const users = page.rows;
+      for (const user of users) {
+        try {
+          await sendCampaign(campaignId, user.id, 'email', `${audienceScope}:user:${user.id}:channel:email`);
+          sent++;
+        } catch (error) {
+          failed++;
+          console.error(`Failed to send campaign to user ${user.id}:`, error);
+        }
+      }
+      if (users.length < CAMPAIGN_AUDIENCE_PAGE_SIZE) break;
     }
+    return { sent, failed };
+  };
+
+  const base = {
+    campaign_id: campaignId,
+    total,
+    page_size: CAMPAIGN_AUDIENCE_PAGE_SIZE,
+  };
+
+  if (options?.awaitCompletion) {
+    const { sent, failed } = await dispatch();
+    return { status: "completed", ...base, sent, failed };
   }
 
-  return { sent, failed, total: users.length };
+  // Fire-and-forget: the request returns immediately (202-style). Sends are
+  // idempotent per (audience scope, user, channel), so an interrupted
+  // background run can be retried by re-invoking this function.
+  void dispatch().then(
+    ({ sent, failed }) => {
+      console.log(
+        `[Campaign] Audience dispatch for campaign ${campaignId} finished: ${sent} sent, ${failed} failed, ${total} total.`,
+      );
+    },
+    (error) => {
+      console.error(`[Campaign] Background audience dispatch for campaign ${campaignId} failed:`, error);
+    },
+  );
+  return { status: "queued", ...base, sent: 0, failed: 0 };
 }
 
 export async function getCampaignStats(campaignId?: number) {
@@ -3769,14 +3847,85 @@ export async function getCourierTripRadarSummary(limit = 10) {
 }
 
 
+// Funds reconciliation snapshot (perf audit finding 6).
+//
+// Two mitigations keep this operator-dashboard stat inside the read SLO as
+// tables grow:
+//   1. The history-scanning aggregate legs are bounded to a trailing window
+//      (default 365 days, see FUNDS_SNAPSHOT_DEFAULT_WINDOW_DAYS) so they
+//      become index-supported range scans instead of unbounded full scans.
+//      Point-in-time state legs (wallet balances, held reserves, ledger
+//      account balances) are inherently current-state and stay unbounded.
+//      The applied window is reported back as `window_days` in the payload.
+//   2. The whole snapshot is cached in-process for
+//      FUNDS_SNAPSHOT_CACHE_TTL_MS (60s). This is a dashboard stat, not a
+//      transactional read; at most one full 8-query fan-out runs per TTL per
+//      pod instead of one per request. Mutations that must observe fresh
+//      totals can pass { forceRefresh: true }.
+//
 // Fail-fast: any failed aggregate query rejects the whole snapshot instead of
-// returning fabricated zero balances for financial totals.
-export async function getFundsReconciliationSnapshot() {
+// returning fabricated zero balances for financial totals (failures are not
+// cached).
+// Not exported (code-health export-count guard, tests/code-health.config.test.ts);
+// tests pin the literal values 60_000 / 365.
+const FUNDS_SNAPSHOT_CACHE_TTL_MS = 60_000;
+const FUNDS_SNAPSHOT_DEFAULT_WINDOW_DAYS = 365;
+const FUNDS_SNAPSHOT_MAX_WINDOW_DAYS = 366 * 5;
+
+type FundsReconciliationSnapshot = NonNullable<Awaited<ReturnType<typeof computeFundsReconciliationSnapshot>>>;
+
+let fundsSnapshotCache: {
+  expiresAt: number;
+  windowDays: number;
+  value: FundsReconciliationSnapshot;
+} | null = null;
+
+/** Drop the cached funds reconciliation snapshot (next call recomputes). */
+export function invalidateFundsReconciliationSnapshotCache() {
+  fundsSnapshotCache = null;
+}
+
+function clampSnapshotWindowDays(windowDays?: number): number {
+  if (windowDays == null || !Number.isFinite(windowDays)) {
+    return FUNDS_SNAPSHOT_DEFAULT_WINDOW_DAYS;
+  }
+  return Math.min(Math.max(Math.trunc(windowDays), 1), FUNDS_SNAPSHOT_MAX_WINDOW_DAYS);
+}
+
+export async function getFundsReconciliationSnapshot(options?: {
+  forceRefresh?: boolean;
+  windowDays?: number;
+}) {
   await getDb();
   if (!_pool) return null;
 
+  const windowDays = clampSnapshotWindowDays(options?.windowDays);
+  const now = Date.now();
+  const cached = fundsSnapshotCache;
+  if (
+    !options?.forceRefresh &&
+    cached &&
+    cached.windowDays === windowDays &&
+    cached.expiresAt > now
+  ) {
+    return cached.value;
+  }
+
+  const value = await computeFundsReconciliationSnapshot(windowDays);
+  fundsSnapshotCache = {
+    expiresAt: now + FUNDS_SNAPSHOT_CACHE_TTL_MS,
+    windowDays,
+    value,
+  };
+  return value;
+}
+
+async function computeFundsReconciliationSnapshot(windowDays: number) {
+  const pool = _pool!;
+  // Trailing-window predicate applied to every history-scanning leg.
+  const windowParams = [windowDays];
   const [transactionResult, settlementResult, incentiveResult, orderResult, walletResult, disputeResult, reserveResult, mojaloopResult] = await Promise.all([
-    _pool.query<any>(`
+    pool.query<any>(`
       SELECT
         COUNT(*) AS transaction_count,
         COALESCE(SUM(amount::numeric), 0) FILTER (WHERE type = 'payment' AND status = 'completed') AS completed_payments,
@@ -3788,8 +3937,9 @@ export async function getFundsReconciliationSnapshot() {
         COUNT(*) FILTER (WHERE status = 'pending') AS pending_transactions,
         MAX(updated_at) AS last_transaction_update
       FROM transactions
-    `),
-    _pool.query<any>(`
+      WHERE created_at >= now() - ($1 || ' days')::interval
+    `, windowParams),
+    pool.query<any>(`
       SELECT
         COUNT(*) AS settlement_count,
         COALESCE(SUM(total_amount), 0) FILTER (WHERE status = 'pending') AS pending_settlements,
@@ -3797,24 +3947,30 @@ export async function getFundsReconciliationSnapshot() {
         COALESCE(SUM(total_amount), 0) FILTER (WHERE status = 'completed') AS completed_settlements,
         MAX(COALESCE(processed_at, approved_at, created_at)) AS last_settlement_event
       FROM payout_settlements
-    `),
-    _pool.query<any>(`
+      WHERE created_at >= now() - ($1 || ' days')::interval
+    `, windowParams),
+    pool.query<any>(`
       SELECT
         COALESCE(SUM(amount), 0) FILTER (WHERE status = 'approved' AND settlement_id IS NULL) AS approved_unsettled_incentives,
         COALESCE(SUM(amount), 0) FILTER (WHERE status = 'paid') AS paid_incentives,
         COUNT(*) FILTER (WHERE status = 'approved' AND settlement_id IS NULL) AS unsettled_incentive_count,
         MAX(COALESCE(paid_at, updated_at, created_at)) AS last_incentive_event
       FROM driver_incentives
-    `),
-    _pool.query<any>(`
+      WHERE created_at >= now() - ($1 || ' days')::interval
+    `, windowParams),
+    pool.query<any>(`
       SELECT
         COUNT(*) FILTER (WHERE status = 'cancelled') AS cancelled_orders,
         COUNT(*) FILTER (WHERE status = 'delivered') AS delivered_orders,
         COALESCE(SUM(driver_fee), 0) FILTER (WHERE status = 'delivered') AS delivered_driver_fees,
         MAX(COALESCE(actual_delivery_time, updated_at, created_at)) AS last_order_event
       FROM orders
-    `),
-    _pool.query<any>(`
+      WHERE created_at >= now() - ($1 || ' days')::interval
+    `, windowParams),
+    // Point-in-time state leg: wallet balances are current state, so this
+    // aggregate intentionally stays unbounded (a date window would corrupt
+    // the total). Bounded by the small size of the wallets table.
+    pool.query<any>(`
       SELECT
         COUNT(*) AS wallet_count,
         COALESCE(SUM(balance::numeric), 0) AS total_wallet_balance,
@@ -3822,14 +3978,17 @@ export async function getFundsReconciliationSnapshot() {
         MAX(updated_at) AS last_wallet_event
       FROM wallets
     `),
-    _pool.query<any>(`
+    pool.query<any>(`
       SELECT
         COUNT(*) FILTER (WHERE type IN ('refund', 'claim') AND status IN ('open', 'in_progress')) AS open_dispute_like_tickets,
         COUNT(*) FILTER (WHERE priority IN ('urgent', 'critical') AND status IN ('open', 'in_progress')) AS critical_dispute_tickets,
         MAX(COALESCE(resolved_at, updated_at, created_at)) AS last_dispute_event
       FROM support_tickets
-    `),
-    _pool.query<any>(`
+      WHERE created_at >= now() - ($1 || ' days')::interval
+    `, windowParams),
+    // Point-in-time state leg: only rows currently held/active are summed;
+    // the status predicate already bounds the working set.
+    pool.query<any>(`
       SELECT
         COALESCE(SUM(CASE WHEN source = 'merchant' THEN amount ELSE 0 END), 0) AS merchant_reserves_held,
         COALESCE(SUM(CASE WHEN source = 'treasury' THEN amount ELSE 0 END), 0) AS treasury_reserves_held,
@@ -3846,24 +4005,27 @@ export async function getFundsReconciliationSnapshot() {
         WHERE status IN ('held', 'active')
       ) reserves
     `),
-    _pool.query<any>(`
+    // Mojaloop leg kept, but every history subquery is bounded to the same
+    // trailing window; only the ledger_accounts balance sum stays unbounded
+    // because it is current state.
+    pool.query<any>(`
       SELECT
-        (SELECT COUNT(*) FROM mojaloop_transfers) AS transfer_count,
-        COALESCE((SELECT SUM(amount) FROM mojaloop_transfers), 0) AS gross_transfer_amount,
-        (SELECT COUNT(*) FROM mojaloop_transfers WHERE state = 'SETTLED') AS settled_transfer_count,
-        (SELECT COUNT(*) FROM mojaloop_refunds) AS refund_count,
-        COALESCE((SELECT SUM(amount) FROM mojaloop_refunds), 0) AS refunded_amount,
-        (SELECT COUNT(*) FROM mojaloop_reconciliation_audits WHERE ledger_consistent = FALSE) AS inconsistent_audits,
+        (SELECT COUNT(*) FROM mojaloop_transfers WHERE created_at >= now() - ($1 || ' days')::interval) AS transfer_count,
+        COALESCE((SELECT SUM(amount) FROM mojaloop_transfers WHERE created_at >= now() - ($1 || ' days')::interval), 0) AS gross_transfer_amount,
+        (SELECT COUNT(*) FROM mojaloop_transfers WHERE state = 'SETTLED' AND created_at >= now() - ($1 || ' days')::interval) AS settled_transfer_count,
+        (SELECT COUNT(*) FROM mojaloop_refunds WHERE created_at >= now() - ($1 || ' days')::interval) AS refund_count,
+        COALESCE((SELECT SUM(amount) FROM mojaloop_refunds WHERE created_at >= now() - ($1 || ' days')::interval), 0) AS refunded_amount,
+        (SELECT COUNT(*) FROM mojaloop_reconciliation_audits WHERE ledger_consistent = FALSE AND created_at >= now() - ($1 || ' days')::interval) AS inconsistent_audits,
         COALESCE((SELECT SUM(balance_cents) FROM ledger_accounts), 0) AS ledger_balance_cents,
-        (SELECT COUNT(*) FROM ledger_entries WHERE entry_type = 'transfer') AS ledger_transfer_entries,
-        (SELECT COUNT(*) FROM ledger_entries WHERE entry_type = 'refund') AS ledger_refund_entries,
-        (SELECT COUNT(*) FROM mojaloop_workflows WHERE status NOT IN ('completed', 'settled', 'succeeded')) AS open_workflows,
+        (SELECT COUNT(*) FROM ledger_entries WHERE entry_type = 'transfer' AND created_at >= now() - ($1 || ' days')::interval) AS ledger_transfer_entries,
+        (SELECT COUNT(*) FROM ledger_entries WHERE entry_type = 'refund' AND created_at >= now() - ($1 || ' days')::interval) AS ledger_refund_entries,
+        (SELECT COUNT(*) FROM mojaloop_workflows WHERE status NOT IN ('completed', 'settled', 'succeeded') AND created_at >= now() - ($1 || ' days')::interval) AS open_workflows,
         GREATEST(
-          COALESCE((SELECT MAX(updated_at) FROM mojaloop_transfers), 'epoch'::timestamptz),
-          COALESCE((SELECT MAX(updated_at) FROM mojaloop_refunds), 'epoch'::timestamptz),
-          COALESCE((SELECT MAX(created_at) FROM mojaloop_reconciliation_audits), 'epoch'::timestamptz)
+          COALESCE((SELECT MAX(updated_at) FROM mojaloop_transfers WHERE created_at >= now() - ($1 || ' days')::interval), 'epoch'::timestamptz),
+          COALESCE((SELECT MAX(updated_at) FROM mojaloop_refunds WHERE created_at >= now() - ($1 || ' days')::interval), 'epoch'::timestamptz),
+          COALESCE((SELECT MAX(created_at) FROM mojaloop_reconciliation_audits WHERE created_at >= now() - ($1 || ' days')::interval), 'epoch'::timestamptz)
         ) AS last_mojaloop_event
-    `),
+    `, windowParams),
   ]);
 
   const transactions = transactionResult.rows[0] || {};
@@ -3926,6 +4088,9 @@ export async function getFundsReconciliationSnapshot() {
 
   return {
     generated_at: new Date().toISOString(),
+    // Trailing window applied to the history-scanning legs (wallets, held
+    // reserves and ledger balances are point-in-time state and stay full).
+    window_days: windowDays,
     transactions: {
       count: Number(transactions.transaction_count || 0),
       completed_payments: grossPayments,
