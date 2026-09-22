@@ -1064,7 +1064,7 @@ func (s *inventoryService) middlewareStatus() map[string]any {
 	return map[string]any{
 		"dapr":     map[string]any{"configured": getenv("DAPR_HTTP_PORT", "") != "" && getenv("DAPR_PUBSUB_NAME", "") != "" && getenv("DAPR_INVENTORY_TOPIC", "") != ""},
 		"kafka":    map[string]any{"configured": getenv("KAFKA_BROKERS", "") != "" && getenv("KAFKA_INVENTORY_TOPIC", "") != ""},
-		"fluvio":   map[string]any{"configured": getenv("FLUVIO_KAFKA_BROKERS", "") != "" && getenv("FLUVIO_LOCAL_COMMERCE_TOPIC", "") != ""},
+		"fluvio":   map[string]any{"configured": getenv("FLUVIO_KAFKA_BROKERS", "") != "" && getenv("FLUVIO_INVENTORY_TOPIC", "") != ""},
 		"temporal": map[string]any{"configured": getenv("TEMPORAL_BRIDGE_URL", "") != "" || getenv("TEMPORAL_TASK_QUEUE", "") != ""},
 	}
 }
