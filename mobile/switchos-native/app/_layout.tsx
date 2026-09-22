@@ -34,7 +34,20 @@ export default function RootLayout() {
   // Platform trust/economics/safety screens consume the deployed tRPC API
   // through these providers (Wave E1). Clients are created once per app
   // lifetime.
-  const [queryClient] = useState(() => new QueryClient());
+  const [queryClient] = useState(
+    () =>
+      new QueryClient({
+        defaultOptions: {
+          queries: {
+            staleTime: 30_000,
+            gcTime: 300_000,
+            // RN has no window-focus events; keep explicit parity with web.
+            refetchOnWindowFocus: false,
+            retry: 1,
+          },
+        },
+      }),
+  );
   const [trpcClient] = useState(() => createTRPCClient());
 
   return (
