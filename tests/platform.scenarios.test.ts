@@ -4,6 +4,7 @@ import { IncomingMessage, ServerResponse } from "http";
 
 const lakehouseMocks = vi.hoisted(() => ({
   syncLakehouseFromPostgres: vi.fn(),
+  getLakehouseDataFreshnessSeconds: vi.fn(),
   getLakehouseAnalyticsSummary: vi.fn(),
   getLakehouseOrderStats: vi.fn(),
   getLakehouseDriverStats: vi.fn(),
@@ -109,6 +110,7 @@ describe("SwitchOS platform scenario workflows", () => {
     vi.resetAllMocks();
 
     lakehouseMocks.syncLakehouseFromPostgres.mockResolvedValue(undefined);
+    lakehouseMocks.getLakehouseDataFreshnessSeconds.mockReturnValue(17);
     lakehouseMocks.getLakehouseAnalyticsSummary.mockResolvedValue({ source: "lakehouse", orders: 12 });
     lakehouseMocks.getLakehouseOrderStats.mockResolvedValue({ total: 12, completed: 10 });
     lakehouseMocks.getLakehouseDriverStats.mockResolvedValue({ total: 6, online: 4 });
@@ -181,18 +183,31 @@ describe("SwitchOS platform scenario workflows", () => {
     await expect(caller.merchantChannels.workspace()).rejects.toMatchObject<Partial<TRPCError>>({ code: "FORBIDDEN" });
   });
 
-  it("serves analytics from the lakehouse-backed path when synchronization succeeds", async () => {
+  it("serves analytics straight from the lakehouse without an inline sync", async () => {
+    // Perf finding 1: reads are decoupled from Postgres->lakehouse sync; the
+    // background syncer (started at server boot) owns freshness, and every
+    // payload reports it via dataFreshnessSeconds.
     const caller = appRouter.createCaller(createContext({ id: 3, name: "Ops", email: "ops@switchos.local", role: "operator" }));
-    await expect(caller.analytics.summary()).resolves.toEqual({ source: "lakehouse", orders: 12 });
-    await expect(caller.analytics.orderStats()).resolves.toEqual({ total: 12, completed: 10 });
-    await expect(caller.analytics.driverStats()).resolves.toEqual({ total: 6, online: 4 });
-    await expect(caller.analytics.marketplaceOverview()).resolves.toEqual({ open_orders: 3, hotspots: [] });
+    await expect(caller.analytics.summary()).resolves.toEqual({ source: "lakehouse", orders: 12, dataFreshnessSeconds: 17 });
+    await expect(caller.analytics.orderStats()).resolves.toEqual({ total: 12, completed: 10, dataFreshnessSeconds: 17 });
+    await expect(caller.analytics.driverStats()).resolves.toEqual({ total: 6, online: 4, dataFreshnessSeconds: 17 });
+    await expect(caller.analytics.marketplaceOverview()).resolves.toEqual({ open_orders: 3, hotspots: [], dataFreshnessSeconds: 17 });
     await expect(caller.analytics.fundsReconciliation()).resolves.toEqual({ matched: 14, pending: 2, exceptions: [] });
-    expect(lakehouseMocks.syncLakehouseFromPostgres).toHaveBeenCalledTimes(4);
+    expect(lakehouseMocks.syncLakehouseFromPostgres).not.toHaveBeenCalled();
+  });
+
+  it("runs the lakehouse sync inline only for explicit operator forceRefresh", async () => {
+    const caller = appRouter.createCaller(createContext({ id: 33, name: "Ops", email: "ops@switchos.local", role: "admin" }));
+    await expect(caller.analytics.summary({ forceRefresh: true })).resolves.toEqual({
+      source: "lakehouse",
+      orders: 12,
+      dataFreshnessSeconds: 17,
+    });
+    expect(lakehouseMocks.syncLakehouseFromPostgres).toHaveBeenCalledTimes(1);
   });
 
   it("surfaces lakehouse failure instead of substituting plausible workspace analytics", async () => {
-    lakehouseMocks.syncLakehouseFromPostgres.mockRejectedValue(new Error("lakehouse unavailable"));
+    lakehouseMocks.getLakehouseAnalyticsSummary.mockRejectedValue(new Error("lakehouse unavailable"));
     const caller = appRouter.createCaller(createContext({ id: 4, name: "Ops", email: "ops@switchos.local", role: "admin" }));
     await expect(caller.analytics.summary()).rejects.toMatchObject<Partial<TRPCError>>({
       code: "SERVICE_UNAVAILABLE",
@@ -202,6 +217,15 @@ describe("SwitchOS platform scenario workflows", () => {
     expect(workspaceMocks.getOrderStats).not.toHaveBeenCalled();
     expect(workspaceMocks.getDriverStats).not.toHaveBeenCalled();
     expect(workspaceMocks.getMarketplaceOverview).not.toHaveBeenCalled();
+  });
+
+  it("surfaces an inline forceRefresh sync failure as lakehouse-unavailable", async () => {
+    lakehouseMocks.syncLakehouseFromPostgres.mockRejectedValue(new Error("lakehouse unavailable"));
+    const caller = appRouter.createCaller(createContext({ id: 44, name: "Ops", email: "ops@switchos.local", role: "admin" }));
+    await expect(caller.analytics.orderStats({ forceRefresh: true })).rejects.toMatchObject<Partial<TRPCError>>({
+      code: "SERVICE_UNAVAILABLE",
+      message: "LAKEHOUSE_ANALYTICS_UNAVAILABLE",
+    });
   });
 
   it("surfaces workspace source failure instead of returning a plausible fallback payload", async () => {
