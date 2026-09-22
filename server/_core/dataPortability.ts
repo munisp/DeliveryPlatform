@@ -6,324 +6,346 @@ import { getPool } from "../db";
 import { ENV } from "./env";
 import { FAIL_OPEN_FAST, resilientFetch } from "./resilientFetch";
 
-/** R9/R10 data portability: worker work-record assembly, Rust-signed export,
- * verification, and the R10 data-transparency disclosure surface. */
 
-const EXPORT_SCHEMA = "work-record/v1";
-const DISCLOSURE_CATEGORIES = [
+/**
+ * Data transparency + portability (R14).
+ *
+ * A worker can request a signed export of their work record. The payload is
+ * assembled from the trip/earnings sources that exist today (profile from
+ * public.users, rider-side trips from rider_trips, driver earnings rollups
+ * from offer_economics_breakdowns + mobility.driver_offer), serialized as
+ * canonical JSON (recursively sorted keys, UTF-8) and POSTed to the Rust
+ * work-record-signer (WORK_RECORD_SIGNER_URL, default http://127.0.0.1:8109)
+ * which returns payload_hash/signature/key_id/public_key.
+ *
+ * KNOWN GAPS (assembled per-source with independent fail-open guards; each
+ * missing source is listed in payload.meta.gaps):
+ * - ratings: no user-keyed ratings table exists yet (driver_reviews keys on
+ *   the courier-domain drivers.id, not public.users.id) — reported as a gap.
+ * - safety/device: no user-keyed safety-signal or device-attestation store
+ *   exists yet — reported as a gap.
+ *
+ * FAIL-OPEN contract: a signer outage never throws and never loses the
+ * export — the row stays 'pending' with a retry hint. verifyExport returns
+ * { valid: null, reason: 'verifier_unavailable' } plus offline-verify
+ * instructions (sha256 of the canonical payload) when the signer is down.
+ */
+
+export const DISCLOSURE_CATEGORIES = [
   "profile",
   "trips",
+  "earnings",
   "ratings",
   "safety",
-  "earnings",
-  "exports",
-  "appeals",
+  "device",
+  "other",
 ] as const;
-type DisclosureCategory = (typeof DISCLOSURE_CATEGORIES)[number];
+export type DisclosureCategory = (typeof DISCLOSURE_CATEGORIES)[number];
 
-/** Key-sorted deterministic JSON: identical payload -> identical hash. */
+export const EXPORT_STATUSES = [
+  "pending",
+  "signed",
+  "delivered",
+  "revoked",
+] as const;
+export type ExportStatus = (typeof EXPORT_STATUSES)[number];
+
+export type WorkRecordExportRow = {
+  id: string;
+  user_id: number | string;
+  period_start: string | Date;
+  period_end: string | Date;
+  payload: unknown;
+  payload_hash: string | null;
+  signature: string | null;
+  signer_key_id: string | null;
+  signer_public_key: string | null;
+  status: ExportStatus;
+  created_at: string | Date;
+  signed_at: string | Date | null;
+};
+
+export type DataTransparencyDisclosureRow = {
+  id: string;
+  user_id: number | string;
+  category: DisclosureCategory;
+  detail: unknown;
+  disclosed_at: string | Date;
+};
+
+/**
+ * Canonical JSON: object keys recursively sorted, arrays kept in order,
+ * numbers/booleans/null per JSON.stringify. This is the exact byte string
+ * the signer hashes and signs — callers must never reformat it.
+ */
 export function canonicalJson(value: unknown): string {
-  if (value === null || typeof value !== "object") {
-    return JSON.stringify(value);
-  }
+  return JSON.stringify(sortKeysDeep(value));
+}
+
+function sortKeysDeep(value: unknown): unknown {
   if (Array.isArray(value)) {
-    return `[${value.map(canonicalJson).join(",")}]`;
+    return value.map(sortKeysDeep);
   }
-  const record = value as Record<string, unknown>;
-  const keys = Object.keys(record).sort();
-  return `{${keys
-    .map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`)
-    .join(",")}}`;
+  if (value !== null && typeof value === "object") {
+    const source = value as Record<string, unknown>;
+    const out: Record<string, unknown> = {};
+    for (const key of Object.keys(source).sort()) {
+      out[key] = sortKeysDeep(source[key]);
+    }
+    return out;
+  }
+  return value;
 }
 
 export function sha256Hex(input: string): string {
   return createHash("sha256").update(input, "utf8").digest("hex");
 }
 
-type Period = { periodStart: Date; periodEnd: Date };
-
-type ProfileRow = {
-  id: number;
-  name: string | null;
-  email: string | null;
-  phone: string | null;
-  created_at: string;
-};
-
-type TripRow = {
-  id: string;
-  status: string;
-  trip_type: string | null;
-  vehicle_class: string | null;
-  modality: string | null;
-  requested_at: string | null;
-  assigned_at: string | null;
-  completed_at: string | null;
-  cancelled_at: string | null;
-  fare_minor: string | number | null;
-  currency: string | null;
-};
-
-type EarningsRow = {
-  offers: string | number | null;
-  gross_minor: string | number | null;
-  deadhead_minor: string | number | null;
-  platform_fee_minor: string | number | null;
-  net_to_driver_minor: string | number | null;
-};
-
-type ExportRow = {
-  id: string;
+export type WorkRecordPayload = {
+  schema: "work-record/v1";
   user_id: number;
-  period_start: string;
-  period_end: string;
-  payload: Record<string, unknown>;
-  payload_hash: string;
-  signature: string | null;
-  signer_key_id: string | null;
-  signer_public_key: string | null;
-  status: string;
-  created_at: string;
-  signed_at: string | null;
+  period: { start: string; end: string };
+  generated_at: string;
+  profile: Record<string, unknown> | null;
+  trips: Array<Record<string, unknown>>;
+  earnings: Record<string, unknown> | null;
+  meta: { sources: string[]; gaps: string[] };
 };
 
-function num(value: string | number | null | undefined): number {
-  const parsed = Number(value ?? 0);
-  return Number.isFinite(parsed) ? parsed : 0;
-}
-
-function toIso(value: string | Date | null | undefined): string | null {
-  if (!value) return null;
-  const date = value instanceof Date ? value : new Date(value);
-  return Number.isNaN(date.getTime()) ? null : date.toISOString();
-}
-
-async function safeQuery<T>(
-  label: string,
-  gaps: string[],
-  sources: string[],
-  query: () => Promise<T>,
-): Promise<T | null> {
-  try {
-    const result = await query();
-    sources.push(label);
-    return result;
-  } catch (error) {
-    console.warn(`[dataPortability] ${label} assembly unavailable`, error);
-    gaps.push(`${label}_unavailable`);
-    return null;
-  }
-}
-
+/**
+ * Assemble the work-record payload. Every source is queried independently
+ * and fail-open: an unavailable table degrades to a recorded gap instead of
+ * failing the export.
+ */
 export async function assembleWorkRecordPayload(
   userId: number,
   periodStart: Date,
   periodEnd: Date,
-): Promise<Record<string, unknown>> {
+): Promise<WorkRecordPayload> {
   const pool = await getPool();
-  const gaps: string[] = [];
   const sources: string[] = [];
+  const gaps: string[] = [];
 
-  const profile = await safeQuery("profile", gaps, sources, async () => {
-    const result = await pool.query<ProfileRow>(
-      `SELECT id, name, email, phone, created_at FROM public.users WHERE id = $1`,
+  let profile: Record<string, unknown> | null = null;
+  try {
+    const result = await pool.query(
+      `SELECT id, name, email, login_method, role, created_at, last_signed_in
+       FROM public.users WHERE id = $1`,
       [userId],
     );
-    const row = result.rows[0];
-    return row
-      ? {
-          name: row.name,
-          email: row.email,
-          phone: row.phone,
-          member_since: toIso(row.created_at),
-        }
-      : null;
-  });
+    profile = result.rows[0] ?? null;
+    sources.push("profile");
+  } catch {
+    gaps.push("profile_unavailable");
+  }
 
-  const trips = await safeQuery("trips", gaps, sources, async () => {
-    const result = await pool.query<TripRow>(
-      `SELECT id::text, status, trip_type, vehicle_class, modality,
-              requested_at, assigned_at, completed_at, cancelled_at,
-              fare_minor, currency
-         FROM public.rider_trips
-        WHERE rider_user_id = $1
-          AND created_at >= $2 AND created_at < $3
-        ORDER BY created_at ASC`,
+  let trips: Array<Record<string, unknown>> = [];
+  try {
+    const result = await pool.query(
+      `SELECT id, status, trip_type, vehicle_class, modality,
+              pickup_label, dropoff_label, fare_minor, currency,
+              requested_at, completed_at
+       FROM public.rider_trips
+       WHERE rider_user_id = $1
+         AND requested_at >= $2 AND requested_at < $3
+       ORDER BY requested_at ASC`,
       [userId, periodStart, periodEnd],
     );
-    return result.rows.map((row) => ({
-      id: row.id,
-      status: row.status,
-      trip_type: row.trip_type,
-      vehicle_class: row.vehicle_class,
-      modality: row.modality,
-      requested_at: toIso(row.requested_at),
-      assigned_at: toIso(row.assigned_at),
-      completed_at: toIso(row.completed_at),
-      cancelled_at: toIso(row.cancelled_at),
-      fare_minor: num(row.fare_minor),
-      currency: row.currency ?? "NGN",
-    }));
-  });
+    trips = result.rows;
+    sources.push("trips");
+  } catch {
+    gaps.push("trips_unavailable");
+  }
 
-  const earnings = await safeQuery("earnings", gaps, sources, async () => {
-    const result = await pool.query<EarningsRow>(
-      `SELECT count(*) AS offers,
-              COALESCE(sum(base_minor + distance_minor + time_minor), 0) AS gross_minor,
-              COALESCE(sum(deadhead_minor), 0) AS deadhead_minor,
-              COALESCE(sum(platform_fee_minor), 0) AS platform_fee_minor,
-              COALESCE(sum(net_to_driver_minor), 0) AS net_to_driver_minor
-         FROM public.offer_economics_breakdowns
-        WHERE created_at >= $1 AND created_at < $2`,
-      [periodStart, periodEnd],
+  let earnings: Record<string, unknown> | null = null;
+  try {
+    const result = await pool.query(
+      `SELECT count(*)::int AS offers,
+              coalesce(sum(b.base_minor + b.distance_minor + b.time_minor), 0) AS gross_minor,
+              coalesce(sum(b.deadhead_minor), 0) AS deadhead_minor,
+              coalesce(sum(b.platform_fee_minor), 0) AS platform_fee_minor,
+              coalesce(sum(b.net_to_driver_minor), 0) AS net_to_driver_minor
+       FROM public.offer_economics_breakdowns b
+       JOIN mobility.driver_offer o ON o.id::text = b.offer_id
+       WHERE o.driver_user_id = $1
+         AND b.created_at >= $2 AND b.created_at < $3`,
+      [userId, periodStart, periodEnd],
     );
-    const row = result.rows[0];
-    return {
-      offers: num(row?.offers),
-      gross_minor: num(row?.gross_minor),
-      deadhead_minor: num(row?.deadhead_minor),
-      platform_fee_minor: num(row?.platform_fee_minor),
-      net_to_driver_minor: num(row?.net_to_driver_minor),
-      currency: "NGN",
-    };
-  });
+    earnings = { currency: "NGN", ...(result.rows[0] ?? {}) };
+    sources.push("earnings");
+  } catch {
+    gaps.push("earnings_unavailable");
+  }
 
+  // Documented gaps: no user-keyed ratings or safety/device stores exist yet.
   gaps.push("ratings_not_exportable_yet", "safety_device_not_exportable_yet");
 
   return {
-    schema: EXPORT_SCHEMA,
+    schema: "work-record/v1",
     user_id: userId,
-    period: {
-      start: periodStart.toISOString(),
-      end: periodEnd.toISOString(),
-    },
+    period: { start: periodStart.toISOString(), end: periodEnd.toISOString() },
     generated_at: new Date().toISOString(),
     profile,
-    trips: trips ?? [],
+    trips,
     earnings,
     meta: { sources, gaps },
   };
 }
 
-type SignerResponse = {
-  payload_hash?: string;
-  signature_b64?: string;
-  key_id?: string;
-  public_key_b64?: string;
+type SignerSignResponse = {
+  payload_hash: string;
+  signature_b64: string;
+  key_id: string;
+  public_key_b64: string;
 };
 
-export async function requestExport(
-  userId: number,
-  input: Period,
-): Promise<{ export: ExportRow; signed: boolean; retryHint: string | null }> {
-  if (input.periodEnd <= input.periodStart) {
-    throw new TRPCError({ code: "BAD_REQUEST", message: "period_inverted" });
-  }
-  const pool = await getPool();
-  const payload = await assembleWorkRecordPayload(
-    userId,
-    input.periodStart,
-    input.periodEnd,
-  );
-  const canonical = canonicalJson(payload);
-  const hash = sha256Hex(canonical);
-
-  const inserted = await pool.query<ExportRow>(
-    `INSERT INTO public.work_record_exports
-       (user_id, period_start, period_end, payload, payload_hash, status)
-     VALUES ($1, $2, $3, $4::jsonb, $5, 'pending')
-     RETURNING *`,
-    [userId, input.periodStart, input.periodEnd, canonical, hash],
-  );
-  const row = inserted.rows[0];
-  if (!row) {
-    throw new TRPCError({
-      code: "INTERNAL_SERVER_ERROR",
-      message: "export_create_failed",
-    });
-  }
-
+/**
+ * POST the canonical payload to the Rust work-record-signer. Strictly
+ * fail-open per module doc: returns null on any outage, never throws.
+ */
+export async function signWorkRecord(
+  canonicalPayload: string,
+): Promise<SignerSignResponse | null> {
+  const base = ENV.workRecordSignerUrl.replace(/\/$/, "");
   try {
-    const base = ENV.workRecordSignerUrl.replace(/\/$/, "");
     const response = await resilientFetch(`${base}/sign`, {
       method: "POST",
       headers: {
         "content-type": "application/json",
         "x-internal-service-token": ENV.internalServiceToken,
       },
-      body: JSON.stringify({ payload: canonical }),
+      body: JSON.stringify({ payload: canonicalPayload }),
       ...FAIL_OPEN_FAST,
+      maxAttempts: 1,
     });
     if (!response.ok) {
-      throw new Error(`signer returned status ${response.status}`);
+      throw new Error(`signer /sign returned status ${response.status}`);
     }
-    const signed = (await response.json()) as SignerResponse;
-    if (!signed.signature_b64 || !signed.public_key_b64) {
-      throw new Error("signer response invalid");
-    }
-    const updated = await pool.query<ExportRow>(
-      `UPDATE public.work_record_exports
-          SET payload_hash = $2,
-              signature = $3,
-              signer_key_id = $4,
-              signer_public_key = $5,
-              status = 'signed',
-              signed_at = now()
-        WHERE id = $1
-        RETURNING *`,
-      [
-        row.id,
-        signed.payload_hash ?? hash,
-        signed.signature_b64,
-        signed.key_id ?? null,
-        signed.public_key_b64,
-      ],
-    );
-    return {
-      export: updated.rows[0] ?? row,
-      signed: true,
-      retryHint: null,
-    };
+    return (await response.json()) as SignerSignResponse;
   } catch (error) {
     console.warn(
-      "[dataPortability] signer unavailable; export left pending",
+      "[dataPortability] work-record signer unavailable; export stays pending",
       error,
     );
-    return {
-      export: row,
-      signed: false,
-      retryHint: "signer_unavailable: retry signing later",
-    };
+    return null;
   }
 }
 
-export async function listMyExports(userId: number): Promise<ExportRow[]> {
+/**
+ * Request a signed work-record export. The row is persisted first (status
+ * 'pending' with payload + payload_hash), then signing is attempted. Signer
+ * down -> the export stays 'pending' and the caller gets a retry hint; the
+ * procedure never throws on a signer outage.
+ */
+export async function requestExport(
+  userId: number,
+  input: { periodStart: Date; periodEnd: Date },
+): Promise<{
+  export: WorkRecordExportRow;
+  signed: boolean;
+  retryHint: string | null;
+}> {
+  if (input.periodEnd.getTime() <= input.periodStart.getTime()) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "period_end_must_be_after_period_start",
+    });
+  }
+  const payload = await assembleWorkRecordPayload(
+    userId,
+    input.periodStart,
+    input.periodEnd,
+  );
+  const canonical = canonicalJson(payload);
+  const payloadHash = sha256Hex(canonical);
+
   const pool = await getPool();
-  const result = await pool.query<ExportRow>(
+  const inserted = await pool.query<WorkRecordExportRow>(
+    `INSERT INTO public.work_record_exports
+       (user_id, period_start, period_end, payload, payload_hash, status)
+     VALUES ($1, $2, $3, $4::jsonb, $5, 'pending')
+     RETURNING *`,
+    [
+      userId,
+      input.periodStart,
+      input.periodEnd,
+      canonical,
+      payloadHash,
+    ],
+  );
+  const row = inserted.rows[0];
+  if (!row) {
+    throw new TRPCError({
+      code: "INTERNAL_SERVER_ERROR",
+      message: "work_record_export_creation_failed",
+    });
+  }
+
+  const signed = await signWorkRecord(canonical);
+  if (!signed) {
+    return {
+      export: row,
+      signed: false,
+      retryHint:
+        "signer_unavailable:export_kept_pending;retry_request_or_resign_later",
+    };
+  }
+
+  const updated = await pool.query<WorkRecordExportRow>(
+    `UPDATE public.work_record_exports
+     SET payload_hash = $2,
+         signature = $3,
+         signer_key_id = $4,
+         signer_public_key = $5,
+         status = 'signed',
+         signed_at = now()
+     WHERE id = $1
+     RETURNING *`,
+    [row.id, signed.payload_hash, signed.signature_b64, signed.key_id, signed.public_key_b64],
+  );
+  return { export: updated.rows[0] ?? row, signed: true, retryHint: null };
+}
+
+export async function listMyExports(
+  userId: number,
+): Promise<WorkRecordExportRow[]> {
+  const pool = await getPool();
+  const result = await pool.query<WorkRecordExportRow>(
     `SELECT * FROM public.work_record_exports
-      WHERE user_id = $1 ORDER BY created_at DESC LIMIT 100`,
+     WHERE user_id = $1
+     ORDER BY created_at DESC
+     LIMIT 100`,
     [userId],
   );
   return result.rows;
 }
 
+/** Own-rows-only fetch: another worker's export id is a NOT_FOUND. */
 export async function getExport(
   userId: number,
   input: { id: string },
-): Promise<ExportRow> {
+): Promise<WorkRecordExportRow> {
   const pool = await getPool();
-  const result = await pool.query<ExportRow>(
+  const result = await pool.query<WorkRecordExportRow>(
     `SELECT * FROM public.work_record_exports
-      WHERE id = $1 AND user_id = $2`,
+     WHERE id = $1 AND user_id = $2`,
     [input.id, userId],
   );
   const row = result.rows[0];
   if (!row) {
-    throw new TRPCError({ code: "NOT_FOUND", message: "export_not_found" });
+    throw new TRPCError({
+      code: "NOT_FOUND",
+      message: "work_record_export_not_found",
+    });
   }
   return row;
 }
 
+/**
+ * Public verification of an export against the signer. Fail-open: when the
+ * verifier is unreachable the caller gets valid: null plus everything needed
+ * to verify offline (sha256 of the canonical payload).
+ */
 export async function verifyExport(input: {
   payload: string;
   signature: string;
@@ -332,17 +354,18 @@ export async function verifyExport(input: {
   valid: boolean | null;
   reason: string | null;
   payloadHash: string;
-  offlineVerify: { algorithm: string; payloadHash: string; instructions: string };
+  offlineVerify: { algorithm: string; instructions: string };
 }> {
   const payloadHash = sha256Hex(input.payload);
   const offlineVerify = {
     algorithm: "ed25519 over sha256(canonical payload)",
-    payloadHash,
     instructions:
-      "Compute sha256 over the payload bytes, then verify the base64 signature against the base64 ed25519 public key.",
+      "Hash the exact payload string with sha256 (hex must equal payloadHash), " +
+      "then verify `signature` (base64 ed25519) over the exact payload bytes " +
+      "with `publicKey` (base64 ed25519 verifying key).",
   };
+  const base = ENV.workRecordSignerUrl.replace(/\/$/, "");
   try {
-    const base = ENV.workRecordSignerUrl.replace(/\/$/, "");
     const response = await resilientFetch(`${base}/verify`, {
       method: "POST",
       headers: {
@@ -355,11 +378,12 @@ export async function verifyExport(input: {
         public_key_b64: input.publicKey,
       }),
       ...FAIL_OPEN_FAST,
+      maxAttempts: 1,
     });
     if (!response.ok) {
-      throw new Error(`verifier returned status ${response.status}`);
+      throw new Error(`signer /verify returned status ${response.status}`);
     }
-    const body = (await response.json()) as { valid?: boolean };
+    const body = (await response.json()) as { valid: boolean };
     return {
       valid: body.valid === true,
       reason: null,
@@ -367,7 +391,10 @@ export async function verifyExport(input: {
       offlineVerify,
     };
   } catch (error) {
-    console.warn("[dataPortability] verifier unavailable; failing open", error);
+    console.warn(
+      "[dataPortability] work-record verifier unavailable; returning null verdict",
+      error,
+    );
     return {
       valid: null,
       reason: "verifier_unavailable",
@@ -377,86 +404,106 @@ export async function verifyExport(input: {
   }
 }
 
+/**
+ * Per-category summary of the data the platform holds about the caller:
+ * recorded disclosures plus live counts for the exportable categories.
+ */
 export async function getMyDataDisclosure(userId: number): Promise<{
   categories: Array<{
     category: DisclosureCategory;
     disclosures: number;
-    lastDisclosedAt: string | null;
+    lastDisclosedAt: string | Date | null;
   }>;
-  heldData: { profile: boolean; trips: number; exports: number };
+  heldData: {
+    profile: boolean;
+    trips: number;
+    exports: number;
+  };
+  disclosures: DataTransparencyDisclosureRow[];
 }> {
   const pool = await getPool();
   const grouped = await pool.query<{
     category: DisclosureCategory;
-    disclosures: string | number;
-    last_disclosed_at: string | null;
+    disclosures: number;
+    last_disclosed_at: string | Date | null;
   }>(
-    `SELECT category, count(*) AS disclosures, max(disclosed_at) AS last_disclosed_at
-       FROM public.data_transparency_disclosures
-      WHERE user_id = $1
-      GROUP BY category`,
+    `SELECT category, count(*)::int AS disclosures, max(disclosed_at) AS last_disclosed_at
+     FROM public.data_transparency_disclosures
+     WHERE user_id = $1
+     GROUP BY category`,
     [userId],
   );
   const byCategory = new Map(grouped.rows.map((row) => [row.category, row]));
+  const categories = DISCLOSURE_CATEGORIES.map((category) => ({
+    category,
+    disclosures: byCategory.get(category)?.disclosures ?? 0,
+    lastDisclosedAt: byCategory.get(category)?.last_disclosed_at ?? null,
+  }));
 
-  const heldProfile = await pool.query<{ exists: boolean }>(
-    `SELECT EXISTS(SELECT 1 FROM public.users WHERE id = $1) AS exists`,
-    [userId],
-  );
-  const heldTrips = await pool.query<{ c: string | number }>(
-    `SELECT count(*) AS c FROM public.rider_trips WHERE rider_user_id = $1`,
-    [userId],
-  );
-  const heldExports = await pool.query<{ c: string | number }>(
-    `SELECT count(*) AS c FROM public.work_record_exports WHERE user_id = $1`,
+  let profile = false;
+  let trips = 0;
+  let exports = 0;
+  try {
+    const result = await pool.query<{ exists: boolean }>(
+      `SELECT EXISTS(SELECT 1 FROM public.users WHERE id = $1) AS exists`,
+      [userId],
+    );
+    profile = result.rows[0]?.exists === true;
+  } catch {
+    // fail-open: disclosure summary still returns
+  }
+  try {
+    const result = await pool.query<{ c: number }>(
+      `SELECT count(*)::int AS c FROM public.rider_trips WHERE rider_user_id = $1`,
+      [userId],
+    );
+    trips = result.rows[0]?.c ?? 0;
+  } catch {
+    // fail-open
+  }
+  try {
+    const result = await pool.query<{ c: number }>(
+      `SELECT count(*)::int AS c FROM public.work_record_exports WHERE user_id = $1`,
+      [userId],
+    );
+    exports = result.rows[0]?.c ?? 0;
+  } catch {
+    // fail-open
+  }
+
+  const disclosures = await pool.query<DataTransparencyDisclosureRow>(
+    `SELECT * FROM public.data_transparency_disclosures
+     WHERE user_id = $1
+     ORDER BY disclosed_at DESC
+     LIMIT 100`,
     [userId],
   );
 
   return {
-    categories: DISCLOSURE_CATEGORIES.map((category) => ({
-      category,
-      disclosures: num(byCategory.get(category)?.disclosures),
-      lastDisclosedAt:
-        byCategory.get(category)?.last_disclosed_at ?? null,
-    })),
-    heldData: {
-      profile: heldProfile.rows[0]?.exists === true,
-      trips: num(heldTrips.rows[0]?.c),
-      exports: num(heldExports.rows[0]?.c),
-    },
+    categories,
+    heldData: { profile, trips, exports },
+    disclosures: disclosures.rows,
   };
 }
 
+/** Operator-recorded transparency disclosure for a worker. */
 export async function recordDisclosure(
-  operatorUserId: number,
+  actorUserId: number,
   input: {
     userId: number;
     category: DisclosureCategory;
-    detail: Record<string, unknown>;
+    detail?: Record<string, unknown>;
   },
-) {
-  if (!DISCLOSURE_CATEGORIES.includes(input.category)) {
-    throw new TRPCError({ code: "BAD_REQUEST", message: "category_invalid" });
-  }
+): Promise<DataTransparencyDisclosureRow> {
   const pool = await getPool();
-  const detail = {
-    ...input.detail,
-    recorded_by: operatorUserId,
-  };
-  const result = await pool.query<{
-    id: string;
-    user_id: number;
-    category: DisclosureCategory;
-    detail: Record<string, unknown>;
-    disclosed_at: string;
-  }>(
-    `INSERT INTO public.data_transparency_disclosures
-       (user_id, category, detail)
+  const detail = { ...(input.detail ?? {}), recorded_by: actorUserId };
+  const inserted = await pool.query<DataTransparencyDisclosureRow>(
+    `INSERT INTO public.data_transparency_disclosures (user_id, category, detail)
      VALUES ($1, $2, $3::jsonb)
      RETURNING *`,
     [input.userId, input.category, JSON.stringify(detail)],
   );
-  const row = result.rows[0];
+  const row = inserted.rows[0];
   if (!row) {
     throw new TRPCError({
       code: "INTERNAL_SERVER_ERROR",
