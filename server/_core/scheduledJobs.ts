@@ -275,28 +275,76 @@ export async function verificationOutboxSweepJob(limit = 50) {
     [bounded],
   );
 
-  let notified = 0;
-  for (const event of claimed.rows ?? []) {
+  // Perf audit finding 11: batch-fetch case subjects and user contacts with
+  // WHERE id = ANY($1) instead of two SELECTs per event, so a 50-event sweep
+  // costs 2 RTTs of lookups instead of ~100. Notification sends stay
+  // per-event and fail-open (a notification outage never loses the consumed
+  // marker).
+  const events = claimed.rows ?? [];
+  const caseIds = [...new Set(events.map((event) => event.case_id))];
+  const subjectByCaseId = new Map<
+    string,
+    { subject_user_id: number | null; subject_type: string; subject_key: string }
+  >();
+  if (caseIds.length > 0) {
     try {
-      const subject = await pool.query<{
+      const subjects = await pool.query<{
+        id: string;
         subject_user_id: number | null;
         subject_type: string;
         subject_key: string;
       }>(
-        `SELECT subject_user_id, subject_type::text AS subject_type, subject_key
-         FROM verification.verification_case WHERE id = $1`,
-        [event.case_id],
+        `SELECT id, subject_user_id, subject_type::text AS subject_type, subject_key
+         FROM verification.verification_case WHERE id = ANY($1)`,
+        [caseIds],
       );
-      const subjectUserId = subject.rows[0]?.subject_user_id;
-      if (subjectUserId == null) continue;
-      const contact = await pool.query<{
+      for (const row of subjects.rows) {
+        subjectByCaseId.set(row.id, row);
+      }
+    } catch (error) {
+      console.warn(
+        "[scheduledJobs] verification outbox subject batch lookup failed; continuing without notifications",
+        error,
+      );
+    }
+  }
+
+  const subjectUserIds = [
+    ...new Set(
+      [...subjectByCaseId.values()]
+        .map((subject) => subject.subject_user_id)
+        .filter((id): id is number => id != null),
+    ),
+  ];
+  const contactByUserId = new Map<number, { email: string | null; phone: string | null }>();
+  if (subjectUserIds.length > 0) {
+    try {
+      const contacts = await pool.query<{
+        id: number;
         email: string | null;
         phone: string | null;
-      }>(`SELECT email, phone FROM public.users WHERE id = $1`, [
-        subjectUserId,
+      }>(`SELECT id, email, phone FROM public.users WHERE id = ANY($1)`, [
+        subjectUserIds,
       ]);
-      const user = contact.rows[0];
-      const message = `Verification update (${event.event_type}) for your ${subject.rows[0]?.subject_type} verification case ${event.case_id}.`;
+      for (const row of contacts.rows) {
+        contactByUserId.set(row.id, row);
+      }
+    } catch (error) {
+      console.warn(
+        "[scheduledJobs] verification outbox contact batch lookup failed; continuing without notifications",
+        error,
+      );
+    }
+  }
+
+  let notified = 0;
+  for (const event of events) {
+    try {
+      const subject = subjectByCaseId.get(event.case_id);
+      const subjectUserId = subject?.subject_user_id;
+      if (subject == null || subjectUserId == null) continue;
+      const user = contactByUserId.get(subjectUserId);
+      const message = `Verification update (${event.event_type}) for your ${subject.subject_type} verification case ${event.case_id}.`;
       const metadata = {
         notificationType: event.event_type,
         caseId: event.case_id,
@@ -375,6 +423,28 @@ export async function verificationSlaSweepJob(
 
   let escalated = 0;
   let operatorsNotified = 0;
+  // Perf audit finding 11: the operator recipient list is identical for every
+  // case, so fetch it ONCE per sweep instead of re-querying inside the
+  // per-case loop (was: 1 identical SELECT per escalated case).
+  let operatorEmails: string[] = [];
+  let operatorLookupFailed = false;
+  try {
+    const operators = await pool.query<{ email: string | null }>(
+      `SELECT email FROM public.users
+       WHERE role = 'admin' AND email IS NOT NULL
+       LIMIT 10`,
+    );
+    operatorEmails = operators.rows
+      .map((operator) => operator.email)
+      .filter((email): email is string => Boolean(email));
+  } catch (error) {
+    operatorLookupFailed = true;
+    console.warn(
+      "[scheduledJobs] operator lookup for SLA escalation failed; escalations will still be recorded without notifications",
+      error,
+    );
+  }
+
   for (const row of aging.rows ?? []) {
     const inserted = await pool.query<{ id: string }>(
       `INSERT INTO verification.outbox_event (case_id, event_type, payload, idempotency_key)
@@ -396,37 +466,25 @@ export async function verificationSlaSweepJob(
     );
     if (!inserted.rows[0]) continue; // already escalated — sweep is idempotent
     escalated += 1;
-    try {
-      const operators = await pool.query<{ email: string | null }>(
-        `SELECT email FROM public.users
-         WHERE role = 'admin' AND email IS NOT NULL
-         LIMIT 10`,
-      );
-      for (const operator of operators.rows) {
-        if (!operator.email) continue;
-        try {
-          await sendEmail(
-            operator.email,
-            "SwitchOS verification SLA escalation",
-            `Verification case ${row.id} (${row.subject_type} / ${row.subject_key}) has been in manual_review for over ${boundedHours} hours and needs operator attention.`,
-            {
-              notificationType: "verification.case.sla_escalated",
-              caseId: row.id,
-            },
-          );
-          operatorsNotified += 1;
-        } catch (error) {
-          console.warn(
-            `[scheduledJobs] SLA escalation notice to operator failed for case ${row.id}; continuing`,
-            error,
-          );
-        }
+    if (operatorLookupFailed) continue;
+    for (const email of operatorEmails) {
+      try {
+        await sendEmail(
+          email,
+          "SwitchOS verification SLA escalation",
+          `Verification case ${row.id} (${row.subject_type} / ${row.subject_key}) has been in manual_review for over ${boundedHours} hours and needs operator attention.`,
+          {
+            notificationType: "verification.case.sla_escalated",
+            caseId: row.id,
+          },
+        );
+        operatorsNotified += 1;
+      } catch (error) {
+        console.warn(
+          `[scheduledJobs] SLA escalation notice to operator failed for case ${row.id}; continuing`,
+          error,
+        );
       }
-    } catch (error) {
-      console.warn(
-        `[scheduledJobs] operator lookup for SLA escalation of case ${row.id} failed; continuing`,
-        error,
-      );
     }
   }
 
