@@ -1,6 +1,7 @@
 import { TRPCError } from "@trpc/server";
 
 import { getPool } from "../db";
+import { createHotCache } from "./hotCache";
 import { postConsultation } from "./workerCouncil";
 
 /**
@@ -99,15 +100,43 @@ export type RemittanceChangeNoticeRow = {
   created_at: string | Date;
 };
 
+/**
+ * Hot-read cache (perf wave W2, audit finding 9): getPolicy is a single
+ * indexed SELECT by unique market_id read on enrollment/claim/premium paths,
+ * written only by upsertPolicy. TTL 5m + write-through invalidation. Null
+ * results (market without a policy) are cached too.
+ */
+const PROTECTION_POLICY_CACHE_TTL_MS = 5 * 60_000;
+
+const protectionPolicyCache = createHotCache<ProtectionPolicyRow | null>({
+  ttlMs: PROTECTION_POLICY_CACHE_TTL_MS,
+});
+
+/**
+ * Invalidate cached protection-policy reads. Called by upsertPolicy;
+ * exported (no argument = clear everything) for tests.
+ */
+export function invalidateProtectionPolicyCache(marketId?: string): void {
+  if (marketId === undefined) {
+    protectionPolicyCache.clear();
+    return;
+  }
+  protectionPolicyCache.invalidate(marketId);
+}
+
 export async function getPolicy(
   marketId: string,
 ): Promise<ProtectionPolicyRow | null> {
+  const cached = protectionPolicyCache.get(marketId);
+  if (cached !== undefined) return cached;
   const pool = await getPool();
   const result = await pool.query<ProtectionPolicyRow>(
     `SELECT * FROM public.protection_policies WHERE market_id = $1`,
     [marketId],
   );
-  return result.rows[0] ?? null;
+  const policy = result.rows[0] ?? null;
+  protectionPolicyCache.set(marketId, policy);
+  return policy;
 }
 
 export async function getMyEnrollment(driverId: number): Promise<{
@@ -368,6 +397,7 @@ export async function upsertPolicy(
       message: "protection_policy_upsert_failed",
     });
   }
+  invalidateProtectionPolicyCache(input.marketId);
   const consultationId = await autoPostProtectionConsultation({
     actorUserId,
     title: `Driver protection policy ${input.marketId}`,
