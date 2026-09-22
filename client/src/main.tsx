@@ -17,7 +17,18 @@ if (!rootElement) {
   throw new Error("Root mount element '#root' was not found.");
 }
 
-const queryClient = new QueryClient();
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      // Perf wave W4 (audit finding 5): stop refetch storms — keep data fresh
+      // for 30s, retain cache for 5min, no refetch on window focus, one retry.
+      staleTime: 30_000,
+      gcTime: 300_000,
+      refetchOnWindowFocus: false,
+      retry: 1,
+    },
+  },
+});
 const metadataBuildVersion = document
   .querySelector('meta[name="switchos-build-version"]')
   ?.getAttribute("content")
