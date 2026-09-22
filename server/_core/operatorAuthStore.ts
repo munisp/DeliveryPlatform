@@ -39,6 +39,11 @@ export function getOperatorAuthPool() {
     pool = new Pool({
       connectionString: ENV.databaseUrl,
       ssl: buildDatabaseSsl(ENV.databaseUrl.includes("sslmode=require")),
+      // Bounded satellite pool (perf finding 10).
+      max: 5,
+      connectionTimeoutMillis: 3000,
+      idleTimeoutMillis: 30000,
+      options: "-c statement_timeout=10000",
     });
   }
   return pool;
@@ -168,15 +173,75 @@ export async function listOperatorSecuritySessions(operatorId: number): Promise<
   return result.rows;
 }
 
+/**
+ * Session-activity write throttle (perf finding 7): the per-request
+ * last_seen_at UPDATE ran on EVERY authenticated call, adding a row write
+ * (+ lock/WAL pressure) per request. The write is now throttled to at most
+ * once per 60s per session — both in-process (skip the UPDATE entirely when
+ * this instance wrote recently) and DB-side (`last_seen_at < now() - interval
+ * '60 seconds'`, so multi-instance deployments stay throttled too). When the
+ * UPDATE is skipped or matches no row due to the freshness guard, activity is
+ * confirmed with a read-only SELECT so revoked/expired sessions are still
+ * rejected on every request.
+ */
+export const OPERATOR_SESSION_LAST_SEEN_THROTTLE_SECONDS = 60;
+const lastSeenWriteThrottles = new Map<string, number>();
+const LAST_SEEN_THROTTLE_MAP_LIMIT = 10_000;
+
+function pruneLastSeenThrottleMap(now: number) {
+  if (lastSeenWriteThrottles.size <= LAST_SEEN_THROTTLE_MAP_LIMIT) return;
+  const cutoff = now - OPERATOR_SESSION_LAST_SEEN_THROTTLE_SECONDS * 1000;
+  for (const [key, writtenAt] of lastSeenWriteThrottles) {
+    if (writtenAt < cutoff) lastSeenWriteThrottles.delete(key);
+  }
+  // Hard cap: if everything is fresh, drop the oldest half rather than grow
+  // without bound.
+  if (lastSeenWriteThrottles.size > LAST_SEEN_THROTTLE_MAP_LIMIT) {
+    const excess = lastSeenWriteThrottles.size - LAST_SEEN_THROTTLE_MAP_LIMIT / 2;
+    let dropped = 0;
+    for (const key of lastSeenWriteThrottles.keys()) {
+      if (dropped >= excess) break;
+      lastSeenWriteThrottles.delete(key);
+      dropped += 1;
+    }
+  }
+}
+
 export async function isOperatorSecuritySessionActive(operatorId: number, sessionId: string) {
   await ensureOperatorAuthStore();
-  const result = await getOperatorAuthPool().query<{ id: string }>(
-    `UPDATE operator_security_sessions SET last_seen_at = NOW()
+  const sessionHash = hashSecurityValue(sessionId);
+  const now = Date.now();
+  pruneLastSeenThrottleMap(now);
+  const lastWriteAt = lastSeenWriteThrottles.get(sessionId) ?? 0;
+  if (now - lastWriteAt >= OPERATOR_SESSION_LAST_SEEN_THROTTLE_SECONDS * 1000) {
+    const updated = await getOperatorAuthPool().query<{ id: string }>(
+      `UPDATE operator_security_sessions SET last_seen_at = NOW()
+       WHERE id = $1 AND operator_id = $2 AND session_hash = $3 AND revoked_at IS NULL AND expires_at > NOW()
+         AND last_seen_at < NOW() - INTERVAL '60 seconds'
+       RETURNING id`,
+      [sessionId, operatorId, sessionHash],
+    );
+    if (updated.rows.length === 1) {
+      lastSeenWriteThrottles.set(sessionId, now);
+      return true;
+    }
+    // Zero rows: either the session is inactive/revoked/expired, or another
+    // instance refreshed last_seen_at within the last 60s. Distinguish with a
+    // read-only confirmation below (and treat a confirmed session as freshly
+    // written so this instance stops attempting the UPDATE).
+  }
+  const active = await getOperatorAuthPool().query<{ id: string }>(
+    `SELECT id FROM operator_security_sessions
      WHERE id = $1 AND operator_id = $2 AND session_hash = $3 AND revoked_at IS NULL AND expires_at > NOW()
-     RETURNING id`,
-    [sessionId, operatorId, hashSecurityValue(sessionId)],
+     LIMIT 1`,
+    [sessionId, operatorId, sessionHash],
   );
-  return result.rows.length === 1;
+  const isActive = active.rows.length === 1;
+  if (isActive && now - lastWriteAt >= OPERATOR_SESSION_LAST_SEEN_THROTTLE_SECONDS * 1000) {
+    // DB-side freshness guard absorbed the write; mirror the throttle locally.
+    lastSeenWriteThrottles.set(sessionId, now);
+  }
+  return isActive;
 }
 
 export async function revokeOperatorSecuritySession(operatorId: number, sessionId: string) {
