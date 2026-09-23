@@ -190,6 +190,12 @@ describe("SwitchOS finance integrity", () => {
       ) {
         return { rows: [] };
       }
+      // W6: catalog probe guarding the driver_incentives leg — report the
+      // table as present so the incentive leg keeps executing against the
+      // existing mock below (preserves all incentive assertions).
+      if (sql.includes("to_regclass('public.driver_incentives')")) {
+        return { rows: [{ t: "driver_incentives" }] };
+      }
       if (sql.includes("FROM transactions")) {
         return {
           rows: [{
