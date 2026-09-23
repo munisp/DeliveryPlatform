@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 
 describe("W2b perf gates: lakehouse sync decoupling", () => {
   const lakeState = vi.hoisted(() => ({
@@ -22,11 +22,24 @@ describe("W2b perf gates: lakehouse sync decoupling", () => {
     return { default: { Pool: MockPool }, Pool: MockPool };
   });
 
+  // Controllable clock: the lakehouse circuit breaker and hot cache capture
+  // the Date.now reference at module construction, so patch it before each
+  // test's dynamic import (resetModules gives every test a fresh module).
+  let nowOffsetMs = 0;
+  let realDateNow: typeof Date.now;
+
   beforeEach(() => {
     lakeState.poolConfig = null;
     lakeState.syncSelects = 0;
+    realDateNow = Date.now;
+    nowOffsetMs = 0;
+    Date.now = () => realDateNow() + nowOffsetMs;
     vi.resetModules();
     vi.unstubAllGlobals();
+  });
+
+  afterEach(() => {
+    Date.now = realDateNow;
   });
 
   it("fetchLakehouse goes through resilientFetch with a 2s timeout and abort signal", async () => {
@@ -102,6 +115,78 @@ describe("W2b perf gates: lakehouse sync decoupling", () => {
       stop();
       pending.splice(0).forEach((release) => release());
     }
+  });
+
+  it("serves repeat analytics reads from the TTL cache (W7)", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ source: "lakehouse", total: 42 }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const { getLakehouseAnalyticsSummary } = await import(
+      "../server/lib/lakehouse"
+    );
+    const first = await getLakehouseAnalyticsSummary();
+    const second = await getLakehouseAnalyticsSummary();
+    expect(first).toMatchObject({ total: 42 });
+    expect(second).toMatchObject({ total: 42 });
+    // The python-side analytics queries cost ~260ms p50; the second read
+    // within the TTL must not hit the lakehouse again.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("invalidateLakehouseReadCache forces a refetch; failures are never cached", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ source: "lakehouse", total: 1 }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ source: "lakehouse", total: 2 }),
+      })
+      // fetchLakehouse retries idempotent GETs (maxAttempts: 2): both
+      // attempts of the failing read must reject for the error to surface.
+      .mockRejectedValueOnce(new Error("lakehouse down"))
+      .mockRejectedValueOnce(new Error("lakehouse down"))
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ source: "lakehouse", total: 3 }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+    const lakehouse = await import("../server/lib/lakehouse");
+    await expect(lakehouse.getLakehouseOrderStats()).resolves.toMatchObject({
+      total: 1,
+    });
+    lakehouse.invalidateLakehouseReadCache();
+    await expect(lakehouse.getLakehouseOrderStats()).resolves.toMatchObject({
+      total: 2,
+    });
+    // The refetched success is itself cached; invalidate again so the next
+    // read actually reaches the (failing) lakehouse.
+    lakehouse.invalidateLakehouseReadCache();
+    await expect(lakehouse.getLakehouseOrderStats()).rejects.toThrow(
+      "lakehouse down",
+    );
+    // The failure must not be cached: the next read fetches again.
+    // (Two consecutive failures trip the lakehouse circuit breaker; advance
+    // past its 15s resetTimeoutMs so the next read half-opens.)
+    nowOffsetMs += 16_000;
+    await expect(lakehouse.getLakehouseOrderStats()).resolves.toMatchObject({
+      total: 3,
+    });
+    // Fetches: read1 + refetch + 2 attempts of the failing read (idempotent
+    // GET retries once) + the post-failure refetch = 5 total.
+    expect(fetchMock).toHaveBeenCalledTimes(5);
+  });
+
+  it("declares a read-cache TTL below the sync interval", async () => {
+    const { ENV } = await import("../server/_core/env");
+    expect(ENV.lakehouseReadCacheTtlMs).toBe(30_000);
+    expect(ENV.lakehouseReadCacheTtlMs).toBeLessThan(
+      ENV.lakehouseSyncIntervalMs,
+    );
   });
 });
 
