@@ -65,7 +65,17 @@ describe("W1 db hot paths", () => {
 
   describe("getFundsReconciliationSnapshot", () => {
     beforeEach(() => {
-      queryHandler = vi.fn(async () => ({ rows: [{}] }));
+      // W6: the snapshot probes the catalog for driver_incentives before
+      // running its history legs. Production has no such table (no DDL
+      // anywhere in-repo), so model it as absent: 7 history legs + 1
+      // catalog probe per compute. The probe query does not match the
+      // last_*_event filter in snapshotQueryCalls().
+      queryHandler = vi.fn(async (text: string) => {
+        if (text.includes("to_regclass('public.driver_incentives')")) {
+          return { rows: [{ t: null }] };
+        }
+        return { rows: [{}] };
+      });
     });
 
     it("bounds history legs to a trailing window and reports window_days", async () => {
@@ -77,12 +87,11 @@ describe("W1 db hot paths", () => {
 
       expect(snapshot?.window_days).toBe(DEFAULT_WINDOW_DAYS);
       const calls = snapshotQueryCalls();
-      expect(calls).toHaveLength(8);
+      expect(calls).toHaveLength(7);
 
       const windowedTables = [
         "FROM transactions",
         "FROM payout_settlements",
-        "FROM driver_incentives",
         "FROM orders",
         "FROM support_tickets",
         "FROM mojaloop_transfers",
@@ -94,6 +103,18 @@ describe("W1 db hot paths", () => {
         expect(call?.[1]).toEqual([DEFAULT_WINDOW_DAYS]);
       }
 
+      // W6: with driver_incentives absent (probe returned null), the
+      // incentive leg is skipped entirely — no driver_incentives query.
+      expect(
+        calls.find(([text]: [string]) => text.includes("FROM driver_incentives")),
+      ).toBeUndefined();
+      // …but the catalog probe ran exactly once for this compute.
+      expect(
+        poolQueryMock.mock.calls.filter(([text]: [string]) =>
+          text.includes("to_regclass('public.driver_incentives')"),
+        ),
+      ).toHaveLength(1);
+
       // Point-in-time state legs stay unbounded (no window predicate).
       const walletCall = calls.find(([text]: [string]) => text.includes("FROM wallets"));
       expect(walletCall?.[0]).not.toContain("days')::interval");
@@ -101,12 +122,35 @@ describe("W1 db hot paths", () => {
       expect(reserveCall?.[0]).not.toContain("days')::interval");
     });
 
+    it("runs the windowed incentive leg when driver_incentives exists", async () => {
+      // W6: when the catalog probe reports the table present, the snapshot
+      // executes the real incentive leg (8 history legs total), bounded to
+      // the same trailing window as the other history legs.
+      queryHandler = vi.fn(async (text: string) => {
+        if (text.includes("to_regclass('public.driver_incentives')")) {
+          return { rows: [{ t: "driver_incentives" }] };
+        }
+        return { rows: [{}] };
+      });
+      const { getFundsReconciliationSnapshot } = await import("../server/db");
+      await getFundsReconciliationSnapshot();
+
+      const calls = snapshotQueryCalls();
+      expect(calls).toHaveLength(8);
+      const incentiveCall = calls.find(([text]: [string]) =>
+        text.includes("FROM driver_incentives"),
+      );
+      expect(incentiveCall).toBeDefined();
+      expect(incentiveCall?.[0]).toContain("created_at >= now() - ($1 || ' days')::interval");
+      expect(incentiveCall?.[1]).toEqual([365]);
+    });
+
     it("serves the identical snapshot from the 60s cache without new queries", async () => {
       const { getFundsReconciliationSnapshot } = await import("../server/db");
 
       const first = await getFundsReconciliationSnapshot();
       const callsAfterFirst = snapshotQueryCalls().length;
-      expect(callsAfterFirst).toBe(8);
+      expect(callsAfterFirst).toBe(7);
 
       const second = await getFundsReconciliationSnapshot();
       expect(second).toBe(first);
@@ -123,33 +167,36 @@ describe("W1 db hot paths", () => {
       } = await import("../server/db");
 
       await getFundsReconciliationSnapshot();
-      expect(snapshotQueryCalls()).toHaveLength(8);
+      expect(snapshotQueryCalls()).toHaveLength(7);
 
       invalidateFundsReconciliationSnapshotCache();
       await getFundsReconciliationSnapshot();
-      expect(snapshotQueryCalls()).toHaveLength(16);
+      expect(snapshotQueryCalls()).toHaveLength(14);
 
       await getFundsReconciliationSnapshot({ forceRefresh: true });
-      expect(snapshotQueryCalls()).toHaveLength(24);
+      expect(snapshotQueryCalls()).toHaveLength(21);
 
       // TTL expiry: advance the clock beyond the TTL.
       vi.useFakeTimers();
       try {
         vi.setSystemTime(Date.now() + CACHE_TTL_MS + 1000);
         await getFundsReconciliationSnapshot();
-        expect(snapshotQueryCalls()).toHaveLength(32);
+        expect(snapshotQueryCalls()).toHaveLength(28);
       } finally {
         vi.useRealTimers();
       }
 
       // A different window is a different cache entry.
       await getFundsReconciliationSnapshot({ windowDays: 30 });
-      expect(snapshotQueryCalls()).toHaveLength(40);
+      expect(snapshotQueryCalls()).toHaveLength(35);
     });
 
     it("does not cache failures", async () => {
       let failures = 1;
       queryHandler = vi.fn(async (text: string) => {
+        if (text.includes("to_regclass('public.driver_incentives')")) {
+          return { rows: [{ t: null }] };
+        }
         if (failures > 0 && text.includes("FROM wallets")) {
           failures -= 1;
           throw new Error("wallet aggregate query failed");
@@ -162,7 +209,7 @@ describe("W1 db hot paths", () => {
       // The failed result must not be cached: the next call recomputes.
       const snapshot = await getFundsReconciliationSnapshot();
       expect(snapshot).not.toBeNull();
-      expect(snapshotQueryCalls().length).toBeGreaterThanOrEqual(15);
+      expect(snapshotQueryCalls().length).toBeGreaterThanOrEqual(14);
     });
 
     it("sets a server-side statement_timeout on the pool", async () => {

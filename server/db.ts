@@ -3924,6 +3924,25 @@ async function computeFundsReconciliationSnapshot(windowDays: number) {
   const pool = _pool!;
   // Trailing-window predicate applied to every history-scanning leg.
   const windowParams = [windowDays];
+  // The incentives feature has no DDL in this schema yet (driver_incentives
+  // is referenced by several queries but no migration creates it). Probe the
+  // catalog once and substitute a zeroed leg when the table is absent so the
+  // snapshot stays available; the real leg activates automatically as soon
+  // as the table exists.
+  const incentivesTableProbe = await pool.query<{ t: string | null }>(
+    `SELECT to_regclass('public.driver_incentives') AS t`,
+  );
+  const incentivesTableExists = incentivesTableProbe.rows[0]?.t != null;
+  const zeroIncentiveLeg = {
+    rows: [
+      {
+        approved_unsettled_incentives: 0,
+        paid_incentives: 0,
+        unsettled_incentive_count: 0,
+        last_incentive_event: null,
+      },
+    ],
+  };
   const [transactionResult, settlementResult, incentiveResult, orderResult, walletResult, disputeResult, reserveResult, mojaloopResult] = await Promise.all([
     pool.query<any>(`
       SELECT
@@ -3932,7 +3951,7 @@ async function computeFundsReconciliationSnapshot(windowDays: number) {
         COALESCE(SUM(amount::numeric) FILTER (WHERE type = 'refund' AND status = 'completed'), 0) AS completed_refunds,
         COALESCE(SUM(amount::numeric) FILTER (WHERE type = 'chargeback' AND status IN ('pending', 'completed')), 0) AS chargeback_exposure,
         COUNT(*) FILTER (WHERE type = 'chargeback' AND status IN ('pending', 'completed')) AS chargeback_count,
-        COALESCE(SUM(amount::numeric) FILTER (WHERE type = 'payout' AND status IN ('pending', 'approved')), 0) AS pending_payout_exposure,
+        COALESCE(SUM(amount::numeric) FILTER (WHERE type = 'payout' AND status = 'pending'), 0) AS pending_payout_exposure,
         COUNT(*) FILTER (WHERE status = 'failed') AS failed_transactions,
         COUNT(*) FILTER (WHERE status = 'pending') AS pending_transactions,
         MAX(updated_at) AS last_transaction_update
@@ -3949,7 +3968,8 @@ async function computeFundsReconciliationSnapshot(windowDays: number) {
       FROM payout_settlements
       WHERE created_at >= now() - ($1 || ' days')::interval
     `, windowParams),
-    pool.query<any>(`
+    incentivesTableExists
+      ? pool.query<any>(`
       SELECT
         COALESCE(SUM(amount) FILTER (WHERE status = 'approved' AND settlement_id IS NULL), 0) AS approved_unsettled_incentives,
         COALESCE(SUM(amount) FILTER (WHERE status = 'paid'), 0) AS paid_incentives,
@@ -3957,12 +3977,13 @@ async function computeFundsReconciliationSnapshot(windowDays: number) {
         MAX(COALESCE(paid_at, updated_at, created_at)) AS last_incentive_event
       FROM driver_incentives
       WHERE created_at >= now() - ($1 || ' days')::interval
-    `, windowParams),
+    `, windowParams)
+      : Promise.resolve(zeroIncentiveLeg),
     pool.query<any>(`
       SELECT
         COUNT(*) FILTER (WHERE status = 'cancelled') AS cancelled_orders,
         COUNT(*) FILTER (WHERE status = 'delivered') AS delivered_orders,
-        COALESCE(SUM(driver_fee) FILTER (WHERE status = 'delivered'), 0) AS delivered_driver_fees,
+        COALESCE(SUM(driver_fee::numeric) FILTER (WHERE status = 'delivered'), 0) AS delivered_driver_fees,
         MAX(COALESCE(actual_delivery_time, updated_at, created_at)) AS last_order_event
       FROM orders
       WHERE created_at >= now() - ($1 || ' days')::interval

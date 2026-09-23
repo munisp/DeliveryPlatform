@@ -1,0 +1,22 @@
+-- Migration 0094: add 'chargeback' to transaction_type
+--
+-- Perf-program evidence (W6 follow-up to the funds-reconciliation hotfix):
+-- getFundsReconciliationSnapshot and the provider-dashboard recent-
+-- transactions leg filter public.transactions on type = 'chargeback', a
+-- value the transaction_type enum never contained (created once in
+-- 0000_jittery_pride.sql as {payment, refund, payout, settlement,
+-- commission}; no later migration extends it). PostgreSQL validates enum
+-- literals at parse time, so every call to these endpoints failed with
+-- `invalid input value for enum transaction_type: "chargeback"` — the
+-- funds-reconciliation surface has never been functional against this
+-- schema. Chargebacks are transaction-shaped exposure (the mobility ledger
+-- already models the same concept via mobility.settlement_entry_kind
+-- 'chargeback'), so the value is added to the enum rather than rewriting
+-- the queries onto a different source.
+--
+-- Idempotent (IF NOT EXISTS). Intentionally a bare single statement (no
+-- BEGIN/COMMIT wrapper): one statement is implicitly transactional, and
+-- ALTER TYPE ... ADD VALUE is forbidden inside an explicit transaction
+-- block on PostgreSQL < 12. Note the new value cannot be referenced by
+-- later statements inside the same transaction on any version.
+ALTER TYPE transaction_type ADD VALUE IF NOT EXISTS 'chargeback';
