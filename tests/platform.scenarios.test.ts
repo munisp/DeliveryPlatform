@@ -9,6 +9,8 @@ const lakehouseMocks = vi.hoisted(() => ({
   getLakehouseOrderStats: vi.fn(),
   getLakehouseDriverStats: vi.fn(),
   getLakehouseMarketplaceOverview: vi.fn(),
+  // W7: routers call this defensively before a forceRefresh read.
+  invalidateLakehouseReadCache: vi.fn(),
 }));
 
 const workspaceMocks = vi.hoisted(() => ({
