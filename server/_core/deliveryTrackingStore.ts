@@ -4,7 +4,7 @@ import { ENV } from "./env";
 let pool: Pool | null = null;
 function db() {
   if (!ENV.databaseUrl) throw new Error("delivery_tracking_database_unconfigured");
-  if (!pool) pool = new Pool({ connectionString: ENV.databaseUrl, ssl: ENV.isProduction && !ENV.databaseUrl.includes("sslmode=disable") ? { rejectUnauthorized: true, ...(ENV.databaseSslCa ? { ca: ENV.databaseSslCa } : {}) } : false, max: 5 });
+  if (!pool) pool = new Pool({ connectionString: ENV.databaseUrl, ssl: ENV.isProduction && !ENV.databaseUrl.includes("sslmode=disable") ? { rejectUnauthorized: true, ...(ENV.databaseSslCa ? { ca: ENV.databaseSslCa } : {}) } : false, max: 5, connectionTimeoutMillis: 3000, idleTimeoutMillis: 30000, options: "-c statement_timeout=10000" });
   return pool;
 }
 

@@ -48,6 +48,9 @@ function getPool() {
       max: 10,
       idleTimeoutMillis: 30000,
       connectionTimeoutMillis: 5000,
+      // Bound every statement server-side so a stuck INSERT/DDL cannot pin
+      // one of the 10 pool connections indefinitely (perf finding 10).
+      options: "-c statement_timeout=15000",
     });
   }
 
@@ -236,6 +239,57 @@ async function indexInOpenSearch(event: OperationalEvent) {
   return { attempted: true, indexed: true };
 }
 
+/**
+ * Broker/search publish legs (Kafka, Dapr, OpenSearch) are best-effort
+ * fan-out: they must never add latency to the request that produced the
+ * event. recordOperationalEvent awaits ONLY the durable Postgres INSERT and
+ * dispatches each publish leg through this bounded in-process queue
+ * (max MAX_PUBLISH_IN_FLIGHT concurrent legs, backlog capped at
+ * MAX_PUBLISH_BACKLOG with drop-oldest-on-overflow semantics — a saturated
+ * broker must not grow memory without bound).
+ */
+const MAX_PUBLISH_IN_FLIGHT = 4;
+const MAX_PUBLISH_BACKLOG = 500;
+let publishInFlight = 0;
+const pendingPublishJobs: Array<() => Promise<void>> = [];
+
+function drainPublishJobs() {
+  while (
+    publishInFlight < MAX_PUBLISH_IN_FLIGHT &&
+    pendingPublishJobs.length > 0
+  ) {
+    const job = pendingPublishJobs.shift();
+    if (!job) return;
+    publishInFlight += 1;
+    void job()
+      .catch((error) =>
+        console.warn("[SwitchOS] Operational event publish leg failed", error),
+      )
+      .finally(() => {
+        publishInFlight -= 1;
+        drainPublishJobs();
+      });
+  }
+}
+
+function schedulePublishJob(job: () => Promise<void>) {
+  if (pendingPublishJobs.length >= MAX_PUBLISH_BACKLOG) {
+    console.warn(
+      "[SwitchOS] Operational event publish backlog full; dropping publish leg",
+    );
+    return;
+  }
+  pendingPublishJobs.push(job);
+  drainPublishJobs();
+}
+
+/** Test/drain support: resolves once every queued publish leg has settled. */
+export async function drainOperationalEventPublishes() {
+  while (publishInFlight > 0 || pendingPublishJobs.length > 0) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+}
+
 export async function recordOperationalEvent(event: OperationalEvent) {
   const result = {
     persisted: false,
@@ -251,26 +305,39 @@ export async function recordOperationalEvent(event: OperationalEvent) {
     console.warn("[SwitchOS] Failed to persist operational event", error);
   }
 
-  try {
-    const kafka = await publishToKafka(event);
-    result.kafkaPublished = Boolean(kafka.attempted);
-  } catch (error) {
-    console.warn("[SwitchOS] Failed to publish operational event to Kafka", error);
-  }
-
-  try {
-    const dapr = await publishToDapr(event);
-    result.daprPublished = Boolean(dapr.attempted);
-  } catch (error) {
-    console.warn("[SwitchOS] Failed to publish operational event to Dapr", error);
-  }
-
-  try {
-    const indexed = await indexInOpenSearch(event);
-    result.openSearchIndexed = Boolean(indexed.attempted);
-  } catch (error) {
-    console.warn("[SwitchOS] Failed to index operational event in OpenSearch", error);
-  }
+  // Non-blocking publish legs: schedule and return immediately. The result
+  // flags report whether each leg was scheduled (i.e. configured), not the
+  // asynchronous delivery outcome; failures are logged inside the leg.
+  result.kafkaPublished =
+    parseKafkaBrokers().length > 0 &&
+    Boolean(ENV.kafkaOperationalEventsTopic.trim());
+  result.daprPublished = Boolean(
+    ENV.daprHttpPort && ENV.daprPubsubName && ENV.daprOperationalEventsTopic,
+  );
+  result.openSearchIndexed = Boolean(
+    ENV.opensearchUrl && ENV.opensearchOperationalEventsIndex,
+  );
+  schedulePublishJob(async () => {
+    try {
+      await publishToKafka(event);
+    } catch (error) {
+      console.warn("[SwitchOS] Failed to publish operational event to Kafka", error);
+    }
+  });
+  schedulePublishJob(async () => {
+    try {
+      await publishToDapr(event);
+    } catch (error) {
+      console.warn("[SwitchOS] Failed to publish operational event to Dapr", error);
+    }
+  });
+  schedulePublishJob(async () => {
+    try {
+      await indexInOpenSearch(event);
+    } catch (error) {
+      console.warn("[SwitchOS] Failed to index operational event in OpenSearch", error);
+    }
+  });
 
   return result;
 }

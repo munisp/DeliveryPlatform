@@ -365,6 +365,20 @@ export const ENV = {
   lakehouseServiceUrl:
     process.env.LAKEHOUSE_SERVICE_URL ?? "http://127.0.0.1:8007",
   lakehousePath: process.env.LAKEHOUSE_PATH ?? "/tmp/switchos-lakehouse",
+  // Background Postgres→lakehouse sync cadence (ops-tunable). Reads no longer
+  // sync inline (perf finding 1); this is the only freshness lever.
+  lakehouseSyncIntervalMs: parseInteger(
+    process.env.LAKEHOUSE_SYNC_INTERVAL_MS,
+    45_000,
+  ),
+  // TTL for the in-process cache in front of lakehouse analytics reads
+  // (perf W7: the python analytics queries cost ~260ms p50; data is already
+  // eventually-consistent via the 45s syncer, so a 30s read cache does not
+  // materially change freshness). Kept below the sync interval.
+  lakehouseReadCacheTtlMs: parseInteger(
+    process.env.LAKEHOUSE_READ_CACHE_TTL_MS,
+    30_000,
+  ),
   dispatchOptimizerUrl:
     process.env.DISPATCH_OPTIMIZER_URL ?? "http://127.0.0.1:8090",
   notificationDispatcherUrl: getLifecycleNotificationDispatcherUrl(

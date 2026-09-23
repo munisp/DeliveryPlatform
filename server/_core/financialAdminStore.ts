@@ -17,8 +17,9 @@ function requirePool() {
             }
           : false,
       max: 5,
-      idleTimeoutMillis: 30_000,
-      connectionTimeoutMillis: 5_000,
+      idleTimeoutMillis: 30000,
+      connectionTimeoutMillis: 3000,
+      options: "-c statement_timeout=10000",
     });
   }
   return pool;

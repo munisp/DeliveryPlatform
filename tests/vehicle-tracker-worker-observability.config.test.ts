@@ -35,7 +35,10 @@ describe("vehicle tracker dedicated-worker observability configuration", () => {
     expect(env).toContain('"VEHICLE_TRACKER_DATABASE_POOL_MAX"');
     expect(env).toContain("4,\n    4,\n    8");
     expect(store).toContain('application_name: "vehicle-tracker-ingest"');
-    expect(store).toContain("connectionTimeoutMillis: 5_000");
+    // Perf finding 10: env knob is hard-capped at 5 connections with a 3s
+    // connect timeout and a server-side statement_timeout.
+    expect(store).toContain("max: Math.min(ENV.vehicleTrackerDatabasePoolMax, 5)");
+    expect(store).toContain("connectionTimeoutMillis: 3000");
     expect(metrics).toContain("vehicle_tracker_pool_connections");
     expect(metrics).toContain(
       "vehicle_tracker_database_query_duration_seconds",

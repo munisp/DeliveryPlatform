@@ -4,7 +4,8 @@ import { TRPCError } from "@trpc/server";
 
 import { getPool } from "../db";
 import { ENV } from "./env";
-import { resilientFetch } from "./resilientFetch";
+import { FAIL_OPEN_FAST, resilientFetch } from "./resilientFetch";
+
 
 /**
  * Data transparency + portability (R14).
@@ -214,7 +215,7 @@ export async function signWorkRecord(
         "x-internal-service-token": ENV.internalServiceToken,
       },
       body: JSON.stringify({ payload: canonicalPayload }),
-      timeoutMs: 5_000,
+      ...FAIL_OPEN_FAST,
       maxAttempts: 1,
     });
     if (!response.ok) {
@@ -376,7 +377,7 @@ export async function verifyExport(input: {
         signature_b64: input.signature,
         public_key_b64: input.publicKey,
       }),
-      timeoutMs: 5_000,
+      ...FAIL_OPEN_FAST,
       maxAttempts: 1,
     });
     if (!response.ok) {

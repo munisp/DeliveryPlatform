@@ -69,6 +69,11 @@ function getPool() {
     pool = new Pool({
       connectionString: ENV.databaseUrl,
       ssl: buildDatabaseSsl(ENV.databaseUrl.includes("sslmode=require")),
+      // Bounded satellite pool (perf finding 10).
+      max: 5,
+      connectionTimeoutMillis: 3000,
+      idleTimeoutMillis: 30000,
+      options: "-c statement_timeout=10000",
     });
   }
   return pool;

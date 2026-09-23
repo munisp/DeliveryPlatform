@@ -24,7 +24,10 @@ function database() {
               ...(ENV.databaseSslCa ? { ca: ENV.databaseSslCa } : {}),
             }
           : false,
-      max: 6,
+      max: 5,
+      connectionTimeoutMillis: 3000,
+      idleTimeoutMillis: 30000,
+      options: "-c statement_timeout=10000",
     });
   return pool;
 }
