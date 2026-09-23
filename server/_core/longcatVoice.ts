@@ -195,9 +195,11 @@ function getPool() {
     pool = new Pool({
       connectionString: ENV.databaseUrl,
       ssl: buildDatabaseSsl(useSsl),
-      max: 10,
-      idleTimeoutMillis: 30_000,
-      connectionTimeoutMillis: 5_000,
+      // Bounded satellite pool (perf finding 10): capped at 5 connections.
+      max: 5,
+      idleTimeoutMillis: 30000,
+      connectionTimeoutMillis: 3000,
+      options: "-c statement_timeout=10000",
     });
   }
   return pool;
