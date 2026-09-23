@@ -74,11 +74,15 @@ async function trpc(path, { input, mutation = false } = {}) {
   const headers = { cookie };
   let url = `${BASE}/api/trpc/${path}?batch=1`;
   let body;
+  // When no input is given, OMIT the input field entirely: an explicit
+  // JSON null fails `.input(z.object(...).optional())` validators ("expected
+  // object, received null"), while an absent input deserializes as
+  // undefined and satisfies both no-input and optional-input procedures.
   if (mutation) {
     headers["content-type"] = "application/json";
     body = JSON.stringify({ "0": { json: input ?? null } });
-  } else {
-    url += `&input=${encodeURIComponent(JSON.stringify({ "0": { json: input ?? null } }))}`;
+  } else if (input !== undefined) {
+    url += `&input=${encodeURIComponent(JSON.stringify({ "0": { json: input } }))}`;
   }
   const t0 = performance.now();
   const res = await fetch(url, {
