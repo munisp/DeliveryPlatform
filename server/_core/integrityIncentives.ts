@@ -2,7 +2,8 @@ import { TRPCError } from "@trpc/server";
 
 import { getPool } from "../db";
 import { ENV } from "./env";
-import { resilientFetch } from "./resilientFetch";
+import { FAIL_OPEN_FAST, resilientFetch } from "./resilientFetch";
+
 import { postConsultation } from "./workerCouncil";
 
 /**
@@ -191,7 +192,7 @@ export async function notifyIncentivesWorker(input: {
           },
         ],
       }),
-      timeoutMs: 5_000,
+      ...FAIL_OPEN_FAST,
       maxAttempts: 1,
     });
     if (!response.ok) {
