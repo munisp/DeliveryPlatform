@@ -34,6 +34,14 @@ describe("W2b perf gates: compression + fast health (source contract)", () => {
     expect(index).toContain("Z_PARTIAL_FLUSH");
   });
 
+  it("skips compression for sub-1kb responses (compression-package parity)", () => {
+    const index = source("server/_core/index.ts");
+    // Small payloads (e.g. /api/health) must pass through uncompressed:
+    // gzip framing + deflate CPU cost more than the wire savings.
+    expect(index).toContain("COMPRESSION_THRESHOLD_BYTES = 1024");
+    expect(index).toContain("bufferedBytes >= COMPRESSION_THRESHOLD_BYTES");
+  });
+
   it("/api/health performs no event write, no Redis status read, no OIDC discovery", () => {
     const index = source("server/_core/index.ts");
     const start = index.indexOf('app.get("/api/health"');
