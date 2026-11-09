@@ -149,6 +149,7 @@ import { approveExternalOperator } from "./_core/operatorAuthStore";
 import { consumerRouter } from "./_core/consumerRouter";
 import { openrideTelemetryRouter } from "./openride/telemetry";
 import { openrideBundlesRouter, openrideGeoRouter } from "./openride/bundleRegistry";
+import { rentalInsuranceRouter, rentalConditionRouter } from "./rental/conditionInsurance";
 import { riderVerificationRouter } from "./_core/riderVerificationRouter";
 import { invalidateVerificationStatusCache } from "./_core/riderVerification";
 import { verificationRouter } from "./_core/verificationRouter";
@@ -2052,6 +2053,8 @@ export const appRouter = router({
   openrideTelemetry: openrideTelemetryRouter,
   openrideBundles: openrideBundlesRouter,
   openrideGeo: openrideGeoRouter,
+  rentalInsurance: rentalInsuranceRouter,
+  rentalCondition: rentalConditionRouter,
 
   contractDefaults: contractDefaultsRouter,
 });
