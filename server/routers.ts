@@ -147,6 +147,8 @@ import { selfserveRouter } from "./_core/selfserveRouter";
 import { driverOnboardingRouter } from "./_core/driverOnboardingRouter";
 import { approveExternalOperator } from "./_core/operatorAuthStore";
 import { consumerRouter } from "./_core/consumerRouter";
+import { openrideTelemetryRouter } from "./openride/telemetry";
+import { openrideBundlesRouter, openrideGeoRouter } from "./openride/bundleRegistry";
 import { riderVerificationRouter } from "./_core/riderVerificationRouter";
 import { invalidateVerificationStatusCache } from "./_core/riderVerification";
 import { verificationRouter } from "./_core/verificationRouter";
@@ -2046,6 +2048,10 @@ export const appRouter = router({
   transition: transitionRouter,
 
   portability: portabilityRouter,
+
+  openrideTelemetry: openrideTelemetryRouter,
+  openrideBundles: openrideBundlesRouter,
+  openrideGeo: openrideGeoRouter,
 
   contractDefaults: contractDefaultsRouter,
 });
