@@ -48,32 +48,33 @@ const bundleEntrySchema = z.object({
 type BundleEntry = z.infer<typeof bundleEntrySchema>;
 
 /**
- * Checked-in default registry (contract C3 example values for Lagos).
- * NOTE: the spec ships placeholder digests ("sha256":"..."); the values below
- * MUST be replaced with the real artifact digests at first publish — until
- * then prefer the BUNDLE_REGISTRY env var in any real deployment.
+ * Checked-in default registry (contract C3 — Lagos).
+ * Digests below are the REAL sha256 of the validated 2026-11-09 Lagos bundle
+ * built from openstreetmap.fr nigeria.osm.pbf (see docs/REALWORLD_VALIDATION.md
+ * in munisp/OpenRide). The BUNDLE_REGISTRY env var still overrides this list
+ * for additional cities/versions.
  */
 const DEFAULT_BUNDLE_REGISTRY: BundleEntry[] = [
   {
     city: "lagos",
     version: "2026-11-09",
     bounds: { minLat: 6.4, minLon: 3.2, maxLat: 6.7, maxLon: 3.55 },
-    sizeBytes: 148_000_000,
+    sizeBytes: 148_763_558,
     files: {
       graph: {
         path: "lagos/2026-11-09/graph.bin",
         sha256:
-          "0000000000000000000000000000000000000000000000000000000000000000",
+          "70e9a1a87f7269e9aac45396484ad16aeb222eca3a866a9ef2f70cc31f74b0c2",
       },
       tiles: {
-        path: "lagos/2026-11-09/tiles.mbtiles",
+        path: "lagos/2026-11-09/tiles.mbf",
         sha256:
-          "0000000000000000000000000000000000000000000000000000000000000000",
+          "2a0f4c8477b8538785ca1a2689120ed5f80813f696a5925fa9575b461de5c1af",
       },
       geocoder: {
         path: "lagos/2026-11-09/geocoder.bin",
         sha256:
-          "0000000000000000000000000000000000000000000000000000000000000000",
+          "e4c047b6d7773d760e337ecd097d47eba59835c899183768693ee7042519c627",
       },
     },
   },
