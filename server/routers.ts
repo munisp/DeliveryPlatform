@@ -460,7 +460,7 @@ export const appRouter = router({
       .input(
         z.object({
           campaignId: z.number().int().positive().optional(),
-          campaignName: z.string().trim().min(2).max(255),
+          campaignName: z.string().trim().min(2).max(255).optional(),
           campaignType: z.string().trim().min(2).max(128).optional(),
           emailTemplate: z.string().trim().min(3).max(5000).optional(),
           smsTemplate: z.string().trim().min(3).max(1000).optional(),
@@ -489,8 +489,8 @@ export const appRouter = router({
               z.object({
                 sku: z.string().trim().min(1).max(128),
                 quantity: z.number().positive(),
-                label: z.string().trim().max(255).optional(),
-                category: z.string().trim().max(128).optional(),
+                label: z.string().trim().min(1).max(255).optional(),
+                category: z.string().trim().min(1).max(128).optional(),
                 onHandUnits: z.number().min(0).optional(),
                 reservedUnits: z.number().min(0).optional(),
                 inboundUnits: z.number().min(0).optional(),
@@ -507,8 +507,8 @@ export const appRouter = router({
             .array(
               z.object({
                 warehouseId: z.number().int().positive(),
-                label: z.string().trim().max(255),
-                zoneKey: z.string().trim().max(128).optional(),
+                label: z.string().trim().min(1).max(255),
+                zoneKey: z.string().trim().min(1).max(128).optional(),
                 distanceKm: z.number().min(0).max(200),
                 pickPackMinutes: z.number().min(0).max(240).optional(),
                 coldChainReady: z.boolean().optional(),
@@ -1036,6 +1036,7 @@ export const appRouter = router({
           endsAt: z.string().datetime(),
           idempotencyKey: z
             .string()
+            .trim()
             .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
         }),
       )
@@ -1069,10 +1070,12 @@ export const appRouter = router({
               z.object({
                 addOnVersionId: z.string().uuid(),
                 quantity: z.number().int().min(1).max(8),
-              })
-              .max(8),
+              }),
+            )
+            .max(8),
           idempotencyKey: z
             .string()
+            .trim()
             .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
         }),
       )
@@ -1094,6 +1097,7 @@ export const appRouter = router({
           acceptanceSha256Hex: z.string().regex(/^[a-f0-9]{64}$/),
           idempotencyKey: z
             .string()
+            .trim()
             .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
         }),
       )
@@ -1110,6 +1114,7 @@ export const appRouter = router({
           requestedEndsAt: z.string().datetime(),
           idempotencyKey: z
             .string()
+            .trim()
             .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
         }),
       )
@@ -1135,6 +1140,7 @@ export const appRouter = router({
           odometerKm: z.number().int().min(0).max(5000000),
           idempotencyKey: z
             .string()
+            .trim()
             .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
         }),
       )
@@ -1149,6 +1155,7 @@ export const appRouter = router({
           reason: z.string().trim().min(3).max(1000).nullable(),
           idempotencyKey: z
             .string()
+            .trim()
             .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
         }),
       )
@@ -1391,6 +1398,7 @@ export const appRouter = router({
           consentSha256Hex: z.string().regex(/^[a-f0-9]{64}$/),
           idempotencyKey: z
             .string()
+            .trim()
             .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
         }),
       )
@@ -1708,6 +1716,7 @@ export const appRouter = router({
           detail: z.record(z.string(), z.unknown()).optional(),
           idempotencyKey: z
             .string()
+            .trim()
             .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
         }),
       )
@@ -1720,7 +1729,7 @@ export const appRouter = router({
           fulfillmentId: z.string().uuid(),
           deliveryOrderId: z.number().int().positive(),
           driverId: z.number().int().positive(),
-          idempotencyKey: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
+          idempotencyKey: z.string().trim().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
         }),
       )
       .mutation(({ ctx, input }) =>
@@ -1730,7 +1739,7 @@ export const appRouter = router({
       .input(
         z.object({
           providerId: z.number().int().positive(),
-          connectionKey: z.string().trim().regex(/^[a-z0-9][a-z0-9-]{2,63}$/),
+          connectionKey: z.string().trim().regex(/^[a-z][a-z0-9-]{2,63}$/),
           platformName: z.string().trim().min(3).max(120),
           inboundEnabled: z.boolean(),
           outboundEnabled: z.boolean(),
