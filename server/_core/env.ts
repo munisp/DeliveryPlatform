@@ -311,6 +311,7 @@ export const ENV = {
   allowedOrigins: process.env.ALLOWED_ORIGINS ?? DEFAULT_ALLOWED_ORIGINS,
   cspConnectSrc: process.env.CSP_CONNECT_SRC ?? DEFAULT_CSP_CONNECT_SRC,
   apiBodyLimit: process.env.API_BODY_LIMIT ?? "10mb",
+  rentalConditionUploadDir: process.env.RENTAL_CONDITION_UPLOAD_DIR ?? "",
   bootstrapOperatorEmail: (
     process.env.BOOTSTRAP_OPERATOR_EMAIL ?? "admin@switchos.local"
   )
