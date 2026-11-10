@@ -529,8 +529,8 @@ export async function getDriverMarketplaceProfile(driverId: number) {
         COUNT(*) FILTER (WHERE status = 'delivered') AS delivered_jobs,
         COUNT(*) FILTER (WHERE status = 'cancelled') AS cancelled_jobs,
         COALESCE(SUM(active_hours) FILTER (WHERE status = 'delivered'), 0) AS active_hours,
-        COALESCE(SUM(long_trip), 0) AS long_trip_jobs,
-        COALESCE(SUM(multi_stop), 0) AS multi_stop_jobs
+        COALESCE(SUM(long_trip) FILTER (WHERE status = 'delivered'), 0) AS long_trip_jobs,
+        COALESCE(SUM(multi_stop) FILTER (WHERE status = 'delivered'), 0) AS multi_stop_jobs
       FROM recent_orders
     )
     SELECT
@@ -2978,6 +2978,7 @@ export async function triggerJobManually(jobName: string) {
     closeLeaderboard: jobs.closeLeaderboard,
     pointsExpiration: jobs.pointsExpiration,
     abTestWinner: jobs.abTestWinner,
+    vehicleAccessOutboxSweep: jobs.vehicleAccessOutboxSweep,
   };
 
   const job = jobMap[jobName];
@@ -3405,9 +3406,9 @@ export async function getConsumerMarketplaceSummary(limit = 8) {
       recent_orders: recentOrdersResult.rows.length,
       active_memberships: Number(membershipStats.active_memberships || 0),
       avg_membership_price: Number(Number(membershipStats.avg_membership_price || 0).toFixed(2)),
-      membership_savings_ytd: Number(Number(membershipStats.savings_ytd || 0).toFixed(2)),
+      membership_savings_ytd: Number(Number(membershipStats.membership_savings_ytd || 0).toFixed(2)),
       review_count: Number(reviewStats.review_count || 0),
-      average_review_rating: Number(Number(reviewStats.avg_rating || 0).toFixed(2)),
+      average_review_rating: Number(Number(reviewStats.average_review_rating || 0).toFixed(2)),
     },
     categories: verticalsResult.rows.map((row: any) => ({
       id: Number(row.id),
@@ -3438,7 +3439,7 @@ export async function getConsumerMarketplaceSummary(limit = 8) {
       business_name: row.business_name || 'Featured merchant',
     })),
     recent_orders: recentOrdersResult.rows.map((row: any) => {
-      const tracking = (trackingMap.get(Number(row.id)) || {}) as any;
+      const tracking = (trackingMap.get(Number(row.order_id)) || {}) as any;
       return {
         id: Number(row.id),
         status: row.status,
