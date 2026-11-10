@@ -134,3 +134,37 @@ No silent fallbacks; every failure throws a coded `DocumentOcrError`:
 | `ocr_response_unparseable` | Model output contained no JSON object |
 | `ocr_unsupported_content_type` / `ocr_invalid_image_base64` / `ocr_image_too_large` | Input rejected before any model call |
 | `ocr_invalid_field_name` / `ocr_no_fields` / `ocr_too_many_fields` | Field list rejected before any model call |
+
+## KYC document extraction (migration 0099)
+
+When a caller submits verification evidence via
+`stakeholderVerification.recordEvidence` with an `imageBase64` payload and a
+`contentType` of `image/jpeg` or `image/png`, extraction fires automatically
+**after** the evidence row is recorded. The mutation resolves with the
+evidence id first; extraction runs fire-and-forget behind a `.catch(() => {})`
+(same precedent as the decision notification in `decideVerificationCase`), so
+an OCR outage, an unconfigured backend, or a persistence failure **never
+blocks or rolls back evidence submission**. No extraction row on a case simply
+means "no aid recorded" — it is not a failure state.
+
+Each run extracts a fixed KYC field set (`full name`, `date of birth`,
+`document number`, `expiry date`, `nationality`) with the evidence kind as
+`documentHint`, then persists the result through
+`verification.record_document_extraction` into
+`verification.document_extraction` — an **append-only** table (UPDATE/DELETE
+raise `55000`, mirroring `verification.evidence`). Rows carry the model
+identifier, whether the Jev judge was enabled, the per-field
+`{field, value, confidence, needsReview}` array, and an idempotency key
+(unique per `(case_id, evidence_id, idempotency_key)`, so retries are safe).
+
+**Who can read extractions:** `stakeholderVerification.getExtractions` →
+`verification.get_case_extractions` returns rows to the case subject
+(`subject_user_id`), the case creator (`created_by_user_id`), or an operator —
+the same gating family as `list_cases_for_actor`. There is no anonymous or
+third-party read path.
+
+**Review-only mandate:** extracted fields are a *review aid for human
+operators*. They never feed `decide_case`, never flip a case state, and no
+code path auto-approves or auto-rejects a verification from them. Operators
+must treat `confidence`/`needsReview` per the honesty note above: a null
+confidence means *unverified*, not *correct*.
