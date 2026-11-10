@@ -2,6 +2,7 @@ import { FormEvent, useMemo, useState } from "react";
 import { CarFront, ClipboardCheck, Loader2, ShieldCheck } from "lucide-react";
 import DashboardLayout from "@/components/DashboardLayout";
 import { RentalConditionReportPanel } from "@/components/RentalConditionReportPanel";
+import { RentalDisputePanel } from "@/components/RentalDisputePanel";
 import { RentalInsuranceTierManager } from "@/components/RentalInsuranceTierManager";
 import { RentalSettlementPanel } from "@/components/RentalSettlementPanel";
 import { VehicleRentalOperationsPanel } from "@/components/VehicleRentalOperationsPanel";
@@ -297,6 +298,7 @@ export default function VehicleAccessOperations() {
         <RentalInsuranceTierManager onNotice={setNotice} />
         <RentalConditionReportPanel onNotice={setNotice} />
         <RentalSettlementPanel onNotice={setNotice} />
+        <RentalDisputePanel onNotice={setNotice} />
         <VehicleTrackerSafetyPanel onNotice={setNotice} />
 
         <section className="grid gap-5 xl:grid-cols-[1.6fr_1fr]">
