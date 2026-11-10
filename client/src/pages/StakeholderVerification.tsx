@@ -15,6 +15,61 @@ function key(prefix: string) {
   return `${prefix}-${Date.now()}-verification`;
 }
 
+
+function confidencePercent(confidence: number) {
+  return `${Math.round(confidence <= 1 ? confidence * 100 : confidence)}%`;
+}
+
+function CaseExtractions({ caseId }: { caseId: string }) {
+  const extractions = trpc.stakeholderVerification.getExtractions.useQuery({
+    caseId,
+  });
+  if (!extractions.data?.length) {
+    return null;
+  }
+  return (
+    <div className="mt-3 space-y-2">
+      {extractions.data.map((row) => (
+        <div
+          key={row.id}
+          className="rounded border border-slate-800 bg-slate-900/60 p-3"
+        >
+          <p className="text-xs font-medium text-slate-200">
+            {row.model}
+            <span className="ml-2 font-normal text-slate-400">
+              {new Date(row.extractedAt).toLocaleString()}
+            </span>
+          </p>
+          <div className="mt-2 space-y-1">
+            {row.fields.map((field) => (
+              <div
+                key={field.field}
+                className="flex items-center justify-between gap-3 text-xs"
+              >
+                <span className="text-slate-400">{field.field}</span>
+                <span className="flex items-center gap-2 text-slate-200">
+                  {field.value ?? "—"}
+                  {field.confidence !== null && (
+                    <span className="text-slate-500">
+                      {confidencePercent(field.confidence)}
+                    </span>
+                  )}
+                  {field.needsReview && (
+                    <span className="inline-flex items-center gap-1 rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-300">
+                      <ShieldAlert className="h-3 w-3" />
+                      Needs review
+                    </span>
+                  )}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export default function StakeholderVerification() {
   const [form, setForm] = useState({
     subjectType: "driver" as const,
@@ -155,22 +210,22 @@ export default function StakeholderVerification() {
           <CardContent>
             <div className="space-y-2">
               {(cases.data ?? []).map((item) => (
-                <div
-                  key={item.id}
-                  className="flex items-center justify-between border-b border-slate-800 py-3 text-sm"
-                >
-                  <div>
-                    <p className="font-medium text-slate-100">
-                      {item.subjectType} · {item.subjectKey}
-                    </p>
-                    <p className="text-slate-400">
-                      {item.jurisdiction} · {item.purpose}
-                    </p>
+                <div key={item.id} className="border-b border-slate-800 py-3 text-sm">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="font-medium text-slate-100">
+                        {item.subjectType} · {item.subjectKey}
+                      </p>
+                      <p className="text-slate-400">
+                        {item.jurisdiction} · {item.purpose}
+                      </p>
+                    </div>
+                    <span className="inline-flex items-center gap-1 text-cyan-200">
+                      <ShieldCheck className="h-4 w-4" />
+                      {item.state}
+                    </span>
                   </div>
-                  <span className="inline-flex items-center gap-1 text-cyan-200">
-                    <ShieldCheck className="h-4 w-4" />
-                    {item.state}
-                  </span>
+                  <CaseExtractions caseId={item.id} />
                 </div>
               ))}
               {!cases.isLoading && !cases.data?.length && (
