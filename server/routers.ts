@@ -150,6 +150,7 @@ import { consumerRouter } from "./_core/consumerRouter";
 import { openrideTelemetryRouter } from "./openride/telemetry";
 import { openrideBundlesRouter, openrideGeoRouter } from "./openride/bundleRegistry";
 import { rentalInsuranceRouter, rentalConditionRouter } from "./rental/conditionInsurance";
+import { rentalDisputeRouter } from "./rental/disputes";
 import { riderVerificationRouter } from "./_core/riderVerificationRouter";
 import { invalidateVerificationStatusCache } from "./_core/riderVerification";
 import { verificationRouter } from "./_core/verificationRouter";
@@ -511,7 +512,7 @@ export const appRouter = router({
               z.object({
                 warehouseId: z.number().int().positive(),
                 label: z.string().trim().min(1).max(255),
-                zoneKey: z.string().trim().min(1).max(128).optional(),
+                zoneKey: z.string().trim().max(1).max(128).optional(),
                 distanceKm: z.number().min(0).max(200),
                 pickPackMinutes: z.number().min(0).max(240).optional(),
                 coldChainReady: z.boolean().optional(),
@@ -2055,6 +2056,7 @@ export const appRouter = router({
   openrideGeo: openrideGeoRouter,
   rentalInsurance: rentalInsuranceRouter,
   rentalCondition: rentalConditionRouter,
+  rentalDispute: rentalDisputeRouter,
 
   contractDefaults: contractDefaultsRouter,
 });
