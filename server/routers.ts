@@ -151,6 +151,7 @@ import { openrideTelemetryRouter } from "./openride/telemetry";
 import { openrideBundlesRouter, openrideGeoRouter } from "./openride/bundleRegistry";
 import { rentalInsuranceRouter, rentalConditionRouter } from "./rental/conditionInsurance";
 import { rentalDisputeRouter } from "./rental/disputes";
+import { documentOcrRouter } from "./_core/documentOcrRouter";
 import { riderVerificationRouter } from "./_core/riderVerificationRouter";
 import { invalidateVerificationStatusCache } from "./_core/riderVerification";
 import { verificationRouter } from "./_core/verificationRouter";
@@ -2057,6 +2058,7 @@ export const appRouter = router({
   rentalInsurance: rentalInsuranceRouter,
   rentalCondition: rentalConditionRouter,
   rentalDispute: rentalDisputeRouter,
+  documentOcr: documentOcrRouter,
 
   contractDefaults: contractDefaultsRouter,
 });
