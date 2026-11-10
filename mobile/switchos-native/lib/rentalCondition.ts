@@ -675,3 +675,109 @@ export function normalizeDeltaReport(raw: unknown): NormalizedDeltaReport | null
     settlement: normalizeSettlement(record.settlement),
   };
 }
+
+// ---------------------------------------------------------------------------
+// rentalDispute router (settlement disputes) — same bridge pattern; the
+// router ships with the dispute wave and is absent from the embedded
+// AppRouter type, so access stays confined to these wrappers.
+// ---------------------------------------------------------------------------
+
+/** Frozen rentalDispute.open reason enum (vehicle_access Postgres enum). */
+export type DisputeReason =
+  | "damage_charge"
+  | "excess_km_charge"
+  | "fuel_charge"
+  | "odometer_dispute"
+  | "other";
+
+export const DISPUTE_REASONS: { value: DisputeReason; label: string }[] = [
+  { value: "damage_charge", label: "Damage charge" },
+  { value: "excess_km_charge", label: "Excess km charge" },
+  { value: "fuel_charge", label: "Fuel charge" },
+  { value: "odometer_dispute", label: "Odometer dispute" },
+  { value: "other", label: "Other" },
+];
+
+export type DisputeStatus = "open" | "upheld" | "rejected" | "adjusted";
+
+/** rentalDispute.list / .get row (jsonb, snake_case keys on the wire). */
+export interface NormalizedDispute {
+  id: string;
+  contractId: string;
+  settlementId: string | null;
+  renterUserId: number | null;
+  reason: DisputeReason | string;
+  detail: string;
+  status: DisputeStatus | string;
+  adjustmentMinor: number | null;
+  operatorNote: string | null;
+  decidedBy: number | null;
+  decidedAt: string | null;
+  createdAt: string | null;
+}
+
+export interface OpenRentalDisputeInput {
+  contractId: string;
+  reason: DisputeReason;
+  detail: string;
+  idempotencyKey: string;
+}
+
+/** Renter-side dispute submission; server resolves the settlement context. */
+export function useOpenRentalDispute() {
+  return asMutation<OpenRentalDisputeInput, string>(
+    bridge.rentalDispute.open.useMutation(),
+  );
+}
+
+/** Disputes for one contract (renter view: own rows; operator: all rows). */
+export function useRentalDisputes(contractId: string) {
+  return asQuery<unknown>(
+    bridge.rentalDispute.list.useQuery(
+      { contractId },
+      { enabled: isUuid(contractId), staleTime: 15_000 },
+    ),
+  );
+}
+
+export function normalizeDispute(raw: unknown): NormalizedDispute | null {
+  const record = asRecord(raw);
+  if (!record) return null;
+  const id = pick<string>(record, "id");
+  if (!id) return null;
+  const adjustment = pick<unknown>(record, "adjustment_minor", "adjustmentMinor");
+  return {
+    id,
+    contractId: pick<string>(record, "contract_id", "contractId") ?? "",
+    settlementId: pick<string>(record, "settlement_id", "settlementId") ?? null,
+    renterUserId:
+      pick<unknown>(record, "renter_user_id", "renterUserId") === undefined
+        ? null
+        : toInt(pick<unknown>(record, "renter_user_id", "renterUserId")),
+    reason: pick<string>(record, "reason") ?? "other",
+    detail: pick<string>(record, "detail") ?? "",
+    status: pick<string>(record, "status") ?? "open",
+    adjustmentMinor: adjustment === undefined ? null : toInt(adjustment),
+    operatorNote: pick<string>(record, "operator_note", "operatorNote") ?? null,
+    decidedBy:
+      pick<unknown>(record, "decided_by", "decidedBy") === undefined
+        ? null
+        : toInt(pick<unknown>(record, "decided_by", "decidedBy")),
+    decidedAt: pick<string>(record, "decided_at", "decidedAt") ?? null,
+    createdAt: pick<string>(record, "created_at", "createdAt") ?? null,
+  };
+}
+
+/** Accepts a bare array of rows or a {disputes: [...]} / {items: [...]} wrapper. */
+export function normalizeDisputes(raw: unknown): NormalizedDispute[] {
+  const list = Array.isArray(raw)
+    ? raw
+    : (pick<unknown>(asRecord(raw) ?? {}, "disputes", "items") ?? []);
+  if (!Array.isArray(list)) return [];
+  const disputes: NormalizedDispute[] = [];
+  for (const entry of list) {
+    const dispute = normalizeDispute(entry);
+    if (dispute) disputes.push(dispute);
+  }
+  return disputes;
+}

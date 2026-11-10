@@ -14,13 +14,19 @@ import {
 import * as Auth from "@/lib/_core/auth";
 import { formatMinor, formatDateTime } from "@/lib/money";
 import {
+  DISPUTE_REASONS,
   PHOTO_ZONES,
   isUuid,
   newIdempotencyKey,
   normalizeDeltaReport,
+  normalizeDisputes,
   useComputeReturnSettlement,
   useConditionDeltaReport,
+  useOpenRentalDispute,
   useRentalConditionInvalidation,
+  useRentalDisputes,
+  type DisputeReason,
+  type DisputeStatus,
   type NormalizedConditionPhoto,
   type NormalizedDeltaReport,
   type PhotoZone,
@@ -361,6 +367,169 @@ function OperatorSettlementPanel({
   );
 }
 
+const DISPUTE_STATUS_TONES: Record<
+  DisputeStatus,
+  "success" | "warning" | "error" | "info" | "neutral"
+> = {
+  open: "warning",
+  upheld: "neutral",
+  rejected: "error",
+  adjusted: "info",
+};
+
+function disputeReasonLabel(reason: string): string {
+  return DISPUTE_REASONS.find((entry) => entry.value === reason)?.label ?? reason;
+}
+
+function DisputeSettlementSection({ contractId }: { contractId: string }) {
+  const disputesQuery = useRentalDisputes(contractId);
+  const openDispute = useOpenRentalDispute();
+  const disputes = useMemo(
+    () => normalizeDisputes(disputesQuery.data),
+    [disputesQuery.data],
+  );
+  const [reason, setReason] = useState<DisputeReason>("damage_charge");
+  const [detail, setDetail] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [confirmation, setConfirmation] = useState<string | null>(null);
+  const idempotencyKeyRef = useRef(newIdempotencyKey("settlement-dispute"));
+
+  const submit = () => {
+    const trimmed = detail.trim();
+    if (trimmed.length < 10 || trimmed.length > 2000) {
+      setError("Describe the dispute in 10 to 2000 characters.");
+      return;
+    }
+    setError(null);
+    setConfirmation(null);
+    openDispute.mutate(
+      {
+        contractId,
+        reason,
+        detail: trimmed,
+        idempotencyKey: idempotencyKeyRef.current,
+      },
+      {
+        onSuccess: () => {
+          idempotencyKeyRef.current = newIdempotencyKey("settlement-dispute");
+          setDetail("");
+          setConfirmation(
+            "Dispute submitted. Operations will review it against the settlement evidence.",
+          );
+          void disputesQuery.refetch();
+        },
+        onError: (mutationError) => setError(mutationError.message),
+      },
+    );
+  };
+
+  return (
+    <SectionCard
+      title="Dispute settlement"
+      subtitle="Contest a damage, excess-km, fuel, or odometer charge from this settlement."
+    >
+      <View className="gap-1">
+        <Text className="text-xs uppercase tracking-wide text-muted">
+          Reason
+        </Text>
+        <View className="flex-row flex-wrap gap-2">
+          {DISPUTE_REASONS.map((entry) => {
+            const selected = entry.value === reason;
+            return (
+              <Pressable
+                key={entry.value}
+                onPress={() => setReason(entry.value)}
+                accessibilityRole="button"
+                accessibilityLabel={`Dispute reason: ${entry.label}`}
+                className={`rounded-full border px-3 py-2 ${
+                  selected
+                    ? "border-primary bg-primary/20"
+                    : "border-border bg-background/60"
+                }`}
+              >
+                <Text
+                  className={`text-xs font-semibold ${
+                    selected ? "text-foreground" : "text-muted"
+                  }`}
+                >
+                  {entry.label}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </View>
+      </View>
+      <View className="gap-1">
+        <Text className="text-xs uppercase tracking-wide text-muted">
+          Detail (minimum 10 characters)
+        </Text>
+        <TextInput
+          value={detail}
+          onChangeText={setDetail}
+          placeholder="Describe what is wrong with the settlement…"
+          placeholderTextColor={trustPlaceholderColor}
+          multiline
+          maxLength={2000}
+          editable={!openDispute.isPending}
+          className={trustInputClass}
+        />
+      </View>
+      {error ? (
+        <Notice tone="error" title="Dispute not submitted" body={error} />
+      ) : null}
+      {confirmation ? (
+        <Notice tone="success" title="Dispute opened" body={confirmation} />
+      ) : null}
+      <Pressable
+        onPress={submit}
+        disabled={openDispute.isPending}
+        accessibilityRole="button"
+        accessibilityLabel="Submit settlement dispute"
+        className="items-center rounded-full bg-primary px-4 py-4"
+        style={({ pressed }) => ({
+          opacity: pressed || openDispute.isPending ? 0.6 : 1,
+        })}
+      >
+        <Text className="text-sm font-semibold text-white">
+          {openDispute.isPending ? "Submitting…" : "Submit dispute"}
+        </Text>
+      </Pressable>
+      {disputes.length > 0 ? (
+        <View className="gap-2">
+          <Text className="text-xs uppercase tracking-wide text-muted">
+            Your disputes
+          </Text>
+          {disputes.map((dispute) => (
+            <View
+              key={dispute.id}
+              className="gap-1 rounded-[16px] border border-border/60 bg-surface px-3 py-2"
+            >
+              <View className="flex-row items-center justify-between gap-2">
+                <Text className="text-sm font-semibold text-foreground">
+                  {disputeReasonLabel(dispute.reason)}
+                </Text>
+                <StatusPill
+                  label={dispute.status.replace("_", " ")}
+                  tone={
+                    DISPUTE_STATUS_TONES[dispute.status as DisputeStatus] ??
+                    "neutral"
+                  }
+                />
+              </View>
+              <Text className="text-xs leading-4 text-muted" numberOfLines={3}>
+                {dispute.detail}
+              </Text>
+              <Text className="text-[10px] text-muted">
+                Opened {formatDateTime(dispute.createdAt)}
+              </Text>
+            </View>
+          ))}
+        </View>
+      ) : null}
+    </SectionCard>
+  );
+}
+
 export default function RentalSettlementScreen() {
   const params = useLocalSearchParams<{
     contractId?: string;
@@ -486,6 +655,7 @@ export default function RentalSettlementScreen() {
                 rule.
               </Text>
             )}
+            <DisputeSettlementSection contractId={contractId} />
           </>
         )}
       </ScrollView>
