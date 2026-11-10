@@ -107,8 +107,10 @@ import {
 import {
   decideVerificationCase,
   enqueueVerificationProcessing,
+  getCaseExtractions,
   getVerificationChecks,
   listVerificationCases,
+  recordDocumentExtraction,
   recordVerificationConsent,
   recordVerificationEvidence,
   recordVerificationProviderCheck,
@@ -151,6 +153,7 @@ import { openrideTelemetryRouter } from "./openride/telemetry";
 import { openrideBundlesRouter, openrideGeoRouter } from "./openride/bundleRegistry";
 import { rentalInsuranceRouter, rentalConditionRouter } from "./rental/conditionInsurance";
 import { rentalDisputeRouter } from "./rental/disputes";
+import { extractDocumentFields } from "./_core/documentOcr";
 import { documentOcrRouter } from "./_core/documentOcrRouter";
 import { riderVerificationRouter } from "./_core/riderVerificationRouter";
 import { invalidateVerificationStatusCache } from "./_core/riderVerification";
@@ -845,6 +848,11 @@ export const appRouter = router({
       .query(({ ctx, input }) =>
         getVerificationChecks(ctx.user!.id, input.caseId),
       ),
+    getExtractions: authenticatedProcedure
+      .input(z.object({ caseId: z.string().uuid() }))
+      .query(({ ctx, input }) =>
+        getCaseExtractions(ctx.user!.id, input.caseId),
+      ),
     startCase: authenticatedProcedure
       .input(
         z.object({
@@ -916,14 +924,58 @@ export const appRouter = router({
           ]),
           sha256Hex: z.string().regex(/^[a-f0-9]{64}$/),
           captureMetadata: z.record(z.string(), z.unknown()),
+          imageBase64: z.string().max(9_000_000).optional(),
           idempotencyKey: z
             .string()
             .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
         }),
       )
-      .mutation(({ ctx, input }) =>
-        recordVerificationEvidence({ actorUserId: ctx.user!.id, ...input }),
-      ),
+      .mutation(async ({ ctx, input }) => {
+        const { imageBase64, ...evidence } = input;
+        const evidenceId = await recordVerificationEvidence({
+          actorUserId: ctx.user!.id,
+          ...evidence,
+        });
+        // Fail-open (decideVerificationCase notification precedent): document
+        // extraction is a review aid and must never block evidence submission.
+        if (
+          imageBase64 &&
+          (input.contentType === "image/jpeg" ||
+            input.contentType === "image/png")
+        ) {
+          const image = imageBase64;
+          void (async () => {
+            const result = await extractDocumentFields({
+              imageBase64: image,
+              contentType: input.contentType,
+              fields: [
+                "full name",
+                "date of birth",
+                "document number",
+                "expiry date",
+                "nationality",
+              ],
+              documentHint: input.evidenceKind,
+              idempotencyKey: input.idempotencyKey,
+            });
+            await recordDocumentExtraction({
+              actorUserId: ctx.user!.id,
+              caseId: input.caseId,
+              evidenceId,
+              model: result.model,
+              jevEnabled: result.jev.enabled,
+              fields: Object.entries(result.fields).map(([field, entry]) => ({
+                field,
+                value: entry.value,
+                confidence: entry.confidence,
+                needsReview: entry.needsReview,
+              })),
+              idempotencyKey: input.idempotencyKey,
+            });
+          })().catch(() => {});
+        }
+        return evidenceId;
+      }),
     enqueueProcessing: authenticatedProcedure
       .input(
         z.object({

@@ -145,6 +145,37 @@ export async function recordVerificationEvidence(input: {
   return one(result.rows, "verification_evidence").id;
 }
 
+export type DocumentExtractionField = {
+  field: string;
+  value: string | null;
+  confidence: number | null;
+  needsReview: boolean;
+};
+
+export async function recordDocumentExtraction(input: {
+  actorUserId: number;
+  caseId: string;
+  evidenceId: string;
+  model: string;
+  jevEnabled: boolean;
+  fields: DocumentExtractionField[];
+  idempotencyKey: string;
+}) {
+  const result = await database().query<{ id: string }>(
+    `SELECT verification.record_document_extraction($1,$2::uuid,$3::uuid,$4,$5,$6::jsonb,$7) AS id`,
+    [
+      input.actorUserId,
+      input.caseId,
+      input.evidenceId,
+      input.model,
+      input.jevEnabled,
+      JSON.stringify(input.fields),
+      input.idempotencyKey,
+    ],
+  );
+  return one(result.rows, "verification_document_extraction").id;
+}
+
 export async function enqueueVerificationProcessing(input: {
   actorUserId: number;
   caseId: string;
@@ -221,6 +252,32 @@ export async function getVerificationChecks(
     checkedAt: row.checked_at.toISOString(),
     expiresAt: row.expires_at?.toISOString() ?? null,
     detailCode: row.detail_code,
+  }));
+}
+
+export async function getCaseExtractions(actorUserId: number, caseId: string) {
+  const result = await database().query<{
+    get_case_extractions: {
+      id: string;
+      case_id: string;
+      evidence_id: string;
+      model: string;
+      jev_enabled: boolean;
+      fields: DocumentExtractionField[];
+      extracted_at: string;
+    };
+  }>(`SELECT * FROM verification.get_case_extractions($1,$2::uuid)`, [
+    actorUserId,
+    caseId,
+  ]);
+  return result.rows.map((row) => ({
+    id: row.get_case_extractions.id,
+    caseId: row.get_case_extractions.case_id,
+    evidenceId: row.get_case_extractions.evidence_id,
+    model: row.get_case_extractions.model,
+    jevEnabled: row.get_case_extractions.jev_enabled,
+    fields: row.get_case_extractions.fields,
+    extractedAt: row.get_case_extractions.extracted_at,
   }));
 }
 
