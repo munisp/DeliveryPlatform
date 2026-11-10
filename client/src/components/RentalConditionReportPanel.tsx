@@ -6,9 +6,11 @@
  * `rentalCondition.recordReport`, which requires at least one
  * dashboard_odometer zone photo server-side.
  *
- * Photos are evidence stored server-side with no GET endpoint yet, so each
- * photo renders as a placeholder tile (zone, damage badge, object key, short
- * sha256) rather than an <img>.
+ * Photos are evidence stored server-side and served same-origin from
+ * GET /api/rental-condition/photo/<objectKey>; each photo renders as an
+ * <img> over a metadata tile (zone, damage badge, object key, short sha256)
+ * and falls back to the metadata-only tile when the image cannot be loaded
+ * (e.g. photo storage is not configured on the server).
  */
 import { FormEvent, useMemo, useState } from "react";
 import { Camera, Loader2 } from "lucide-react";
@@ -30,6 +32,7 @@ import {
   type ConditionGrade,
   type ConditionPhase,
   type ConditionPhotoContentType,
+  type NormalizedConditionPhoto,
   type PhotoZone,
 } from "@/lib/rentalConditionWire";
 
@@ -58,6 +61,48 @@ function emptyPhotoDraft(zone: PhotoZone): PhotoDraft {
     damageFlag: false,
     note: "",
   };
+}
+
+function ConditionPhotoTile({ photo }: { photo: NormalizedConditionPhoto }) {
+  const [imageFailed, setImageFailed] = useState(false);
+  const showImage = photo.objectKey.length > 0 && !imageFailed;
+  return (
+    <div className="space-y-1 border border-slate-800 bg-slate-950/40 p-3">
+      <div className="flex items-center justify-between gap-2">
+        <p className="flex items-center gap-1 text-sm font-medium text-slate-200">
+          <Camera className="h-3.5 w-3.5 text-cyan-300" />
+          {photoZoneLabel(photo.zone)}
+        </p>
+        {photo.damageFlag ? (
+          <span className="rounded-full border border-rose-400/40 bg-rose-500/10 px-2 py-0.5 text-xs text-rose-200">
+            Damage
+          </span>
+        ) : (
+          <span className="rounded-full border border-slate-700 px-2 py-0.5 text-xs text-slate-400">
+            No damage
+          </span>
+        )}
+      </div>
+      {showImage ? (
+        <img
+          src={`/api/rental-condition/photo/${photo.objectKey}`}
+          alt={`${photoZoneLabel(photo.zone)} condition evidence`}
+          loading="lazy"
+          onError={() => setImageFailed(true)}
+          className="aspect-video w-full rounded border border-slate-800 object-cover"
+        />
+      ) : null}
+      <p className="break-all font-mono text-xs text-slate-500">
+        {photo.objectKey}
+      </p>
+      <p className="font-mono text-xs text-slate-600">
+        sha256 {photo.sha256Hex.slice(0, 12)}…
+      </p>
+      {photo.note ? (
+        <p className="text-xs text-slate-400">{photo.note}</p>
+      ) : null}
+    </div>
+  );
 }
 
 export function RentalConditionReportPanel({
@@ -249,37 +294,10 @@ export function RentalConditionReportPanel({
                     ) : null}
                     <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
                       {activeReport.photos.map((photo, index) => (
-                        <div
+                        <ConditionPhotoTile
                           key={`${photo.zone}-${photo.sha256Hex || index}`}
-                          className="space-y-1 border border-slate-800 bg-slate-950/40 p-3"
-                        >
-                          <div className="flex items-center justify-between gap-2">
-                            <p className="flex items-center gap-1 text-sm font-medium text-slate-200">
-                              <Camera className="h-3.5 w-3.5 text-cyan-300" />
-                              {photoZoneLabel(photo.zone)}
-                            </p>
-                            {photo.damageFlag ? (
-                              <span className="rounded-full border border-rose-400/40 bg-rose-500/10 px-2 py-0.5 text-xs text-rose-200">
-                                Damage
-                              </span>
-                            ) : (
-                              <span className="rounded-full border border-slate-700 px-2 py-0.5 text-xs text-slate-400">
-                                No damage
-                              </span>
-                            )}
-                          </div>
-                          <p className="break-all font-mono text-xs text-slate-500">
-                            {photo.objectKey}
-                          </p>
-                          <p className="font-mono text-xs text-slate-600">
-                            sha256 {photo.sha256Hex.slice(0, 12)}…
-                          </p>
-                          {photo.note ? (
-                            <p className="text-xs text-slate-400">
-                              {photo.note}
-                            </p>
-                          ) : null}
-                        </div>
+                          photo={photo}
+                        />
                       ))}
                     </div>
                   </div>

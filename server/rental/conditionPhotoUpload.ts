@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { createReadStream } from "node:fs";
+import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import type express from "express";
@@ -9,17 +10,27 @@ import { recordOperationalEvent } from "../_core/operationalEvents";
 import type { SessionUser } from "../_core/trpc";
 
 /**
- * Rental condition photo upload (POST /api/rental-condition/photo).
+ * Rental condition photo upload (POST /api/rental-condition/photo) and
+ * download (GET /api/rental-condition/photo/<objectKey>).
  *
  * The mobile app captures check-out / check-in evidence photos, encodes them
- * as base64 JSON and posts them here. The handler is a thin adapter; all
- * validation and storage semantics live in storeConditionPhoto so they can
- * be unit-tested without Express.
+ * as base64 JSON and posts them here. The upload handler is a thin adapter;
+ * all validation and storage semantics live in storeConditionPhoto so they
+ * can be unit-tested without Express.
+ *
+ * The download handler streams a previously stored photo back to any
+ * authenticated session (the PWA renders it via same-origin <img>). The
+ * object key is extracted from the wildcard path, validated against the
+ * exact same strict key pattern used at upload time, and resolved inside
+ * ENV.rentalConditionUploadDir with traversal defenses; resolution semantics
+ * live in resolveConditionPhotoPath so they can be unit-tested without
+ * Express. Responses are private-cached for one hour and served inline with
+ * a nosniff content type derived from the key extension.
  *
  * Authorization (which contract party may read or attach which evidence) is
  * enforced downstream by the vehicle_access.record_condition_report SQL
- * function when the stored object key is linked to a contract; this endpoint
- * only requires an authenticated session.
+ * function when the stored object key is linked to a contract; these
+ * endpoints only require an authenticated session.
  */
 
 export const CONDITION_PHOTO_MAX_BYTES = 6_000_000;
@@ -233,5 +244,117 @@ export async function handleRentalConditionPhotoUpload(
   } catch (error) {
     console.error("[SwitchOS] Rental condition photo upload failed", error);
     res.status(500).json({ error: "photo_upload_failed" });
+  }
+}
+
+export type ResolveConditionPhotoResult =
+  | {
+      status: 200;
+      path: string;
+      contentType: string;
+      sizeBytes: number;
+    }
+  | {
+      status: 400 | 404 | 503;
+      error:
+        | "invalid_object_key"
+        | "photo_not_found"
+        | "photo_storage_not_configured";
+    };
+
+/**
+ * Resolve a validated condition-photo object key to a file inside the
+ * configured upload root. Fail-closed: no root means 503, a key that does
+ * not match the strict upload-time shape (or that escapes the root) means
+ * 400, and a missing object means 404.
+ */
+export async function resolveConditionPhotoPath(
+  root: unknown,
+  objectKey: unknown,
+): Promise<ResolveConditionPhotoResult> {
+  const trimmedRoot = typeof root === "string" ? root.trim() : "";
+  if (!trimmedRoot) {
+    return { status: 503, error: "photo_storage_not_configured" };
+  }
+  if (!isValidConditionPhotoObjectKey(objectKey)) {
+    return { status: 400, error: "invalid_object_key" };
+  }
+  const resolvedRoot = path.resolve(trimmedRoot);
+  const targetPath = path.join(resolvedRoot, objectKey);
+  if (!targetPath.startsWith(resolvedRoot + path.sep)) {
+    return { status: 400, error: "invalid_object_key" };
+  }
+  const extension = objectKey.split(".").pop()?.toLowerCase() ?? "";
+  const contentType = CONTENT_TYPE_BY_EXTENSION[extension];
+  if (!contentType) {
+    return { status: 400, error: "invalid_object_key" };
+  }
+  let sizeBytes: number;
+  try {
+    const info = await stat(targetPath);
+    if (!info.isFile()) {
+      return { status: 404, error: "photo_not_found" };
+    }
+    sizeBytes = info.size;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return { status: 404, error: "photo_not_found" };
+    }
+    throw error;
+  }
+  return { status: 200, path: targetPath, contentType, sizeBytes };
+}
+
+export async function handleRentalConditionPhotoDownload(
+  req: express.Request,
+  res: express.Response,
+): Promise<void> {
+  try {
+    // Same session middleware contract as the upload route: req.user is
+    // populated for every /api/* path; any authenticated role may download.
+    const user = (
+      req as express.Request & { user?: SessionUser | null }
+    ).user;
+    if (!user) {
+      res.status(401).json({ error: "unauthorized" });
+      return;
+    }
+    // Express wildcard params are positional: params[0] is everything after
+    // "/api/rental-condition/photo/".
+    const params = (req.params ?? {}) as Record<string, unknown>;
+    const objectKey = typeof params["0"] === "string" ? params["0"] : "";
+    const resolved = await resolveConditionPhotoPath(
+      ENV.rentalConditionUploadDir,
+      objectKey,
+    );
+    if (resolved.status !== 200) {
+      res.status(resolved.status).json({ error: resolved.error });
+      return;
+    }
+    res.setHeader("Content-Type", resolved.contentType);
+    res.setHeader("Content-Length", resolved.sizeBytes);
+    res.setHeader("Content-Disposition", "inline");
+    res.setHeader("Cache-Control", "private, max-age=3600");
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    const stream = createReadStream(resolved.path);
+    stream.on("error", (streamError) => {
+      console.error(
+        "[SwitchOS] Rental condition photo stream failed",
+        streamError,
+      );
+      // The file was stat'ed moments ago, so an error here means the object
+      // vanished mid-serve; only a fresh response can still report it.
+      if (!res.headersSent) {
+        res.status(500).json({ error: "photo_read_failed" });
+      } else if (!res.writableEnded) {
+        res.end();
+      }
+    });
+    stream.pipe(res);
+  } catch (error) {
+    console.error("[SwitchOS] Rental condition photo download failed", error);
+    if (!res.headersSent) {
+      res.status(500).json({ error: "photo_download_failed" });
+    }
   }
 }

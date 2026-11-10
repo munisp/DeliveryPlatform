@@ -176,3 +176,68 @@ into place so readers never observe partial content.
   409 conflict), fail-closed 503 with unset root, and handler-level 401/503.
 - `npx tsc --noEmit --strict` clean over the new module, tests, and the
   patched `env.ts` (sandbox stubs for `operationalEvents`/`trpc` only).
+
+## Photo download endpoint (GET /api/rental-condition/photo/<key>)
+
+Mounted in `server/_core/index.ts` immediately after the upload route:
+`app.get("/api/rental-condition/photo/*", rateLimit(120), handleRentalConditionPhotoDownload);`
+— same global session middleware, so `req.user` is resolved from
+`Authorization: Bearer` or the session cookie exactly like the upload route.
+
+### Contract
+
+- **Path**: the wildcard segment after `/api/rental-condition/photo/` is the
+  object key, validated against the *same* strict pattern enforced at upload
+  time (`isValidConditionPhotoObjectKey` — single source of truth):
+  `^rental-condition/[0-9a-fA-F-]{36}/(check_out|check_in)/[a-z_]{2,32}-[0-9a-f]{16}\.(jpg|jpeg|png|webp)$`,
+  plus the defensive rejects for `..`, leading `/`, and backslashes.
+- **Auth**: any authenticated role (401 `unauthorized` otherwise). Per-party
+  evidence authorization remains downstream in
+  `vehicle_access.record_condition_report`; the download only proves the
+  caller is a signed-in user of the platform, matching the upload posture.
+- **Storage root**: fail-closed — `RENTAL_CONDITION_UPLOAD_DIR` unset/empty →
+  503 `photo_storage_not_configured`. The resolved target must start with
+  `resolvedRoot + path.sep`; root-prefix escapes are rejected 400.
+- **Success (200)**: streamed via `fs.createReadStream` with headers
+  `Content-Type` by extension (`jpg/jpeg → image/jpeg`, `png → image/png`,
+  `webp → image/webp`), `Content-Length` from `stat`,
+  `Content-Disposition: inline`, `Cache-Control: private, max-age=3600`
+  (per-user evidence, one-hour browser cache, never shared caches), and
+  `X-Content-Type-Options: nosniff`.
+- **Errors**: 400 `invalid_object_key` (shape/traversal/root-escape),
+  404 `photo_not_found` (missing object or non-file at the resolved path),
+  503 `photo_storage_not_configured`, 500 `photo_read_failed` /
+  `photo_download_failed` (only when headers are not yet sent; a mid-stream
+  failure after headers simply terminates the response).
+
+### Core logic
+
+`resolveConditionPhotoPath(root, objectKey)` in
+`server/rental/conditionPhotoUpload.ts` is transport-free (no Express) and
+returns `{status: 200, path, contentType, sizeBytes}` or
+`{status: 400|404|503, error}`; the handler is a thin adapter that maps the
+result onto the response and pipes the stream.
+
+### Client
+
+`RentalConditionReportPanel` renders each recorded photo as
+`<img src={/api/rental-condition/photo/<objectKey>} loading="lazy">`
+(same-origin, so the PWA session cookie authenticates) with the zone label,
+damage badge, object key, and short sha256 kept as the tile caption; an
+`onError` handler swaps the tile back to metadata-only when the image cannot
+be loaded (e.g. storage not configured → 503).
+
+### Verification performed
+
+- `tests/rental-condition-photo-download.test.ts` (vitest, 9 tests): content
+  type per extension (jpg/jpeg/png/webp), 503 on unset root (incl. blank and
+  non-string), traversal/absolute/backslash/wrong-phase/bad-extension keys →
+  400, root-prefix escape attempts → 400, 404 for missing file and for a
+  directory at the resolved path, handler-level 401 unauthenticated and 503
+  fail-closed. Full suite: 25/25 passing (16 upload + 9 download).
+- `npx tsc --noEmit --strict` clean over the extended module, both test
+  files, and the patched client component (sandbox stubs for
+  `operationalEvents`/`trpc`/shadcn card only).
+- `server/_core/index.ts` diff discipline: removing the import delta and the
+  single added `app.get` line `git hash-object`-roundtrips to the base main
+  blob `7763e7be551af1efe3329a7c2dae680883d8d4ad`.
