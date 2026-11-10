@@ -126,7 +126,10 @@ import {
 } from "./developerApi";
 import { startDeveloperWebhookDispatcher } from "./developerWebhookDispatcher";
 import { startLakehouseSyncer } from "../lib/lakehouse";
-import { handleRentalConditionPhotoUpload } from "../rental/conditionPhotoUpload";
+import {
+  handleRentalConditionPhotoDownload,
+  handleRentalConditionPhotoUpload,
+} from "../rental/conditionPhotoUpload";
 import { developerOpenApi } from "./developerOpenApi";
 import { ingestMedusaWebhook, MedusaCommerceError } from "./medusaCommerce";
 import { ingestExternalCommerceWebhook } from "./commerceFulfillment";
@@ -1239,6 +1242,7 @@ app.get("/api/auth/session-profile", rateLimit(60), (req, res) => {
 });
 
 app.post("/api/rental-condition/photo", rateLimit(30), handleRentalConditionPhotoUpload);
+app.get("/api/rental-condition/photo/*", rateLimit(120), handleRentalConditionPhotoDownload);
 
 function readDeveloperApiKey(req: express.Request, res: express.Response) {
   const apiKey = `${req.header("X-API-Key") ?? ""}`.trim();
