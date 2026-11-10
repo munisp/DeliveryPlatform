@@ -241,3 +241,96 @@ be loaded (e.g. storage not configured → 503).
 - `server/_core/index.ts` diff discipline: removing the import delta and the
   single added `app.get` line `git hash-object`-roundtrips to the base main
   blob `7763e7be551af1efe3329a7c2dae680883d8d4ad`.
+
+
+## Settlement disputes (migration 0097)
+
+Gap closed: a renter whose return settlement was computed (0096) previously had no
+in-schema way to contest the damage / excess-km / fuel / odometer outcome — the
+only recourse was out-of-band support contact with no auditable trail.
+`drizzle/0097_settlement_disputes.sql` adds `vehicle_access.settlement_dispute`
+plus four SECURITY DEFINER authority functions, following the 0050/0058/0096
+conventions exactly (search_path pinned, `is_operator` gate, idempotency-key
+regex, dual-channel events, guarded GRANT EXECUTE).
+
+### Mutability decision (option a)
+
+`prevent_rental_operations_mutation()` raises on EVERY UPDATE/DELETE, so it cannot
+guard a table whose `decide_*` function must UPDATE status/decided_* columns. The
+existing schema precedent for request/decision tables is 0058
+`contract_extension_request`: mutable `state` + `decided_*` columns, NO
+append-only trigger, and a partial unique index `UNIQUE(contract_id) WHERE
+state='requested'`. Migration 0097 follows that precedent exactly (option (a)):
+`settlement_dispute` is mutable, guarded by
+`CREATE UNIQUE INDEX ... ON settlement_dispute(contract_id) WHERE status='open'`,
+with state/decision coherence enforced by CHECK constraints
+(`(status='open') = (decided_at IS NULL)` etc.). The append-only trigger remains
+reserved for pure evidence tables. Audit immutability of decisions is preserved
+through the dual-channel event stream instead of table immutability.
+
+### Contract
+
+- Enums: `dispute_status('open','upheld','rejected','adjusted')`,
+  `dispute_reason('damage_charge','excess_km_charge','fuel_charge','odometer_dispute','other')`.
+- `settlement_dispute(id, contract_id → access_contract, settlement_id →
+  return_settlement, renter_user_id, reason, detail 10..2000, status default 'open',
+  adjustment_minor >= 0, operator_note <= 2000, decided_by, decided_at,
+  idempotency_key UNIQUE, created_at)`.
+- `open_settlement_dispute(actor, contract, reason, detail, key, now) → uuid` —
+  renter-only (`access_contract.worker_user_id = p_actor`, `42501` otherwise),
+  settlement must exist (`23514 'return settlement required'`), one open dispute
+  per contract (`23505`), same-key replay returns the existing id; emits
+  `vehicle_access.settlement_dispute.opened` +
+  `vehicle_access.contract.settlement_dispute_opened` (both channels).
+- `decide_settlement_dispute(actor, dispute, status, adjustment_minor,
+  operator_note, key, now) → uuid` — operator-only; `p_status='open'` rejected
+  (`23514`); already-decided raises `23514 'dispute_not_open'` unless same-key
+  replay (returns dispute id, mirroring `decide_contract_extension`);
+  `'adjusted'` requires `adjustment_minor <= renter_damage_liability_minor +
+  excess_km_charge_minor` of the linked settlement (overflow-proof: bounded by
+  `total_charge_minor` via the settlement CHECK); `'upheld'`/`'rejected'` require
+  adjustment NULL.
+- `list_settlement_disputes(actor, contract?, status?, limit=50) → SETOF jsonb` —
+  STABLE; operators see all rows, non-operators only `renter_user_id = p_actor`;
+  limit clamped to 1..200.
+- `get_settlement_dispute(actor, dispute) → jsonb` — STABLE; own renter or
+  operator (`42501` otherwise).
+- `rental_operations_event.aggregate_type` CHECK extended to 10 values
+  (`+ 'settlement_dispute'`) via DROP/ADD, as in 0096.
+
+### Operator workflow
+
+1. Renter calls `rentalDispute.open` (authenticated) with the settlement
+   contract id, reason, and 10..2000-char detail.
+2. Operator lists open disputes (`rentalDispute.list` with `status:'open'`),
+   reviews the settlement and condition evidence via the 0096 delta report.
+3. Operator decides via `rentalDispute.decide`: `upheld` (settlement stands),
+   `rejected` (charge dropped), or `adjusted` with an adjustment amount within
+   the disputable ceiling and an operator note.
+
+### Money movement out of scope
+
+An `adjusted` decision only RECORDS the adjustment amount on the dispute and in
+the decision event (`money_movement:
+'out_of_scope_operator_applies_via_financial_ops'`). No funds move in this
+migration; the operator applies the adjustment through the existing financial
+operations authority afterwards. Financial settlement authority is unchanged.
+
+### Verification performed
+
+- pglast/libpg_query (real PostgreSQL grammar): 13 top-level statements, all
+  valid (2 enum DO-blocks, 2 ALTER TABLE, 1 CREATE TABLE, 3 indexes, 4 CREATE OR
+  REPLACE FUNCTION, 1 GRANT DO-block). `parse_plpgsql` body validation remains
+  broken in the packaged pglast build (fails on trivial valid bodies — tool
+  defect, re-confirmed), so function bodies were reviewed for BEGIN/END, paren,
+  and dollar-quote balance instead.
+- `tests/settlement-disputes.test.ts` (vitest, 26 tests): migration static
+  assertions (enums, table, partial unique index, idempotency regex, dual-channel
+  events, GRANT guard, no append-only trigger on the decision table, adjustment
+  cap), pure decision helpers (ceiling sum, safe-integer overflow guard), router
+  shape (`decide/get/list/open`), and zod-level validation (bad key, short
+  detail, unknown reason, unauthenticated 401, renter-decide 403, 'open' decision
+  rejected, note >2000 rejected, limit bounds). 26/26 passing.
+- `npx tsc --noEmit --strict` clean over `server/_core/vehicleDispute.ts`,
+  `server/rental/disputes.ts`, and the test file (sandbox trpc stub mirroring the
+  real middleware semantics).
