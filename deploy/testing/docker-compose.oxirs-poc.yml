@@ -1,0 +1,70 @@
+# ============================================================================
+# POC ONLY — do not attach to production networks or data.
+#
+# oxirs knowledge-graph evaluation stack. See charter:
+#   docs/pocs/oxirs-knowledge-graph-poc.md
+#
+# Isolation contract:
+#   - single dedicated "poc" bridge network (internal: no outbound internet);
+#     it is NOT connected to any platform/staging/production network
+#   - port 3030 bound to 127.0.0.1 only (localhost)
+#   - hard resource limits: 2 CPU / 4 GB
+#   - synthetic data only; Postgres/PostGIS remains source of truth
+#
+# Image note: oxirs publishes NO container image on Docker Hub or GHCR
+# (verified: upstream repo ships Dockerfiles only, and its own
+# docker-compose.yml builds from source). We therefore build from the
+# upstream git repo at the pinned tag v0.4.1 using the repo-root Dockerfile,
+# mirroring upstream's own compose setup.
+# ============================================================================
+
+name: switchos-oxirs-poc
+
+services:
+  oxirs-fuseki:
+    build:
+      # No published image exists; build from pinned upstream tag.
+      context: https://github.com/cool-japan/oxirs.git#v0.4.1
+      dockerfile: Dockerfile
+    image: switchos/oxirs-fuseki-poc:v0.4.1
+    container_name: switchos-oxirs-fuseki-poc
+    restart: unless-stopped
+    environment:
+      RUST_LOG: info
+      RUST_BACKTRACE: "1"
+      OXIRS_DATA_DIR: /data/datasets
+      OXIRS_LOG_DIR: /data/logs
+    ports:
+      # Localhost only — never expose the SPARQL endpoint off-host.
+      - "127.0.0.1:3030:3030"
+    volumes:
+      - oxirs_poc_data:/data/datasets
+      - oxirs_poc_logs:/data/logs
+    networks:
+      - poc
+    healthcheck:
+      # Fuseki-compatible ping path per upstream docker-compose.yml.
+      # '$$' escapes the literal '$' from compose interpolation.
+      test: ["CMD-SHELL", "curl -fsS http://localhost:3030/$$/ping || wget -qO- http://localhost:3030/$$/ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 4G
+
+networks:
+  poc:
+    driver: bridge
+    # No outbound internet from POC containers; inbound only via the
+    # localhost-published port above. Do NOT add other networks here.
+    internal: true
+
+volumes:
+  oxirs_poc_data:
+    driver: local
+  oxirs_poc_logs:
+    driver: local
