@@ -501,6 +501,180 @@ export async function verificationSlaSweepJob(
   };
 }
 
+
+/**
+ * Vehicle access outbox consumer sweep: vehicle_access contract lifecycle
+ * events (currently settlement dispute opened/decided) are enqueued to
+ * vehicle_access.outbox_event but nothing consumed them. The schema revokes
+ * table access from PUBLIC, so claiming goes through the SECURITY DEFINER
+ * vehicle_access.claim_outbox_events (published_at marker + FOR UPDATE SKIP
+ * LOCKED, idempotent under concurrent sweeps). Opened disputes notify
+ * operators; decisions notify the renter with the outcome (fail-open per
+ * send — a notification outage never loses the published marker). Unknown
+ * event types are skipped silently so newer events stay forward-compatible.
+ */
+export async function vehicleAccessOutboxSweepJob(limit = 50) {
+  const pool = await getPoolOrNull();
+  if (!pool) {
+    return {
+      success: false,
+      message: "Database unavailable; vehicle access outbox sweep was not executed.",
+    };
+  }
+
+  const bounded = Math.min(500, Math.max(1, Math.trunc(limit)));
+  const claimed = await pool.query<{
+    id: string;
+    aggregate_id: string;
+    event_type: string;
+    payload: Record<string, unknown> | null;
+    idempotency_key: string;
+    created_at: string | Date;
+  }>(`SELECT * FROM vehicle_access.claim_outbox_events($1)`, [bounded]);
+
+  const events = claimed.rows ?? [];
+  const openedEvents = events.filter(
+    (event) => event.event_type === "vehicle_access.contract.settlement_dispute_opened",
+  );
+  const decidedEvents = events.filter(
+    (event) => event.event_type === "vehicle_access.contract.settlement_dispute_decided",
+  );
+  const skipped = events.length - openedEvents.length - decidedEvents.length;
+
+  // The operator recipient list is identical for every opened dispute, so
+  // fetch it ONCE per sweep (verificationSlaSweepJob precedent).
+  let operatorEmails: string[] = [];
+  if (openedEvents.length > 0) {
+    try {
+      const operators = await pool.query<{ email: string | null }>(
+        `SELECT email FROM public.users
+         WHERE role = 'admin' AND email IS NOT NULL
+         LIMIT 10`,
+      );
+      operatorEmails = operators.rows
+        .map((operator) => operator.email)
+        .filter((email): email is string => Boolean(email));
+    } catch (error) {
+      console.warn(
+        "[scheduledJobs] vehicle access outbox operator lookup failed; continuing without operator notifications",
+        error,
+      );
+    }
+  }
+
+  // Batch-fetch renter contacts with WHERE id = ANY($1) instead of one SELECT
+  // per event (perf audit finding 11 precedent from verificationOutboxSweepJob).
+  const workerUserIds = [
+    ...new Set(
+      decidedEvents
+        .map((event) => Number(event.payload?.worker_user_id))
+        .filter((id) => Number.isInteger(id) && id > 0),
+    ),
+  ];
+  const contactByUserId = new Map<number, { email: string | null; phone: string | null }>();
+  if (workerUserIds.length > 0) {
+    try {
+      const contacts = await pool.query<{
+        id: number;
+        email: string | null;
+        phone: string | null;
+      }>(`SELECT id, email, phone FROM public.users WHERE id = ANY($1)`, [
+        workerUserIds,
+      ]);
+      for (const row of contacts.rows) {
+        contactByUserId.set(row.id, row);
+      }
+    } catch (error) {
+      console.warn(
+        "[scheduledJobs] vehicle access outbox renter contact batch lookup failed; continuing without renter notifications",
+        error,
+      );
+    }
+  }
+
+  // The outbox payload carries worker_user_id but not the decision outcome;
+  // fetch contract_event.detail (status / adjustment_minor / currency) per
+  // decided event through the SECURITY DEFINER accessor, fail-open per event.
+  const detailByEventId = new Map<string, Record<string, unknown> | null>();
+  await Promise.all(
+    decidedEvents.map(async (event) => {
+      try {
+        const detail = await pool.query<{ get_contract_event_detail: Record<string, unknown> | null }>(
+          `SELECT vehicle_access.get_contract_event_detail($1, $2)`,
+          [event.aggregate_id, event.idempotency_key],
+        );
+        detailByEventId.set(event.id, detail.rows?.[0]?.get_contract_event_detail ?? null);
+      } catch (error) {
+        console.warn(
+          `[scheduledJobs] vehicle access outbox detail lookup for contract ${event.aggregate_id} failed; continuing`,
+          error,
+        );
+        detailByEventId.set(event.id, null);
+      }
+    }),
+  );
+
+  let notified = 0;
+  for (const event of openedEvents) {
+    const message = `Settlement dispute opened for rental contract ${event.aggregate_id}. Review in the Vehicle Access console.`;
+    const metadata = {
+      notificationType: event.event_type,
+      contractId: event.aggregate_id,
+    };
+    for (const email of operatorEmails) {
+      await sendEmail(email, "SwitchOS settlement dispute opened", message, metadata)
+        .then(() => {
+          notified += 1;
+        })
+        .catch(() => undefined);
+    }
+  }
+
+  for (const event of decidedEvents) {
+    const workerUserId = Number(event.payload?.worker_user_id);
+    if (!Number.isInteger(workerUserId) || workerUserId <= 0) continue;
+    const user = contactByUserId.get(workerUserId);
+    if (!user) continue;
+    const detail = detailByEventId.get(event.id) ?? null;
+    const status = typeof detail?.status === "string" ? detail.status : "decided";
+    const adjustmentMinor = Number(detail?.adjustment_minor);
+    const currency = typeof detail?.currency === "string" ? detail.currency.trim() : "";
+    let adjustmentClause = "";
+    if (status === "adjusted" && Number.isFinite(adjustmentMinor) && adjustmentMinor >= 0) {
+      adjustmentClause = currency
+        ? ` Adjustment: ${(adjustmentMinor / 100).toFixed(2)} ${currency}.`
+        : ` Adjustment: ${adjustmentMinor} minor units.`;
+    }
+    const message = `Your settlement dispute for rental contract ${event.aggregate_id} was ${status}.${adjustmentClause}`;
+    const metadata = {
+      notificationType: event.event_type,
+      contractId: event.aggregate_id,
+    };
+    if (user.email) {
+      await sendEmail(user.email, "SwitchOS settlement dispute update", message, metadata)
+        .then(() => {
+          notified += 1;
+        })
+        .catch(() => undefined);
+    } else if (user.phone) {
+      await sendSMS(user.phone, message, metadata)
+        .then(() => {
+          notified += 1;
+        })
+        .catch(() => undefined);
+    }
+  }
+
+  const published = claimed.rowCount ?? events.length;
+  return {
+    success: true,
+    message: `Published ${published} vehicle access outbox events (notified ${notified} recipients, skipped ${skipped} unknown event types).`,
+    published,
+    notified,
+    skipped,
+  };
+}
+
 export const jobs = {
   closeLeaderboard: closeLeaderboardJob,
   pointsExpiration: expirePointsJob,
@@ -508,4 +682,5 @@ export const jobs = {
   weeklyDigest: weeklyDigestJob,
   verificationOutboxSweep: verificationOutboxSweepJob,
   verificationSlaSweep: verificationSlaSweepJob,
+  vehicleAccessOutboxSweep: vehicleAccessOutboxSweepJob,
 };

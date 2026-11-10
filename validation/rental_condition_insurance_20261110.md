@@ -334,3 +334,51 @@ operations authority afterwards. Financial settlement authority is unchanged.
 - `npx tsc --noEmit --strict` clean over `server/_core/vehicleDispute.ts`,
   `server/rental/disputes.ts`, and the test file (sandbox trpc stub mirroring the
   real middleware semantics).
+
+## Dispute notifications (migration 0098 + vehicleAccessOutboxSweep)
+
+### What fires
+
+`open_settlement_dispute` and `decide_settlement_dispute` already enqueue
+`vehicle_access.contract.settlement_dispute_opened` /
+`vehicle_access.contract.settlement_dispute_decided` rows into
+`vehicle_access.outbox_event` (0050 `enqueue_event`), but nothing consumed
+them. Migration `0098_outbox_notification_claim.sql` adds two SECURITY
+DEFINER functions and `vehicleAccessOutboxSweepJob`
+(`server/_core/scheduledJobs.ts`) consumes the queue:
+
+- **opened** → email to every operator (`SELECT email FROM public.users WHERE
+  role = 'admin' AND email IS NOT NULL LIMIT 10`, fetched once per sweep):
+  "Settlement dispute opened for rental contract <id>. Review in the Vehicle
+  Access console." with metadata `{ notificationType, contractId }`.
+- **decided** → the renter (`payload.worker_user_id` → batch
+  `SELECT id, email, phone FROM public.users WHERE id = ANY($1)`), email
+  preferred with SMS fallback. The message carries the decision status and,
+  for `adjusted`, the adjustment in major units with the settlement currency
+  when available (the outbox payload lacks the outcome, so the sweep reads
+  `contract_event.detail` via `vehicle_access.get_contract_event_detail`,
+  enriched with `return_settlement.currency`), else labeled minor units.
+- Unknown event types are claimed but skipped silently (forward-compatible).
+- Sends are fail-open per recipient (`.catch(() => undefined)`): a
+  notification outage never loses the `published_at` claim marker.
+
+### Scheduling note
+
+There is no in-repo cron wiring for this sweep (same posture as the
+verification sweeps). Run it on an external scheduler calling
+`jobs.vehicleAccessOutboxSweep(limit?)` (default 50, clamped 1..500) or
+trigger it manually: `triggerJobManually("vehicleAccessOutboxSweep")` is
+registered in the `jobMap` in `server/db.ts`.
+
+### Privilege note
+
+`vehicle_access` tables are REVOKED from PUBLIC; the app role only holds
+EXECUTE on SECURITY DEFINER functions, so the sweep cannot UPDATE
+`outbox_event` directly. `vehicle_access.claim_outbox_events(integer)` claims
+a batch (`published_at = now()` + `FOR UPDATE SKIP LOCKED`, idempotent under
+concurrent sweeps) and `vehicle_access.get_contract_event_detail(uuid, text)`
+is a STABLE accessor keyed by `(contract_id, idempotency_key)` returning the
+newest matching `contract_event.detail`. Both are granted EXECUTE to
+`vehicle_access_service` inside the same `IF EXISTS pg_roles` guard used by
+0050/0096/0097, so the main pool role executes them exactly like
+`record_condition_report` and friends.
