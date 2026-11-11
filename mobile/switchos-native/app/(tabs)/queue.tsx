@@ -20,6 +20,7 @@ import {
 import { ScreenContainer } from "@/components/screen-container";
 import { useColors } from "@/hooks/use-colors";
 import { useMobileApp } from "@/lib/mobile/provider";
+import { usePowerSyncStatus } from "@/lib/powersync/PowerSyncProvider";
 import { useThemeContext } from "@/lib/theme-provider";
 import type { QueuePriority } from "@/lib/mobile/types";
 import { formatFreshness, priorityWeight } from "@/lib/mobile/workspace";
@@ -184,6 +185,13 @@ export default function QueueScreen() {
                     </Text>
                   </Pressable>
                 </View>
+              </SectionCard>
+
+              <SectionCard
+                title="Data sync (PowerSync)"
+                subtitle="Offline data layer: server replicas sync down automatically; queued support-case writes upload when connectivity returns. Distinct from the operator action outbox below."
+              >
+                <DataSyncStatusRows />
               </SectionCard>
 
               <SectionCard
@@ -641,6 +649,44 @@ export default function QueueScreen() {
         />
       </ScreenContainer>
     </NativeAdminRouteGuard>
+  );
+}
+
+function DataSyncStatusRows() {
+  const status = usePowerSyncStatus();
+
+  const stateLabel = !status.available
+    ? "Online-only (offline sync parked or unsupported)"
+    : status.connected
+      ? "Connected"
+      : status.connecting
+        ? "Connecting…"
+        : "Disconnected";
+
+  return (
+    <View className="gap-3 rounded-[20px] border border-border bg-background/70 px-4 py-3">
+      <WizardRow label="Connection" value={stateLabel} />
+      <WizardRow
+        label="Last full sync"
+        value={
+          status.lastSyncAt
+            ? new Date(status.lastSyncAt).toLocaleString()
+            : status.hasSynced
+              ? "Synced"
+              : "Not yet synced"
+        }
+      />
+      <WizardRow
+        label="Pending uploads"
+        value={String(status.uploadQueueSize)}
+      />
+      {status.downloading || status.uploading ? (
+        <WizardRow
+          label="Active transfer"
+          value={status.downloading ? "Downloading" : "Uploading"}
+        />
+      ) : null}
+    </View>
   );
 }
 
