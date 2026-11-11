@@ -166,3 +166,53 @@ Validation: vitest 182/182 (164 pre-existing wave tests incl. the 66
 geo-ai-wave suite, + 18 new: evidence hash verification, download party
 gate, 0101 static pins); `tsc --noEmit --strict` clean over the changed
 files and their harness dependency graph.
+
+## Live-DB validation (2026-11-11)
+
+Applied the full drizzle migration chain 0000–0101 to a fresh PostgreSQL 16.2
+instance (pgserver-bundled; contrib btree_gist/citext/pgcrypto built from
+postgres/postgres REL_16_2 source via PGXS, no migration file modified).
+The 9 rental/KYC target migrations were applied from SHA-verified blobs
+fetched via api.github.com (blob sha == `git hash-object` of decoded bytes for
+all 9). Transcripts: /mnt/agents/output/dp-livedb/ (logs/chain.log,
+logs/NNNN.log, logs/prereq/, logs/schema_inventory.txt, behavioral_results.txt).
+
+Chain apply result (9 target files): 0050 OK, 0053 OK, 0058 OK, 0096 OK,
+0097 OK, 0098 OK, 0099 OK, 0100 OK, 0101 OK.
+Prereq-note: 0026 ride_hailing_dispatch and its dependents
+(0027/0028/0029/0030/0033/0034/0040/0043/0044/0045/0047/0051/0052/0059/0061/0095)
+fail on `extension "postgis" is not available` (mobility/telematics wave) —
+outside the rental/KYC chain; no effect on vehicle_access/verification targets.
+
+Behavioral tests (real SQL functions, seeded fixtures: renter 901, admin 902,
+third party 903, verified driver + fleet_provider KYC cases, active
+provider/asset/offer, contract through full lifecycle):
+1. Contract lifecycle gates: PASS (approve -> 'approved' with contract_event +
+   outbox_event rows; invalid transition -> 23514; non-party -> 42501)
+2. Odometer monotonicity: PASS (check_in 9999 < check_out 10000 -> 23514
+   'odometer regression'; 12300 accepted)
+3. Insurance deposit recompute: PASS (deposit_multiplier_bp 15000 -> deposit
+   10000000 -> 15000000 in selection snapshot and contract price_snapshot)
+4. Settlement arithmetic + odometer advance: PASS (distance 2300, 2 billed
+   weeks, excess 300km*500=150000, fuel 210000, renter liability 300000,
+   total 660000 bigint minor; asset odometer 10000 -> 12300)
+5. Dispute gating/ceiling/unique-open: PASS (renter open OK; second open ->
+   23505; non-party decide -> 42501; award 660001 -> 23514; award 660000 =
+   damage+excess+fuel accepted, confirming the 0101 ceiling includes
+   fuel_charge_minor)
+6. Outbox claim filter: PASS (claim returns only settlement_dispute_opened/
+   decided, marks them published_at, leaves 6 non-dispute types unpublished;
+   second claim returns 0 rows)
+7. can_view_contract_evidence 3-way: PASS (renter=t, operator=t, third=f)
+8. 0099 document_extraction append-only: PASS (INSERT OK; UPDATE and DELETE
+   both blocked by trigger, 55000 'verification evidence is append only')
+9. Idempotent replay: PASS (same-key approve replay returns current state,
+   event count unchanged; same-key settlement recompute returns identical id,
+   no duplicate rows)
+
+Migration defects found: none in the 9 target files. Environment-only gaps:
+pgserver bundle ships no contrib extensions (btree_gist/citext/pgcrypto built
+locally from source); PostGIS unavailable so the 0026 mobility wave cannot
+apply in this sandbox (expected, unrelated to rental/KYC).
+
+Live-DB validation: 9/9 migrations applied clean, 9/9 behavioral tests PASS.
