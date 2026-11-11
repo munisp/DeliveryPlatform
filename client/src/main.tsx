@@ -5,6 +5,7 @@ import { httpBatchLink, TRPCClientError } from "@trpc/client";
 import App from "./App";
 import "./index.css";
 import { trpc } from "@/lib/trpc";
+import { PowerSyncProvider } from "@/lib/usePowerSync";
 import { UNAUTHED_ERR_MSG } from "@shared/const";
 import { getLoginUrl } from "./const";
 import { reportClientError } from "./lib/logger";
@@ -134,7 +135,9 @@ createRoot(rootElement).render(
   <React.StrictMode>
     <trpc.Provider client={trpcClient} queryClient={queryClient}>
       <QueryClientProvider client={queryClient}>
-        <App />
+        <PowerSyncProvider>
+          <App />
+        </PowerSyncProvider>
       </QueryClientProvider>
     </trpc.Provider>
   </React.StrictMode>,

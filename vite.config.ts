@@ -30,6 +30,20 @@ export default defineConfig({
   define: {
     __APP_BUILD_VERSION__: JSON.stringify(buildVersion),
   },
+  optimizeDeps: {
+    // @powersync/web loads its wa-sqlite WASM build and DB/sync workers via
+    // package-relative URLs; pre-bundling them breaks worker and WASM URL
+    // resolution in dev. js-logger is a CJS transitive dep of the excluded
+    // SDK, so it must be pre-bundled explicitly.
+    // https://docs.powersync.com/client-sdks/reference/javascript-web
+    exclude: ["@journeyapps/wa-sqlite", "@powersync/web"],
+    include: ["@powersync/web > js-logger"],
+  },
+  worker: {
+    // The PowerSync DB/sync workers are ES modules; the default "iife"
+    // worker format breaks their code-split chunks in production builds.
+    format: "es",
+  },
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "client/src"),
