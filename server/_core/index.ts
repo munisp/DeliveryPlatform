@@ -76,6 +76,8 @@ import {
 } from "./operatorAuthStore";
 import { recordOperationalEvent } from "./operationalEvents";
 import { consumeRateLimit } from "./rateLimiter";
+import { powerSyncJwksHandler, powerSyncTokenHandler } from "./powersyncToken";
+import { powerSyncUploadHandler } from "./powersyncUpload";
 import {
   getFilteredFinancialAdminSnapshot,
   getFinancialAdminAlerts,
@@ -1243,6 +1245,17 @@ app.get("/api/auth/session-profile", rateLimit(60), (req, res) => {
 
 app.post("/api/rental-condition/photo", rateLimit(30), handleRentalConditionPhotoUpload);
 app.get("/api/rental-condition/photo/*", rateLimit(120), handleRentalConditionPhotoDownload);
+
+// PowerSync sync-service endpoints. Mounted AFTER the session-load middleware
+// above so (req as AppRequest).user is populated; the token/upload handlers
+// reject unauthenticated requests themselves (401) and fail closed with 503
+// powersync_not_configured when no signing key is configured. The JWKS
+// endpoint is intentionally public — the PowerSync service fetches it
+// server-to-server to verify client tokens.
+app.get("/api/powersync/jwks.json", rateLimit(60), powerSyncJwksHandler);
+app.get("/api/powersync/token", rateLimit(60), powerSyncTokenHandler);
+app.post("/api/powersync/token", rateLimit(60), powerSyncTokenHandler);
+app.post("/api/powersync/upload", rateLimit(120), powerSyncUploadHandler);
 
 function readDeveloperApiKey(req: express.Request, res: express.Response) {
   const apiKey = `${req.header("X-API-Key") ?? ""}`.trim();
