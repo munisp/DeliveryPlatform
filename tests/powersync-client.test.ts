@@ -134,6 +134,36 @@ describe("powersync credential prefetch TTL math", () => {
     await expect(connector.fetchCredentials()).resolves.toBeNull();
   });
 
+  it("parks (returns null) when the service endpoint is not configured", async () => {
+    // Backend sends endpoint: null when POWERSYNC_SERVICE_URL is unset; the
+    // connector must park (SDK stays disconnected) instead of throwing into
+    // an infinite retry loop.
+    const { calls, fetchImpl } = makeFetchStub([
+      {
+        ok: true,
+        status: 200,
+        body: {
+          token: "ps-token-1",
+          endpoint: null,
+          expiresAt: "2026-11-11T12:00:00.000Z",
+        },
+      },
+    ]);
+    const connector = new DeliveryPlatformPowerSyncConnector({ fetchImpl });
+    await expect(connector.fetchCredentials()).resolves.toBeNull();
+    expect(calls).toHaveLength(1);
+  });
+
+  it("still throws on a token payload missing the token itself", async () => {
+    const { fetchImpl } = makeFetchStub([
+      { ok: true, status: 200, body: { endpoint: "https://powersync.example.test" } },
+    ]);
+    const connector = new DeliveryPlatformPowerSyncConnector({ fetchImpl });
+    await expect(connector.fetchCredentials()).rejects.toThrow(
+      "powersync_token_invalid:missing_token",
+    );
+  });
+
   it("throws on transient token-endpoint failures so the SDK retries", async () => {
     const { fetchImpl } = makeFetchStub([{ ok: false, status: 503 }]);
     const connector = new DeliveryPlatformPowerSyncConnector({ fetchImpl });
@@ -162,19 +192,19 @@ describe("powersync upload contract", () => {
 
   it("serializes queued operations FIFO into the fixed batch contract", () => {
     const batch = serializeCrudTransaction({ crud });
-    expect(batch.operations.map((entry) => entry.op)).toEqual([
+    expect(batch.entries.map((entry) => entry.op)).toEqual([
       "PUT",
       "PATCH",
       "DELETE",
     ]);
-    expect(batch.operations[0]).toEqual({
+    expect(batch.entries[0]).toEqual({
       op: "PUT",
       table: "orders",
       id: "42",
       data: { status: "confirmed" },
     });
-    expect(batch.operations[1].data).toEqual({ notes: "leave at door" });
-    expect(batch.operations[2].table).toBe("order_tracking_events");
+    expect(batch.entries[1].data).toEqual({ notes: "leave at door" });
+    expect(batch.entries[2].table).toBe("order_tracking_events");
   });
 
   it("posts the batch with session cookies and completes only on success", async () => {
@@ -193,8 +223,8 @@ describe("powersync upload contract", () => {
       "content-type": "application/json",
     });
     const body = JSON.parse(String(calls[0].init.body));
-    expect(body.operations).toHaveLength(3);
-    expect(body.operations[0]).toMatchObject({
+    expect(body.entries).toHaveLength(3);
+    expect(body.entries[0]).toMatchObject({
       op: "PUT",
       table: "orders",
       id: "42",

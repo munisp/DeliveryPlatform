@@ -32,7 +32,7 @@ the `/account` surface keeps working offline and reads feel instant.
   JWT. The connector caches it and prefetches a fresh one once the remaining
   TTL is ≤ 30 s (mirroring the SDK's own keepalive).
 - Writes: local SQLite writes are queued FIFO by the SDK and uploaded as
-  `{ operations: [{ op, table, id, data }] }` batches. Any non-2xx response
+  `{ entries: [{ op, table, id, data }] }` batches. Any non-2xx response
   throws, so the SDK retries with backoff — the backend must be idempotent
   and apply batches synchronously.
 
