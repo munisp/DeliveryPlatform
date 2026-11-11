@@ -98,3 +98,71 @@ Two verified findings fixed in this wave:
 Validation: vitest 66/66 across the four wave test files
 (document-ocr, document-extraction, terrio-etl, vehicle-access-outbox-sweep);
 `tsc --noEmit --strict` clean over the changed TS and its dependency graph.
+
+## P2 closure (migration 0101 + evidence verification)
+
+Two P2 security findings fixed in this wave:
+
+1. **(P2, fixed) Photo sha256 was client-asserted, never server-verified** —
+   `rentalCondition.recordReport` now verifies evidence before calling the
+   data-access layer: for every photo whose objectKey matches the
+   rental-condition upload namespace, the file must exist under
+   `ENV.rentalConditionUploadDir` (resolved via the same traversal-defended
+   `resolveConditionPhotoPath`) and the sha256 of the stored bytes must equal
+   the claimed `sha256Hex` — mismatch → `BAD_REQUEST evidence_hash_mismatch`,
+   missing object → `BAD_REQUEST evidence_not_uploaded`, per-photo checks
+   batched with `Promise.all`. Fail-closed: when
+   `ENV.rentalConditionUploadDir` is unset the submission fails with
+   `PRECONDITION_FAILED photo_storage_not_configured` (photos cannot have
+   been uploaded through our endpoint, so every namespaced claim is
+   unverifiable). Photos with keys outside our namespace (external object
+   stores) pass through unchanged — out of scope, we cannot re-hash what we
+   do not host. The verifier (`verifyConditionPhotoEvidence`) is exported
+   from `server/rental/conditionPhotoUpload.ts` next to the resolver it
+   reuses.
+
+2. **(P2, fixed) Photo download was any-authenticated-user** —
+   `GET /api/rental-condition/photo/<key>` is now party-gated. After key
+   validation the handler extracts the contract id from the key's second
+   path segment and calls the new SECURITY DEFINER STABLE function
+   `vehicle_access.can_view_contract_evidence(actor, contract)`
+   (drizzle/0101; true iff operator via `is_operator` or actor =
+   `access_contract.worker_user_id`) through a lazy satellite pool that
+   mirrors `server/_core/vehicleCondition.ts` (application_name
+   `vehicle-condition`, max 3 connections, 10 s statement timeout). Denied →
+   `403 {error:"forbidden"}`; gate failure → `500` (fail closed, never
+   serve). The gate is exported separately (`canViewConditionPhoto`) for
+   mock-pool unit tests.
+
+3. **(P2-adjacent, fixed) Dispute adjustment ceiling excluded the fuel
+   charge** — drizzle/0101 CREATE OR REPLACEs
+   `vehicle_access.decide_settlement_dispute` so an 'adjusted' decision may
+   cover `renter_damage_liability_minor + excess_km_charge_minor +
+   fuel_charge_minor` (= `total_charge_minor` by the 0096 settlement CHECK);
+   `dispute_reason` already included `'fuel_charge'`, so a legitimate fuel
+   overcharge could never be fully adjusted. Every other line of the
+   function (validation, error codes, event payloads, idempotency) is
+   byte-identical to 0097 — pinned by test. Grants for both functions are
+   guarded behind the `pg_roles` existence check mirroring 0096/0098. pglast
+   parses 0101 as 3 statements (CreateFunctionStmt, CreateFunctionStmt,
+   DoStmt).
+
+Ops gap closed alongside: `.env.example` now documents
+`RENTAL_CONDITION_UPLOAD_DIR`, `TERRIO_BIN`, `TERRIO_TIMEOUT_MS`,
+`MINICPM_OCR_OLLAMA_URL`, `MINICPM_OCR_MODEL`, `MINICPM_OCR_JEV_ENABLED`,
+`MINICPM_OCR_JEV_MODEL`, `MINICPM_OCR_REVIEW_THRESHOLD` (one-line comments,
+secrets-free, appended in their thematic sections).
+
+Score impact estimate: **Authorization 8 → 9** (both deductions tied to the
+photo endpoints are closed; the `protectedProcedure` vs
+`operatorMutationProcedure` policy-layer gap remains). **Money correctness
+8 → 8** (fuel-ceiling fix removes the under-adjustment gap but the remaining
+deductions stand). **Idempotency 8 → 8** (unchanged; the same-key replay
+blind spots are a separate open P2). The two closed P2 security findings
+leave one open P2 (idempotency-mismatch blind spots) and one P3 (app/SQL
+role mismatch, fail-closed).
+
+Validation: vitest 182/182 (164 pre-existing wave tests incl. the 66
+geo-ai-wave suite, + 18 new: evidence hash verification, download party
+gate, 0101 static pins); `tsc --noEmit --strict` clean over the changed
+files and their harness dependency graph.
