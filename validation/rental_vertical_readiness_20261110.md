@@ -216,3 +216,51 @@ locally from source); PostGIS unavailable so the 0026 mobility wave cannot
 apply in this sandbox (expected, unrelated to rental/KYC).
 
 Live-DB validation: 9/9 migrations applied clean, 9/9 behavioral tests PASS.
+
+## P2 idempotency hardening + down-migrations (2026-11-11)
+
+Two more items closed in this wave (HEAD `2042f4af`):
+
+1. **(P2, fixed) Dispute idempotency-replay blind spots** — new migration
+   `drizzle/0102_dispute_idempotency_replay_checks.sql` CREATE OR REPLACEs
+   `open_settlement_dispute` and `decide_settlement_dispute`: same-key replay
+   now compares the stored parameters (open: contract_id + reason; decide:
+   status + adjustment_minor + operator_note, `IS DISTINCT FROM` for
+   NULL-safety) and raises `'idempotency key replay with different
+   parameters'` (ERRCODE 22023) on any mismatch; exact replays are unchanged.
+   All other lines byte-identical to the 0097/0101 bodies (proven by exact
+   inverse-transformation, pinned in `tests/dispute-idempotency-0102.test.ts`,
+   7/7). **Live-DB proven** on PostgreSQL 16.2 (fresh `livedb2`, chain
+   0000–0102): mismatched replays raise 22023 for decision, note-only,
+   amount-only, reason and different-contract variants; exact replays return
+   the same ids with zero duplicate rows/events (transcript:
+   /mnt/agents/output/dp-livedb/0102_replay_tests.txt).
+
+2. **(Ops, fixed) No down-migrations for 0096–0101** — `drizzle/rollback/`
+   now covers 0096, 0097, 0098, 0099, 0100, 0101, and 0102 in the existing
+   `NNNN_<stem>.down.sql` convention (IF EXISTS guards, no REVOKEs — CREATE OR
+   REPLACE preserves grants). Function-restoring rollbacks embed the exact
+   prior bodies (0102→0101/0097, 0101→0097, 0100→0098, 0096→0058
+   `transition_contract`), each byte-verified against the SHA-checked
+   originals; the 0096/0097 rollbacks also restore the
+   `rental_operations_event` aggregate_type CHECK to its prior value set with
+   `NOT VALID` so pre-existing event rows cannot block the rollback. pglast
+   parses all 7 files cleanly.
+
+Score impact estimate: **Idempotency 8 → 8.5** (both dispute replay blind
+spots closed and live-DB proven; the PWA per-click fresh-key deduction
+remains). **Operability 6.5 → 7.5** (down-migration coverage now complete for
+the whole rental/KYC chain 0096–0102; no in-repo cron and the `db:push`
+journal divergence remain). Carrying the previously claimed updates
+(Authorization 9, Test coverage realism 8 after live-DB validation), the
+cumulative equal-weight estimate is now
+(9 + 9 + 8.5 + 8 + 6 + 6 + 8 + 6 + 8 + 7.5) / 10 = **7.6 / 10**.
+
+Residual gap register update: remove from P2 "idempotency replay blind spots
+in dispute open/decide" and "no down-migrations 0096–0099". Open P2s that
+remain: outbox sweep is claim-then-send (at-most-once), no in-repo cron for
+the sweep, PWA per-click fresh idempotency keys, no tRPC rate limits, drizzle
+journal absent vs `db:push` script, CHECK swap without `NOT VALID` in the
+up-migrations, notification currency exponent hardcoded `/100`, heic
+upload-side acceptance. P3 unchanged (app/SQL role mismatch,
+`rentalDispute.get` unused, public `listForOffer`).
