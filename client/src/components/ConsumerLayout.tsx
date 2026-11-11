@@ -2,6 +2,8 @@ import type { ReactNode } from "react";
 import { Link, useLocation } from "wouter";
 import { LifeBuoy, Package, Wallet } from "lucide-react";
 
+import { PowerSyncStatus } from "@/components/PowerSyncStatus";
+
 /**
  * Lightweight consumer-facing layout for the /account surface.
  *
@@ -39,27 +41,31 @@ export function ConsumerLayout({
               </span>
             </span>
           </Link>
-          <nav aria-label="Account" className="flex items-center gap-1">
-            {navItems.map((item) => {
-              const active =
-                location === item.href || location.startsWith(`${item.href}/`);
-              const Icon = item.icon;
-              return (
-                <Link key={item.href} href={item.href}>
-                  <span
-                    className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm font-medium transition ${
-                      active
-                        ? "bg-amber-100 text-amber-900"
-                        : "text-stone-500 hover:bg-stone-100 hover:text-stone-800"
-                    }`}
-                  >
-                    <Icon className="h-4 w-4" />
-                    {item.label}
-                  </span>
-                </Link>
-              );
-            })}
-          </nav>
+          <div className="flex items-center gap-2">
+            <PowerSyncStatus />
+            <nav aria-label="Account" className="flex items-center gap-1">
+              {navItems.map((item) => {
+                const active =
+                  location === item.href ||
+                  location.startsWith(`${item.href}/`);
+                const Icon = item.icon;
+                return (
+                  <Link key={item.href} href={item.href}>
+                    <span
+                      className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm font-medium transition ${
+                        active
+                          ? "bg-amber-100 text-amber-900"
+                          : "text-stone-500 hover:bg-stone-100 hover:text-stone-800"
+                      }`}
+                    >
+                      <Icon className="h-4 w-4" />
+                      {item.label}
+                    </span>
+                  </Link>
+                );
+              })}
+            </nav>
+          </div>
         </div>
       </header>
       <main className="mx-auto max-w-4xl px-5 py-10">
