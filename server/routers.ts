@@ -941,7 +941,8 @@ export const appRouter = router({
         if (
           imageBase64 &&
           (input.contentType === "image/jpeg" ||
-            input.contentType === "image/png")
+            input.contentType === "image/png" ||
+            input.contentType === "image/webp")
         ) {
           const image = imageBase64;
           void (async () => {

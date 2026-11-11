@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 /**
@@ -261,5 +263,40 @@ describe("vehicleAccessOutboxSweepJob", () => {
 describe("jobs export", () => {
   it("registers the vehicle access outbox sweep", () => {
     expect(jobs.vehicleAccessOutboxSweep).toBe(vehicleAccessOutboxSweepJob);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Migration static pin (drizzle/0100): the claim function must only claim the
+// event types this sweep handles, so unknown events stay unpublished for
+// future consumers instead of being silently marked published and dropped.
+// ---------------------------------------------------------------------------
+const migration0100 = readFileSync(
+  resolve(resolve(import.meta.dirname, ".."), "drizzle/0100_outbox_claim_event_filter.sql"),
+  "utf8",
+);
+
+describe("drizzle/0100_outbox_claim_event_filter.sql", () => {
+  it("replaces claim_outbox_events with the identical signature", () => {
+    expect(migration0100).toContain(
+      "CREATE OR REPLACE FUNCTION vehicle_access.claim_outbox_events(p_limit integer)",
+    );
+    expect(migration0100).toContain(
+      "RETURNS TABLE(id uuid, aggregate_id uuid, event_type text, payload jsonb, idempotency_key text, created_at timestamptz)",
+    );
+    expect(migration0100).toContain("SECURITY DEFINER");
+  });
+
+  it("filters the claim subquery to the handled dispute event types", () => {
+    expect(migration0100).toContain(
+      "AND p.event_type IN ('vehicle_access.contract.settlement_dispute_opened','vehicle_access.contract.settlement_dispute_decided')",
+    );
+  });
+
+  it("keeps the guarded grant to vehicle_access_service", () => {
+    expect(migration0100).toContain("IF EXISTS(SELECT 1 FROM pg_roles WHERE rolname='vehicle_access_service')");
+    expect(migration0100).toContain(
+      "GRANT EXECUTE ON FUNCTION vehicle_access.claim_outbox_events(integer) TO vehicle_access_service;",
+    );
   });
 });

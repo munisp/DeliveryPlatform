@@ -263,10 +263,11 @@ describe("stakeholderVerification router surface", () => {
     expect(routers).toContain("getCaseExtractions");
   });
 
-  it("fires extraction fail-open after evidence recording, jpeg/png only", () => {
+  it("fires extraction fail-open after evidence recording, jpeg/png/webp only", () => {
     expect(svRouter).toContain("const evidenceId = await recordVerificationEvidence(");
     expect(svRouter).toContain('input.contentType === "image/jpeg"');
     expect(svRouter).toContain('input.contentType === "image/png"');
+    expect(svRouter).toContain('input.contentType === "image/webp"');
     expect(svRouter).toContain("})().catch(() => {});");
     expect(svRouter).toContain("documentHint: input.evidenceKind");
     expect(svRouter).toContain("model: result.model");
