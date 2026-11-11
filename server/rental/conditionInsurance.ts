@@ -12,6 +12,7 @@
  * All writes flow through the SECURITY DEFINER functions in
  * server/_core/vehicleCondition.ts; this router only validates input shape.
  */
+import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 
 import {
@@ -20,6 +21,7 @@ import {
   publicProcedure,
   router,
 } from "../_core/trpc";
+import { ENV } from "../_core/env";
 import {
   computeReturnSettlement,
   createInsuranceTier,
@@ -29,6 +31,10 @@ import {
   retireInsuranceTier,
   selectContractInsurance,
 } from "../_core/vehicleCondition";
+import {
+  isValidConditionPhotoObjectKey,
+  verifyConditionPhotoEvidence,
+} from "./conditionPhotoUpload";
 
 const idempotencyKeySchema = z
   .string()
@@ -172,6 +178,44 @@ export const rentalConditionRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      // P2 closure: the client-asserted sha256Hex of every photo whose
+      // objectKey is in our rental-condition upload namespace is verified
+      // against the stored bytes before the report reaches the data-access
+      // layer. Photos with keys outside our namespace belong to external
+      // object stores and pass through unchanged (out of scope — we cannot
+      // re-hash what we do not host). Fail closed when no upload directory
+      // is configured: photos could not have been uploaded through our
+      // endpoint, so every namespaced claim is unverifiable.
+      const namespacedPhotos = input.photos.filter((photo) =>
+        isValidConditionPhotoObjectKey(photo.objectKey),
+      );
+      if (
+        namespacedPhotos.length > 0 &&
+        !ENV.rentalConditionUploadDir.trim()
+      ) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "photo_storage_not_configured",
+        });
+      }
+      await Promise.all(
+        namespacedPhotos.map(async (photo) => {
+          const check = await verifyConditionPhotoEvidence(
+            ENV.rentalConditionUploadDir,
+            photo.objectKey,
+            photo.sha256Hex,
+          );
+          if (!check.ok) {
+            throw new TRPCError({
+              code:
+                check.error === "photo_storage_not_configured"
+                  ? "PRECONDITION_FAILED"
+                  : "BAD_REQUEST",
+              message: check.error,
+            });
+          }
+        }),
+      );
       const reportId = await recordConditionReport({
         actorUserId: ctx.user!.id,
         contractId: input.contractId,

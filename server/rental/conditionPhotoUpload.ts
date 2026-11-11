@@ -4,6 +4,7 @@ import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import type express from "express";
+import { Pool } from "pg";
 
 import { ENV } from "../_core/env";
 import { recordOperationalEvent } from "../_core/operationalEvents";
@@ -18,19 +19,22 @@ import type { SessionUser } from "../_core/trpc";
  * all validation and storage semantics live in storeConditionPhoto so they
  * can be unit-tested without Express.
  *
- * The download handler streams a previously stored photo back to any
- * authenticated session (the PWA renders it via same-origin <img>). The
- * object key is extracted from the wildcard path, validated against the
- * exact same strict key pattern used at upload time, and resolved inside
+ * The download handler streams a previously stored photo back to a contract
+ * party (the PWA renders it via same-origin <img>). The object key is
+ * extracted from the wildcard path, validated against the exact same strict
+ * key pattern used at upload time, and resolved inside
  * ENV.rentalConditionUploadDir with traversal defenses; resolution semantics
  * live in resolveConditionPhotoPath so they can be unit-tested without
  * Express. Responses are private-cached for one hour and served inline with
  * a nosniff content type derived from the key extension.
  *
- * Authorization (which contract party may read or attach which evidence) is
+ * Download authorization (P2 closure): the key's second path segment is the
+ * contract id; the caller must be a party to that contract — the renter
+ * (access_contract.worker_user_id) or an operator — as decided by the
+ * SECURITY DEFINER vehicle_access.can_view_contract_evidence (drizzle/0101).
+ * Upload authorization (which contract party may attach which evidence) is
  * enforced downstream by the vehicle_access.record_condition_report SQL
- * function when the stored object key is linked to a contract; these
- * endpoints only require an authenticated session.
+ * function when the stored object key is linked to a contract.
  */
 
 export const CONDITION_PHOTO_MAX_BYTES = 6_000_000;
@@ -54,6 +58,53 @@ const CONTENT_TYPE_BY_EXTENSION: Record<string, string> = {
 // Strict RFC 4648 alphabet with padding only at the end; kept free of nested
 // quantifiers so multi-megabyte payloads validate in linear time.
 const STRICT_BASE64_PATTERN = /^[A-Za-z0-9+/]*(?:=|==)?$/;
+
+// Own satellite pool (mirrors server/_core/vehicleCondition.ts): the download
+// gate queries vehicle_access.can_view_contract_evidence per request, so it
+// shares the "vehicle-condition" application_name and the same hard caps —
+// evidence reads must not starve the primary vehicle_access pool.
+let pool: Pool | null = null;
+
+function database() {
+  if (!ENV.databaseUrl)
+    throw new Error("vehicle_condition_database_unconfigured");
+  if (!pool) {
+    pool = new Pool({
+      connectionString: ENV.databaseUrl,
+      application_name: "vehicle-condition",
+      ssl:
+        ENV.isProduction && !ENV.databaseUrl.includes("sslmode=disable")
+          ? {
+              rejectUnauthorized: true,
+              ...(ENV.databaseSslCa ? { ca: ENV.databaseSslCa } : {}),
+            }
+          : false,
+      // Hard-capped like every other satellite pool (perf finding 10).
+      max: 3,
+      connectionTimeoutMillis: 3000,
+      idleTimeoutMillis: 30000,
+      options: "-c statement_timeout=10000",
+    });
+  }
+  return pool;
+}
+
+/**
+ * Party gate for condition-photo downloads (drizzle/0101): true iff the
+ * actor is an operator or the renter (worker_user_id) of the contract the
+ * photo belongs to. Kept separate from the Express handler so it can be
+ * unit-tested with a mocked pool.
+ */
+export async function canViewConditionPhoto(
+  actorId: number,
+  contractId: string,
+): Promise<boolean> {
+  const result = await database().query<{ allowed: boolean }>(
+    `SELECT vehicle_access.can_view_contract_evidence($1,$2::uuid) AS allowed`,
+    [actorId, contractId],
+  );
+  return result.rows[0]?.allowed === true;
+}
 
 export function isValidConditionPhotoObjectKey(key: unknown): key is string {
   if (typeof key !== "string" || key.length === 0) return false;
@@ -305,13 +356,52 @@ export async function resolveConditionPhotoPath(
   return { status: 200, path: targetPath, contentType, sizeBytes };
 }
 
+export type VerifyConditionPhotoEvidenceResult =
+  | { ok: true }
+  | {
+      ok: false;
+      error:
+        | "photo_storage_not_configured"
+        | "evidence_not_uploaded"
+        | "evidence_hash_mismatch";
+    };
+
+/**
+ * Server-side verification of a client-claimed evidence hash (P2 closure):
+ * the object must exist under the configured upload root and the sha256 of
+ * the stored bytes must equal the claim. Fail-closed when no upload root is
+ * configured — photos cannot have been uploaded through our endpoint, so
+ * claims are unverifiable. Callers must pre-filter with
+ * isValidConditionPhotoObjectKey; keys outside our namespace belong to
+ * external object stores and are out of scope for this check.
+ */
+export async function verifyConditionPhotoEvidence(
+  root: unknown,
+  objectKey: string,
+  sha256Hex: string,
+): Promise<VerifyConditionPhotoEvidenceResult> {
+  const resolved = await resolveConditionPhotoPath(root, objectKey);
+  if (resolved.status === 503) {
+    return { ok: false, error: "photo_storage_not_configured" };
+  }
+  if (resolved.status !== 200) {
+    return { ok: false, error: "evidence_not_uploaded" };
+  }
+  const bytes = await readFile(resolved.path);
+  const actualSha256Hex = createHash("sha256").update(bytes).digest("hex");
+  if (actualSha256Hex !== sha256Hex) {
+    return { ok: false, error: "evidence_hash_mismatch" };
+  }
+  return { ok: true };
+}
+
 export async function handleRentalConditionPhotoDownload(
   req: express.Request,
   res: express.Response,
 ): Promise<void> {
   try {
     // Same session middleware contract as the upload route: req.user is
-    // populated for every /api/* path; any authenticated role may download.
+    // populated for every /api/* path.
     const user = (
       req as express.Request & { user?: SessionUser | null }
     ).user;
@@ -323,6 +413,36 @@ export async function handleRentalConditionPhotoDownload(
     // "/api/rental-condition/photo/".
     const params = (req.params ?? {}) as Record<string, unknown>;
     const objectKey = typeof params["0"] === "string" ? params["0"] : "";
+    if (!isValidConditionPhotoObjectKey(objectKey)) {
+      res.status(400).json({ error: "invalid_object_key" });
+      return;
+    }
+    // Storage must be configured before anything else (fail closed, same
+    // contract as resolveConditionPhotoPath) so the gate below never runs
+    // against a deployment that cannot serve evidence anyway.
+    if (!ENV.rentalConditionUploadDir.trim()) {
+      res.status(503).json({ error: "photo_storage_not_configured" });
+      return;
+    }
+    // Party gate (P2): the key's second segment is the contract id; only the
+    // contract renter or an operator may read the evidence. A gate failure
+    // (e.g. database unreachable) fails closed as a 500 — never serve.
+    const contractId = objectKey.split("/")[1] ?? "";
+    let allowed: boolean;
+    try {
+      allowed = await canViewConditionPhoto(user.id, contractId);
+    } catch (gateError) {
+      console.error(
+        "[SwitchOS] Rental condition photo access check failed",
+        gateError,
+      );
+      res.status(500).json({ error: "photo_access_check_failed" });
+      return;
+    }
+    if (!allowed) {
+      res.status(403).json({ error: "forbidden" });
+      return;
+    }
     const resolved = await resolveConditionPhotoPath(
       ENV.rentalConditionUploadDir,
       objectKey,
