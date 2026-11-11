@@ -161,12 +161,14 @@ export function RentalInsuranceTierManager({
               value={offerId}
               onChange={(event) => setOfferId(event.target.value)}
             />
-            <input
-              className={inputClass}
-              placeholder="Contract UUID (for tier selection)"
-              value={selectionContractId}
-              onChange={(event) => setSelectionContractId(event.target.value)}
-            />
+            {!isOperator ? (
+              <input
+                className={inputClass}
+                placeholder="Contract UUID (for tier selection)"
+                value={selectionContractId}
+                onChange={(event) => setSelectionContractId(event.target.value)}
+              />
+            ) : null}
             {tiersQuery.isFetching ? (
               <div className="flex items-center gap-2 py-6 text-sm text-slate-400">
                 <Loader2 className="h-4 w-4 animate-spin" /> Loading insurance
@@ -245,18 +247,24 @@ export function RentalInsuranceTierManager({
                   {item.id}
                 </p>
                 <div className="flex flex-wrap items-center gap-2">
-                  <button
-                    type="button"
-                    className="rounded-md bg-cyan-500 px-3 py-2 text-sm font-medium text-slate-950 disabled:opacity-60"
-                    disabled={
-                      !isUuid(selectionContractId) || selectTierMutation.isPending
-                    }
-                    onClick={() => selectForContract(item.id)}
-                  >
-                    {selectTierMutation.isPending
-                      ? "Locking…"
-                      : "Lock onto contract"}
-                  </button>
+                  {isOperator ? (
+                    <p className="text-xs text-slate-500">
+                      Renters lock tiers from their account.
+                    </p>
+                  ) : (
+                    <button
+                      type="button"
+                      className="rounded-md bg-cyan-500 px-3 py-2 text-sm font-medium text-slate-950 disabled:opacity-60"
+                      disabled={
+                        !isUuid(selectionContractId) || selectTierMutation.isPending
+                      }
+                      onClick={() => selectForContract(item.id)}
+                    >
+                      {selectTierMutation.isPending
+                        ? "Locking…"
+                        : "Lock onto contract"}
+                    </button>
+                  )}
                   {isOperator ? (
                     retireArmedId === item.id ? (
                       <>

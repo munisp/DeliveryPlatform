@@ -1,15 +1,24 @@
 import { useRouter, type Href } from "expo-router";
-import { Pressable, ScrollView, Text, View } from "react-native";
+import { useState } from "react";
+import { Pressable, ScrollView, Text, TextInput, View } from "react-native";
 
 import { SectionCard } from "@/components/mobile/operations-ui";
 import { ScreenContainer } from "@/components/screen-container";
-import { Notice, StatusPill } from "@/components/trust/ui";
+import {
+  Notice,
+  StatusPill,
+  trustInputClass,
+  trustPlaceholderColor,
+} from "@/components/trust/ui";
+import { isUuid } from "@/lib/rentalCondition";
 import { useMyVerificationStatus } from "@/lib/trustApi";
 
 /**
  * Trust & transparency hub (Wave E1). Entry point for the driver/rider
  * facing R1–R9 screens: verified identity, passenger manifests, fare
  * transparency, market economics, worker council, and deactivation appeals.
+ * Also hosts the vehicle-rental entry points (condition evidence, insurance
+ * cover, return settlement) and KYC document capture.
  */
 
 type HubLink = {
@@ -49,6 +58,11 @@ const hubLinks: HubLink[] = [
     title: "Deactivation appeals",
     body: "Notice timeline, stated cause, and the appeal form for your case (R4).",
   },
+  {
+    href: "/kyc-document-capture",
+    title: "Document verification",
+    body: "Photograph an identity or residency document; it is hashed on-device, attached to your verification case, and read by the extraction service.",
+  },
 ];
 
 function VerificationSummaryCard() {
@@ -85,6 +99,125 @@ function VerificationSummaryCard() {
         </Text>
       ) : null}
     </View>
+  );
+}
+
+type RentalEntry = {
+  title: string;
+  body: string;
+  href: Href;
+};
+
+/**
+ * Vehicle rental entry points. rental-condition and rental-settlement are
+ * contract-context screens (they need the contract UUID; insurance tiers
+ * additionally need the offer UUID), so this section collects those ids once
+ * and pushes the three screens with the parameters they expect.
+ */
+function VehicleRentalsSection() {
+  const router = useRouter();
+  const [contractId, setContractId] = useState("");
+  const [offerId, setOfferId] = useState("");
+  const trimmedContractId = contractId.trim();
+  const trimmedOfferId = offerId.trim();
+  const contractReady = isUuid(trimmedContractId);
+
+  const entries: RentalEntry[] = [
+    {
+      title: "Pick-up check-out",
+      body: "Record condition evidence before handover. With the offer UUID set, insurance tiers can be reviewed and locked here.",
+      href: {
+        pathname: "/rental-condition",
+        params: isUuid(trimmedOfferId)
+          ? {
+              contractId: trimmedContractId,
+              phase: "check_out",
+              offerId: trimmedOfferId,
+            }
+          : { contractId: trimmedContractId, phase: "check_out" },
+      },
+    },
+    {
+      title: "Return check-in",
+      body: "Record the return condition evidence that anchors the settlement delta.",
+      href: {
+        pathname: "/rental-condition",
+        params: { contractId: trimmedContractId, phase: "check_in" },
+      },
+    },
+    {
+      title: "Return settlement",
+      body: "Check-out vs check-in comparison, the computed settlement, and the dispute form.",
+      href: {
+        pathname: "/rental-settlement",
+        params: { contractId: trimmedContractId },
+      },
+    },
+  ];
+
+  return (
+    <SectionCard
+      title="Vehicle rentals"
+      subtitle="Condition evidence, insurance cover, and the return settlement for a vehicle rental contract. Paste the contract UUID from the rental confirmation; the offer UUID additionally unlocks insurance tier selection at check-out."
+    >
+      <View className="gap-1">
+        <Text className="text-xs uppercase tracking-wide text-muted">
+          Contract UUID
+        </Text>
+        <TextInput
+          value={contractId}
+          onChangeText={setContractId}
+          placeholder="Rental contract UUID"
+          placeholderTextColor={trustPlaceholderColor}
+          autoCapitalize="none"
+          autoCorrect={false}
+          className={trustInputClass}
+        />
+      </View>
+      <View className="gap-1">
+        <Text className="text-xs uppercase tracking-wide text-muted">
+          Offer UUID (optional, for insurance tiers)
+        </Text>
+        <TextInput
+          value={offerId}
+          onChangeText={setOfferId}
+          placeholder="Rental offer UUID"
+          placeholderTextColor={trustPlaceholderColor}
+          autoCapitalize="none"
+          autoCorrect={false}
+          className={trustInputClass}
+        />
+      </View>
+      {!contractReady ? (
+        <Text className="text-xs leading-5 text-muted">
+          Enter a valid contract UUID to open the rental screens below.
+        </Text>
+      ) : null}
+      {entries.map((entry) => (
+        <Pressable
+          key={entry.title}
+          onPress={() => router.push(entry.href)}
+          disabled={!contractReady}
+          accessibilityRole="button"
+          className="rounded-[28px] border border-border bg-surface px-4 py-4"
+          style={({ pressed }) => ({
+            opacity: pressed || !contractReady ? 0.6 : 1,
+          })}
+        >
+          <View className="flex-row items-center justify-between gap-3">
+            <View className="flex-1">
+              <Text className="text-lg font-semibold text-foreground">
+                {entry.title}
+              </Text>
+              <Text className="mt-1 text-sm leading-5 text-muted">
+                {entry.body}
+              </Text>
+            </View>
+            <Text className="text-xl font-semibold text-muted">›</Text>
+          </View>
+        </Pressable>
+      ))}
+    </SectionCard>
   );
 }
 
@@ -136,6 +269,8 @@ export default function TrustHubScreen() {
             </Pressable>
           ))}
         </View>
+
+        <VehicleRentalsSection />
       </ScrollView>
     </ScreenContainer>
   );
