@@ -1,0 +1,43 @@
+# PowerSync service — docker-compose snippet for deploy/platform parity.
+# Merge into deploy/platform/docker-compose.stack.yml (or include via
+# `docker compose -f docker-compose.stack.yml -f docker-compose.powersync.yml`).
+#
+# Prerequisites BEFORE first start (see deploy/powersync/README.md):
+#   1. drizzle/0103_powersync_sync_support.sql applied to the main database
+#      (creates the `powersync` publication).
+#   2. `powersync_replication` role + `powersync_bucket` database +
+#      `powersync_storage` role created (role SQL in README.md).
+#   3. Postgres started with wal_level=logical (add to the postgres service:
+#      command: ["postgres", "-c", "wal_level=logical", "-c",
+#      "max_replication_slots=10", "-c", "max_wal_senders=10",
+#      "-c", "max_slot_wal_keep_size=2GB"]).
+#
+# Required env (set in the shell or .env, never committed):
+#   POWERSYNC_SOURCE_URI   postgresql://powersync_replication:...@postgres:5432/switchos
+#   POWERSYNC_STORAGE_URI  postgresql://powersync_storage:...@postgres:5432/powersync_bucket
+#   POWERSYNC_ADMIN_TOKEN  random admin/diagnostics API token
+#   POWERSYNC_JWKS_URI     e.g. http://host.docker.internal:3005/api/powersync/jwks.json
+version: "3.9"
+
+services:
+  powersync:
+    image: journeyapps/powersync-service:1.28.2
+    container_name: switchos-powersync
+    restart: unless-stopped
+    # unified mode: replication + API in one container — local/dev only.
+    # Production k8s splits these (deploy/powersync/k8s/powersync.yaml).
+    command: ["start", "-r", "unified"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      POWERSYNC_CONFIG_PATH: /etc/powersync/service.yaml
+      PS_SOURCE_URI: ${POWERSYNC_SOURCE_URI:?POWERSYNC_SOURCE_URI must be set}
+      PS_STORAGE_URI: ${POWERSYNC_STORAGE_URI:?POWERSYNC_STORAGE_URI must be set}
+      PS_ADMIN_TOKEN: ${POWERSYNC_ADMIN_TOKEN:?POWERSYNC_ADMIN_TOKEN must be set}
+      PS_JWKS_URI: ${POWERSYNC_JWKS_URI:?POWERSYNC_JWKS_URI must be set}
+    volumes:
+      - ../powersync/service.yaml:/etc/powersync/service.yaml:ro
+      - ../powersync/sync-rules.yaml:/etc/powersync/sync-rules.yaml:ro
+    ports:
+      - "8080:8080"
