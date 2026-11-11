@@ -541,4 +541,15 @@ export const ENV = {
     .trim(),
   powerSyncJwtSecret: (process.env.POWERSYNC_JWT_SECRET ?? "").trim(),
   powerSyncServiceUrl: normalizeOptionalUrl("POWERSYNC_SERVICE_URL"),
+  // WhatsApp Cloud API consumer channel (P1-B). All four optional: the
+  // webhook refuses deliveries and the sender refuses sends (fail closed,
+  // logged) whenever they are unset.
+  whatsappVerifyToken: (process.env.WHATSAPP_VERIFY_TOKEN ?? "").trim(),
+  whatsappAppSecret: (process.env.WHATSAPP_APP_SECRET ?? "").trim(),
+  whatsappAccessToken: (process.env.WHATSAPP_ACCESS_TOKEN ?? "").trim(),
+  whatsappPhoneNumberId: (process.env.WHATSAPP_PHONE_NUMBER_ID ?? "").trim(),
+  // Consumer checkout fee knobs. Raw optional strings by design — parsing
+  // and clamping live in the consumer checkout module, not in env.ts.
+  consumerPlatformFeeBps: (process.env.CONSUMER_PLATFORM_FEE_BPS ?? "").trim(),
+  consumerDeliveryFeeMinor: (process.env.CONSUMER_DELIVERY_FEE_MINOR ?? "").trim(),
 };
