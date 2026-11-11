@@ -527,4 +527,18 @@ export const ENV = {
   cacheControlIndexHtml:
     process.env.CACHE_CONTROL_INDEX_HTML ??
     "no-cache, no-store, must-revalidate",
+  // PowerSync sync-service token issuance. Fail-closed when unconfigured:
+  // /api/powersync/token and /api/powersync/upload answer 503
+  // powersync_not_configured. RS256 (private key PEM) is the production path;
+  // POWERSYNC_JWT_SECRET (HS256) is honored only outside production.
+  powerSyncJwtAudience: (
+    process.env.POWERSYNC_JWT_AUDIENCE ?? "powersync"
+  ).trim(),
+  powerSyncJwtPrivateKeyPem: (
+    process.env.POWERSYNC_JWT_PRIVATE_KEY ?? ""
+  )
+    .replace(/\\n/g, "\n")
+    .trim(),
+  powerSyncJwtSecret: (process.env.POWERSYNC_JWT_SECRET ?? "").trim(),
+  powerSyncServiceUrl: normalizeOptionalUrl("POWERSYNC_SERVICE_URL"),
 };
