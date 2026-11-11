@@ -8,6 +8,7 @@ import { SafeAreaProvider } from "react-native-safe-area-context";
 
 import { useColors } from "@/hooks/use-colors";
 import { MobileAppProvider } from "@/lib/mobile/provider";
+import { PowerSyncProvider } from "@/lib/powersync/PowerSyncProvider";
 import { ThemeProvider, useThemeContext } from "@/lib/theme-provider";
 import { createTRPCClient, trpc } from "@/lib/trpc";
 
@@ -57,7 +58,14 @@ export default function RootLayout() {
           <QueryClientProvider client={queryClient}>
             <ThemeProvider>
               <MobileAppProvider>
-                <LayoutFrame />
+                {/* Offline DATA sync layer (orders/loyalty/support replicas +
+                    whitelisted uploads). No-op on web / Expo Go without a dev
+                    build — degrades to online-only, never blocks render. The
+                    operator ACTION outbox lives separately in
+                    lib/mobile/offline-sync-sqlite.ts. */}
+                <PowerSyncProvider>
+                  <LayoutFrame />
+                </PowerSyncProvider>
               </MobileAppProvider>
             </ThemeProvider>
           </QueryClientProvider>

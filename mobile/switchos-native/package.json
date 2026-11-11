@@ -21,6 +21,11 @@
   "dependencies": {
     "@expo/vector-icons": "^15.0.3",
     "@maplibre/maplibre-react-native": "^11.3.10",
+    "@op-engineering/op-sqlite": "^15.0.0",
+    "@powersync/adapter-sql-js": "0.0.18",
+    "@powersync/common": "^1.58.0",
+    "@powersync/op-sqlite": "^0.9.17",
+    "@powersync/react-native": "^1.35.11",
     "@react-native-async-storage/async-storage": "^2.2.0",
     "@react-navigation/bottom-tabs": "^7.8.12",
     "@react-navigation/elements": "^2.9.2",
