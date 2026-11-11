@@ -1,0 +1,86 @@
+# PowerSync sync rules (legacy bucket_definitions, fully supported by
+# powersync-service v1.28.2). Referenced by deploy/powersync/service.yaml
+# (`sync_config.path`).
+#
+# Token contract (minted by server/_core/powersyncToken.ts):
+#   token_parameters.user_id     <- JWT sub = public.users.id (all roles)
+#   token_parameters.role        <- 'consumer' | 'courier' | 'merchant' | 'operator'
+#   token_parameters.driver_id   <- drivers.id      (courier tokens only)
+#   token_parameters.provider_id <- service_providers.id (merchant tokens only)
+#
+# Bucket-limit budget (PowerSync defaults: <=1000 buckets/connection,
+# <=1000 parameter-query rows per sync):
+#   - Every parameter query below returns AT MOST ONE row per user, so each
+#     client subscribes to at most 4 buckets (user_own + courier_assignments +
+#     merchant_store + operator_admin) plus the shared global bucket = 5 total.
+#     Headroom vs the 1000-bucket ceiling: ~200x.
+#   - Parameter queries never join high-fan-out tables (a JOIN-keyed parameter
+#     query creates one bucket per joined row — that is how bucket explosions
+#     happen), keeping parameter rows at 1 per query.
+#
+# Any table referenced here (data OR parameter query) MUST be in the
+# `powersync` publication — see drizzle/0103_powersync_sync_support.sql for
+# the v1 list and the extension procedure.
+
+bucket_definitions:
+  # Small shared reference data: one global bucket synced to every client.
+  # Keep this to genuinely small, slow-moving catalogs only.
+  global_reference:
+    data:
+      - SELECT * FROM service_verticals WHERE is_active = true
+      - SELECT * FROM vertical_service_templates
+      - SELECT * FROM membership_plans WHERE is_active = true
+      - SELECT * FROM loyalty_rewards WHERE is_active = true
+
+  # Every authenticated user: own orders, tracking, loyalty, notifications,
+  # memberships, reviews, support cases. Role-independent on purpose — a
+  # courier or merchant is also a consumer identity.
+  user_own:
+    parameters: SELECT token_parameters.user_id AS user_id
+    data:
+      - SELECT * FROM orders WHERE customer_id = bucket.user_id
+      - SELECT * FROM order_tracking_events WHERE order_id IN (SELECT id FROM orders WHERE customer_id = bucket.user_id)
+      - SELECT * FROM notifications WHERE user_id = bucket.user_id
+      - SELECT * FROM loyalty_points WHERE user_id = bucket.user_id
+      - SELECT * FROM loyalty_transactions WHERE user_id = bucket.user_id
+      - SELECT * FROM loyalty_redemptions WHERE user_id = bucket.user_id
+      - SELECT * FROM consumer_memberships WHERE user_id = bucket.user_id
+      - SELECT * FROM consumer_reviews WHERE user_id = bucket.user_id
+      - SELECT * FROM support_tickets WHERE customer_id = bucket.user_id
+
+  # Courier: assigned orders + their tracking, own review/performance
+  # readbacks, own position events. Role-gated via the token claim; the
+  # parameter query returns one row (driver_id) or none (non-couriers get no
+  # bucket).
+  courier_assignments:
+    parameters: SELECT token_parameters.driver_id AS driver_id WHERE token_parameters.role = 'courier'
+    data:
+      - SELECT * FROM drivers WHERE id = bucket.driver_id
+      - SELECT * FROM orders WHERE driver_id = bucket.driver_id
+      - SELECT * FROM order_tracking_events WHERE order_id IN (SELECT id FROM orders WHERE driver_id = bucket.driver_id)
+      # delivery_tracking_events.driver_operator_id carries the driver/operator
+      # id (see drizzle/0023). Position history for the courier's own device.
+      - SELECT * FROM delivery_tracking_events WHERE driver_operator_id = bucket.driver_id
+      - SELECT * FROM driver_reviews WHERE driver_id = bucket.driver_id
+      - SELECT * FROM driver_performance_scores WHERE driver_id = bucket.driver_id
+
+  # Merchant: own store identity, catalog, and orders routed to the store.
+  merchant_store:
+    parameters: SELECT token_parameters.provider_id AS provider_id WHERE token_parameters.role = 'merchant'
+    data:
+      - SELECT * FROM service_providers WHERE id = bucket.provider_id
+      - SELECT * FROM provider_catalog_items WHERE provider_id = bucket.provider_id
+      - SELECT * FROM orders WHERE provider_id = bucket.provider_id OR service_provider_id = bucket.provider_id
+
+  # Operator: platform-ops read views. v1 scope is deliberately narrow —
+  # support-case triage plus open-order overview. Tenant-scoped admin views
+  # are staged for v2: the tenant claim exists on operator sessions
+  # (SessionUser.tenantId) but the synced v1 tables have no tenant column yet;
+  # do NOT add tenant-filtered buckets until tenant columns land on the
+  # replicated tables (delivery_tracking_events.tenant_id is the vehicle-
+  # tracker tenant, NOT the platform tenant — do not join on it).
+  operator_admin:
+    parameters: SELECT token_parameters.user_id AS operator_id WHERE token_parameters.role = 'operator'
+    data:
+      - SELECT * FROM support_tickets
+      - SELECT * FROM orders WHERE status IN ('pending', 'confirmed', 'assigned')

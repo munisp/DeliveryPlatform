@@ -1,0 +1,53 @@
+# PowerSync service configuration — self-hosted `journeyapps/powersync-service:1.28.2`
+# (post-2026-11-03 Apache-2.0 release line).
+#
+# Loaded via POWERSYNC_CONFIG_PATH (mounted file) — see deploy/powersync/README.md
+# for apply order and the k8s/compose wiring. Secrets are NEVER inlined here:
+# the service substitutes `!env PS_*` variables at startup (only PS_* names are
+# substituted by the PowerSync config loader).
+
+# --- Source replication (read-only) -----------------------------------------
+# Exactly one source connection. The `powersync_replication` role is
+# least-privilege: LOGIN + REPLICATION + BYPASSRLS + SELECT on published
+# tables only (role SQL in README.md). The publication `powersync` is created
+# by drizzle/0103_powersync_sync_support.sql BEFORE this service starts.
+replication:
+  connections:
+    - type: postgresql
+      # postgresql://powersync_replication:<password>@<postgres-host>:5432/<app-db>
+      uri: !env PS_SOURCE_URI
+      sslmode: verify-full
+
+# --- Bucket storage ----------------------------------------------------------
+# Postgres bucket storage (platform standard; no MongoDB in the stack).
+# Dedicated database `powersync_bucket` owned by dedicated role
+# `powersync_storage` on the SAME Postgres cluster — see README.md role SQL.
+storage:
+  type: postgresql
+  # postgresql://powersync_storage:<password>@<postgres-host>:5432/powersync_bucket
+  uri: !env PS_STORAGE_URI
+
+port: 8080
+
+sync_config:
+  path: sync-rules.yaml
+
+# --- Client auth -------------------------------------------------------------
+# Clients present RS256 JWTs minted by the DeliveryPlatform backend
+# (server/_core/powersyncToken.ts). The service fetches verification keys from
+# the backend JWKS endpoint. `aud` must match POWERSYNC_JWT_AUDIENCE
+# (default 'powersync'). HS256 static-key config is a dev-only alternative —
+# do not use it here; in dev set client_auth.jwks.keys with kty: oct instead.
+client_auth:
+  jwks_uri: !env PS_JWKS_URI # e.g. https://api.example.com/api/powersync/jwks.json
+  audience: ['powersync']
+
+# --- Admin / diagnostics API -------------------------------------------------
+# Bearer token(s) for the service admin API (slot status, diagnostics). Rotate
+# via the PS_ADMIN_TOKEN secret; never commit a value.
+api:
+  tokens:
+    - !env PS_ADMIN_TOKEN
+
+telemetry:
+  disable_telemetry_sharing: true
