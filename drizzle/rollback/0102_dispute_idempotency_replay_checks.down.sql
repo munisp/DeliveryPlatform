@@ -76,8 +76,8 @@ BEGIN
       decided_at = p_now
   WHERE id = p_dispute;
   SELECT state INTO v_state FROM vehicle_access.access_contract WHERE id = v_dispute.contract_id;
-  PERFORM vehicle_access.append_rental_operations_event('settlement_dispute', p_dispute, p_actor, 'vehicle_access.settlement_dispute.decided', jsonb_build_object('contract_id', v_dispute.contract_id, 'settlement_id', v_settlement.id, 'status', p_status, 'adjustment_minor', CASE WHEN p_status = 'adjusted' THEN p_adjustment_minor ELSE NULL END, 'money_movement', 'out_of_scope_operator_applies_via_financial_ops'), p_key, p_now);
-  PERFORM vehicle_access.append_event(v_dispute.contract_id, p_actor, 'vehicle_access.contract.settlement_dispute_decided', v_state, v_state, jsonb_build_object('dispute_id', p_dispute, 'settlement_id', v_settlement.id, 'status', p_status, 'adjustment_minor', CASE WHEN p_status = 'adjusted' THEN p_adjustment_minor ELSE NULL END), p_key, p_now);
+  PERFORM vehicle_access.append_rental_operations_event('settlement_dispute', p_dispute, p_actor, 'vehicle_access.settlement_dispute.decided', jsonb_build_object('contract_id', v_dispute.contract_id, 'settlement_id', v_dispute.settlement_id, 'status', p_status, 'adjustment_minor', CASE WHEN p_status = 'adjusted' THEN p_adjustment_minor ELSE NULL END, 'money_movement', 'out_of_scope_operator_applies_via_financial_ops'), p_key, p_now);
+  PERFORM vehicle_access.append_event(v_dispute.contract_id, p_actor, 'vehicle_access.contract.settlement_dispute_decided', v_state, v_state, jsonb_build_object('dispute_id', p_dispute, 'settlement_id', v_dispute.settlement_id, 'status', p_status, 'adjustment_minor', CASE WHEN p_status = 'adjusted' THEN p_adjustment_minor ELSE NULL END), p_key, p_now);
   PERFORM vehicle_access.enqueue_event(v_dispute.contract_id, 'vehicle_access.contract.settlement_dispute_decided', p_key, p_now);
   RETURN p_dispute;
 END;
