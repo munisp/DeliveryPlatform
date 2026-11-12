@@ -1,4 +1,7 @@
-export type OfflineAction = { id: string; accountId: string; lane: "merchant_catalog"|"merchant_inventory"|"driver_delivery"; type: string; payload: unknown; createdAt: string; attempts: number };
+export type ConsumerOfflineLane = "consumer_cart"|"consumer_checkout"|"consumer_ride";
+export const CONSUMER_OFFLINE_LANES: readonly ConsumerOfflineLane[] = ["consumer_cart","consumer_checkout","consumer_ride"];
+export type OfflineLane = "merchant_catalog"|"merchant_inventory"|"driver_delivery"|ConsumerOfflineLane;
+export type OfflineAction = { id: string; accountId: string; lane: OfflineLane; type: string; payload: unknown; createdAt: string; attempts: number };
 export type TrackingDelta = { cursor: number; orderId: number; observedAt: string; latitude: number; longitude: number; accuracyM: number|null; etaSeconds: number|null };
 const DB = "deliveryplatform-offline-v1";
 function request<T>(r: IDBRequest<T>) { return new Promise<T>((resolve,reject)=>{r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error);}); }
@@ -7,5 +10,17 @@ async function tx<T>(stores:string[],mode:IDBTransactionMode,fn:(t:IDBTransactio
 export async function applyTrackingDeltas(accountId:string,scope:string,deltas:TrackingDelta[]) { if(!accountId||!scope) throw new Error("offline_scope_required"); await tx(["deltas","meta"],"readwrite",async t=>{const s=t.objectStore("deltas"),m=t.objectStore("meta");let max=0;for(const delta of deltas){if(!Number.isSafeInteger(delta.cursor)||delta.cursor<1)throw new Error("invalid_tracking_delta");s.put({...delta,accountId,scope});max=Math.max(max,delta.cursor);}if(max) m.put(max,`cursor:${accountId}:${scope}`);}); }
 export async function trackingCursor(accountId:string,scope:string){return tx(["meta"],"readonly",t=>request<number|undefined>(t.objectStore("meta").get(`cursor:${accountId}:${scope}`)).then(v=>v??0));}
 export async function enqueueOfflineAction(action:OfflineAction){if(!crypto.randomUUID||!action.id||!action.accountId)throw new Error("offline_action_invalid");await tx(["actions"],"readwrite",async t=>{await request(t.objectStore("actions").add(action));});}
-export async function replayOfflineActions(accountId:string,send:(action:OfflineAction)=>Promise<void>){return tx(["actions"],"readwrite",async t=>{const store=t.objectStore("actions"),rows=await request<OfflineAction[]>(store.index("account").getAll(accountId));for(const a of rows.sort((x,y)=>x.createdAt.localeCompare(y.createdAt))){try{await send(a);store.delete(a.id);}catch{store.put({...a,attempts:a.attempts+1});break;}}});}
+export async function replayOfflineActions(accountId:string,send:(action:OfflineAction)=>Promise<void>,options?:{lanes?:readonly string[]}){return tx(["actions"],"readwrite",async t=>{const store=t.objectStore("actions"),rows=await request<OfflineAction[]>(store.index("account").getAll(accountId));for(const a of rows.filter(a=>!options?.lanes||options.lanes.includes(a.lane)).sort((x,y)=>x.createdAt.localeCompare(y.createdAt))){try{await send(a);store.delete(a.id);}catch{store.put({...a,attempts:a.attempts+1});break;}}});}
+export async function listOfflineActions(accountId:string){return tx(["actions"],"readonly",async t=>{const rows=await request<OfflineAction[]>(t.objectStore("actions").index("account").getAll(accountId));return rows.sort((x,y)=>x.createdAt.localeCompare(y.createdAt));});}
+function isConstraintError(error:unknown){return typeof error==="object"&&error!==null&&(error as {name?:string}).name==="ConstraintError";}
+export type EnqueueOfflineActionResult = "enqueued"|"duplicate";
+/**
+ * Typed consumer-lane enqueue (P5-OFFLINE). Wraps enqueueOfflineAction with
+ * the consumer lanes and duplicate suppression: pass a deterministic `id`
+ * (e.g. derived from cart id + idempotency key) so re-enqueueing the same
+ * draft is a no-op ("duplicate") instead of a second queued action. Use
+ * mode "upsert" for drafts where the LATEST edit wins (cart quantity
+ * steppers); the default "add" preserves the first enqueue.
+ */
+export async function enqueueConsumerOfflineAction(input:{accountId:string;lane:ConsumerOfflineLane;type:string;payload:unknown;id?:string},options?:{mode?:"add"|"upsert"}):Promise<EnqueueOfflineActionResult>{if(!input.accountId)throw new Error("offline_action_invalid");const id=input.id??crypto.randomUUID();const action:OfflineAction={id,accountId:input.accountId,lane:input.lane,type:input.type,payload:input.payload,createdAt:new Date().toISOString(),attempts:0};if(options?.mode==="upsert"){await tx(["actions"],"readwrite",async t=>{await request(t.objectStore("actions").put(action));});return "enqueued";}try{await enqueueOfflineAction(action);return "enqueued";}catch(error){if(isConstraintError(error))return "duplicate";throw error;}}
 export async function clearOfflineAccount(accountId:string){await tx(["actions","deltas","meta"],"readwrite",async t=>{for(const n of ["actions","deltas"]){const s=t.objectStore(n);const i=s.index(n==="actions"?"account":"accountScope");const r=i.openCursor(n==="actions"?accountId:IDBKeyRange.bound([accountId,""],[accountId,"\uffff"]));await new Promise<void>((resolve,reject)=>{r.onsuccess=()=>{const c=r.result;if(!c)return resolve();c.delete();c.continue();};r.onerror=()=>reject(r.error);});}t.objectStore("meta").delete(`cursor:${accountId}:admin`);t.objectStore("meta").delete(`cursor:${accountId}:customer`);t.objectStore("meta").delete(`cursor:${accountId}:merchant`);t.objectStore("meta").delete(`cursor:${accountId}:driver`);});}
