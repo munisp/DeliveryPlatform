@@ -153,6 +153,7 @@ import { consumerCatalogRouter } from "./_core/consumerCatalog";
 import { consumerRideRouter } from "./_core/consumerRide";
 import { merchantSelfServeRouter } from "./_core/merchantSelfServeRouter";
 import { supportAgentRouter } from "./_core/supportAgentRouter";
+import { verticalOpsRouter } from "./_core/verticalOpsRouter";
 import { openrideTelemetryRouter } from "./openride/telemetry";
 import { openrideBundlesRouter, openrideGeoRouter } from "./openride/bundleRegistry";
 import { rentalInsuranceRouter, rentalConditionRouter } from "./rental/conditionInsurance";
@@ -2090,6 +2091,7 @@ export const appRouter = router({
   consumerRide: consumerRideRouter,
   merchantSelfServe: merchantSelfServeRouter,
   supportAgent: supportAgentRouter,
+  verticalOps: verticalOpsRouter,
 
   riderVerification: riderVerificationRouter,
 
