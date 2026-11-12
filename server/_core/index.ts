@@ -136,6 +136,10 @@ import { developerOpenApi } from "./developerOpenApi";
 import { ingestMedusaWebhook, MedusaCommerceError } from "./medusaCommerce";
 import { ingestExternalCommerceWebhook } from "./commerceFulfillment";
 import {
+  whatsappWebhookPostHandler,
+  whatsappWebhookVerifyHandler,
+} from "../whatsapp/webhook";
+import {
   handleRoleScopedTrackingSnapshot,
   handleRoleScopedTrackingStream,
 } from "./realtimeTracking";
@@ -713,6 +717,19 @@ app.post(
       }
     }
   },
+);
+
+// WhatsApp Cloud API consumer webhook (P1-B). Mounted BEFORE the global
+// express.json parser so express.raw preserves the exact bytes the
+// X-Hub-Signature-256 HMAC is computed over. The handlers fail closed (403
+// handshake / 401 signature / 503 precondition) whenever the WHATSAPP_* env
+// vars are unset; see server/whatsapp/webhook.ts.
+app.get("/api/webhooks/whatsapp", rateLimit(120), whatsappWebhookVerifyHandler);
+app.post(
+  "/api/webhooks/whatsapp",
+  express.raw({ type: "application/json", limit: ENV.apiBodyLimit }),
+  rateLimit(120),
+  whatsappWebhookPostHandler,
 );
 
 app.use(
