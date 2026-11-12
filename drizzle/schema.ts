@@ -8,8 +8,11 @@
  * migrations — update the SQL migrations instead. Do not delete this file
  * without removing the drizzle.config.ts reference first.
  */
+import { sql } from "drizzle-orm";
 import {
+  bigint,
   boolean,
+  index,
   integer,
   json,
   jsonb,
@@ -21,6 +24,7 @@ import {
   text,
   timestamp,
   uniqueIndex,
+  uuid,
   varchar,
 } from "drizzle-orm/pg-core";
 
@@ -290,5 +294,131 @@ export const consumerProcessedEvents = pgTable(
   },
   (table) => [
     primaryKey({ columns: [table.consumerName, table.topic, table.eventId] }),
+  ],
+);
+
+// Driver reviews. Resurrected ORM entry for the table created by
+// drizzle/0000_jittery_pride.sql (driver_reviews, CONSTRAINT
+// driver_reviews_order_id_unique UNIQUE(order_id)) — the DDL always existed;
+// this file simply never listed it. No new DDL accompanies this entry.
+export const driverReviews = pgTable("driver_reviews", {
+  id: serial("id").primaryKey(),
+  orderId: integer("order_id").notNull().unique(),
+  driverId: integer("driver_id").notNull(),
+  customerId: integer("customer_id").notNull(),
+  overallRating: integer("overall_rating").notNull(),
+  punctualityRating: integer("punctuality_rating").notNull(),
+  professionalismRating: integer("professionalism_rating").notNull(),
+  vehicleConditionRating: integer("vehicle_condition_rating").notNull(),
+  communicationRating: integer("communication_rating").notNull(),
+  feedback: text("feedback"),
+  moderationStatus: varchar("moderation_status", { length: 20 }).default("pending").notNull(),
+  moderatedBy: integer("moderated_by"),
+  moderationNotes: text("moderation_notes"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+// Consumer commerce core. Columns mirror
+// drizzle/0104_consumer_commerce_core.sql (the authoritative DDL); money is
+// bigint MINOR units, currency defaults to NGN.
+export const consumerCarts = pgTable(
+  "consumer_carts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    consumerId: integer("consumer_id").notNull(),
+    serviceProviderId: integer("service_provider_id"),
+    verticalId: integer("vertical_id"),
+    status: text("status").default("active").notNull(),
+    idempotencyKey: text("idempotency_key"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("consumer_carts_consumer_idempotency_key_unique")
+      .on(table.consumerId, table.idempotencyKey)
+      .where(sql`${table.idempotencyKey} IS NOT NULL`),
+    index("idx_consumer_carts_consumer_status").on(table.consumerId, table.status),
+  ],
+);
+
+export const consumerCartItems = pgTable(
+  "consumer_cart_items",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    cartId: uuid("cart_id").notNull(),
+    catalogItemId: integer("catalog_item_id"),
+    name: text("name").notNull(),
+    unitPriceMinor: bigint("unit_price_minor", { mode: "bigint" }).notNull(),
+    quantity: integer("quantity").notNull(),
+    modifiers: jsonb("modifiers").default([]).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [index("idx_consumer_cart_items_cart").on(table.cartId)],
+);
+
+export const consumerCheckoutSessions = pgTable(
+  "consumer_checkout_sessions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    cartId: uuid("cart_id").notNull().unique(),
+    consumerId: integer("consumer_id").notNull(),
+    status: text("status").default("open").notNull(),
+    subtotalMinor: bigint("subtotal_minor", { mode: "bigint" }).notNull(),
+    platformFeeMinor: bigint("platform_fee_minor", { mode: "bigint" }).notNull(),
+    deliveryFeeMinor: bigint("delivery_fee_minor", { mode: "bigint" }).notNull(),
+    totalMinor: bigint("total_minor", { mode: "bigint" }).notNull(),
+    currency: text("currency").default("NGN").notNull(),
+    paymentReference: text("payment_reference"),
+    mojaloopTransferId: text("mojaloop_transfer_id"),
+    idempotencyKey: text("idempotency_key").notNull().unique(),
+    orderId: integer("order_id"),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index("idx_consumer_checkout_sessions_consumer").on(table.consumerId, table.status),
+  ],
+);
+
+export const consumerGroupOrders = pgTable("consumer_group_orders", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  hostConsumerId: integer("host_consumer_id").notNull(),
+  status: text("status").default("open").notNull(),
+  shareCode: text("share_code").notNull().unique(),
+  maxParticipants: integer("max_participants").default(8).notNull(),
+  closedAt: timestamp("closed_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export const consumerGroupOrderParticipants = pgTable(
+  "consumer_group_order_participants",
+  {
+    groupId: uuid("group_id").notNull(),
+    consumerId: integer("consumer_id").notNull(),
+    cartId: uuid("cart_id"),
+    joinedAt: timestamp("joined_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.groupId, table.consumerId] })],
+);
+
+export const consumerSubscriptions = pgTable(
+  "consumer_subscriptions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    consumerId: integer("consumer_id").notNull(),
+    planId: integer("plan_id").notNull(),
+    status: text("status").default("active").notNull(),
+    currentPeriodStart: timestamp("current_period_start", { withTimezone: true }).notNull(),
+    currentPeriodEnd: timestamp("current_period_end", { withTimezone: true }).notNull(),
+    idempotencyKey: text("idempotency_key").notNull().unique(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index("idx_consumer_subscriptions_consumer").on(table.consumerId, table.status),
   ],
 );
