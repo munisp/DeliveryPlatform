@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import { Pressable, ScrollView, Text, View } from "react-native";
+import { router } from "expo-router";
 
 import {
   ActionCard,
@@ -153,6 +154,13 @@ export default function HomeScreen() {
           </SectionCard>
         )}
 
+        <ActionCard
+          eyebrow="Consumer"
+          title="Shop the marketplace"
+          body="Browse verticals and providers, build a cart, and check out — catalog stays browsable offline from the synced replica."
+          cta="Open Shop"
+          onPress={() => router.push("/consumer/marketplace" as never)}
+        />
         <ActionCard
           eyebrow="Logistics"
           title="Queue replenishment review"
