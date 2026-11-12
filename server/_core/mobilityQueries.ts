@@ -52,6 +52,35 @@ async function countOf(sql: string, params: unknown[] = []): Promise<number> {
   return toCount(rows[0]?.c);
 }
 
+/**
+ * Deterministic carrier compliance score in the inclusive range [0, 100],
+ * computed purely from the service_providers status + verification_status
+ * columns ALREADY read by the freight carrier query (0000 provider_status /
+ * verification_status enums) — no new tables, no live recomputation cost.
+ * Verification is the primary signal (max 60): verified 60, pending 20,
+ * rejected 0. Operational status contributes up to 40: active 40, pending 15,
+ * suspended 5, rejected 0. Unknown/NULL values score 0 for that component.
+ * Exported for unit tests (server/scale-polish.test.ts).
+ */
+export function carrierComplianceScore(
+  status: unknown,
+  verificationStatus: unknown,
+): number {
+  const verification = `${verificationStatus ?? ""}`.toLowerCase();
+  const providerStatus = `${status ?? ""}`.toLowerCase();
+  const verificationComponent =
+    verification === "verified" ? 60 : verification === "pending" ? 20 : 0;
+  const statusComponent =
+    providerStatus === "active"
+      ? 40
+      : providerStatus === "pending"
+        ? 15
+        : providerStatus === "suspended"
+          ? 5
+          : 0;
+  return Math.max(0, Math.min(100, verificationComponent + statusComponent));
+}
+
 export type MobilityOverviewSummary = {
   summary: {
     active_trips: number;
@@ -422,12 +451,66 @@ export type BusinessTravelSummary = {
   policy_templates: string[];
 };
 
-const TRAVEL_POLICY_TEMPLATES = [
+/**
+ * Module-level DEFAULT enterprise travel policy templates. No dedicated
+ * policy-template table exists today (checked: service_verticals (0000) only
+ * carries vertical metadata; vertical_compliance_packs (0076) models
+ * jurisdiction compliance packs, not travel policy; business_travel_accounts
+ * (0073:39-53) carries the policy-ish columns approval_mode and
+ * monthly_budget_minor but no template list column). Per-account overrides are
+ * therefore derived from those existing columns — see
+ * resolveTravelPolicyTemplates. Exported for unit tests
+ * (server/scale-polish.test.ts).
+ */
+export const DEFAULT_TRAVEL_POLICY_TEMPLATES = [
   "Airport and executive ride class caps",
   "Meals and delivery spend thresholds",
   "Scheduled healthcare and guest travel approvals",
   "Cost-center routing and expensing rules",
-];
+] as const;
+
+/**
+ * Resolve the effective travel policy template list from the
+ * business_travel_accounts rows already read by getBusinessTravelSummary.
+ * Precedence: the module-level defaults always come first; per-account
+ * overrides derived from existing policy-ish columns are appended (deduped,
+ * deterministic order):
+ *   - monthly_budget_minor present and > 0  -> monthly budget cap template
+ *   - approval_mode = 'auto-with-cap'       -> auto-approval cap template
+ *   - approval_mode = 'care-coordinator'    -> care-coordinator template
+ * With no accounts (or no policy-ish column values present) the result is
+ * exactly DEFAULT_TRAVEL_POLICY_TEMPLATES. Exported for unit tests.
+ */
+export function resolveTravelPolicyTemplates(
+  accounts: ReadonlyArray<{
+    approval_mode?: unknown;
+    monthly_budget_minor?: unknown;
+  }>,
+): string[] {
+  const templates: string[] = [...DEFAULT_TRAVEL_POLICY_TEMPLATES];
+  const seen = new Set(templates);
+  const push = (label: string) => {
+    if (!seen.has(label)) {
+      seen.add(label);
+      templates.push(label);
+    }
+  };
+  for (const account of accounts) {
+    const budgetMinor = Number(account?.monthly_budget_minor);
+    if (Number.isFinite(budgetMinor) && budgetMinor > 0) {
+      push(
+        `Monthly budget cap of NGN ${(budgetMinor / 100).toFixed(2)} per travel account`,
+      );
+    }
+    const mode = `${account?.approval_mode ?? ""}`.trim();
+    if (mode === "auto-with-cap") {
+      push("Auto-approval for trips within the configured fare cap");
+    } else if (mode === "care-coordinator") {
+      push("Care-coordinator pre-approval required for all trips");
+    }
+  }
+  return templates;
+}
 
 export async function getBusinessTravelSummary(
   limit = 8,
@@ -446,7 +529,7 @@ export async function getBusinessTravelSummary(
         `SELECT COUNT(*)::int AS c FROM business_travel_trips WHERE expense_state = 'open'`,
       ),
       queryRows(
-        `SELECT id, company_name, approval_mode, service_mix
+        `SELECT id, company_name, approval_mode, service_mix, monthly_budget_minor
          FROM business_travel_accounts
          ORDER BY created_at ASC NULLS LAST
          LIMIT $1`,
@@ -475,7 +558,7 @@ export async function getBusinessTravelSummary(
       enterprise_accounts: enterpriseAccounts,
       active_travelers: activeTravelers,
       open_expense_items: openExpenseItems,
-      policy_templates: TRAVEL_POLICY_TEMPLATES.length,
+      policy_templates: resolveTravelPolicyTemplates(programRows).length,
       recommended_action:
         "Consolidate employee rides, meals, guest trips, airport transfers, and policy controls under one enterprise travel program.",
     },
@@ -493,7 +576,7 @@ export async function getBusinessTravelSummary(
       spend_ytd: toNumber(row.spend_ytd),
       compliance_state: String(row.compliance_state ?? "in_policy"),
     })),
-    policy_templates: TRAVEL_POLICY_TEMPLATES,
+    policy_templates: resolveTravelPolicyTemplates(programRows),
   };
 }
 
@@ -588,8 +671,12 @@ export async function getFreightSummary(limit = 8): Promise<FreightSummary> {
       category: row.category === null ? null : String(row.category),
       status: String(row.status ?? "pending"),
       verification_status: String(row.verification_status ?? "pending"),
-      // No carrier compliance scoring backend exists yet; the page says so.
-      compliance_score: null,
+      // Deterministic score from the service_providers status +
+      // verification_status columns already read above (no new tables).
+      compliance_score: carrierComplianceScore(
+        row.status,
+        row.verification_status,
+      ),
     })),
   };
 }
