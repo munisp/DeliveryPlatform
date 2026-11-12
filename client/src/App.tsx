@@ -113,6 +113,12 @@ const ConsumerSubscription = lazyRoute(
   () => import("@/pages/ConsumerSubscription"),
 );
 const ConsumerGroupJoin = lazyRoute(() => import("@/pages/ConsumerGroupJoin"));
+const RideHome = lazyRoute(() => import("@/pages/RideHome"));
+const RideStatus = lazyRoute(() => import("@/pages/RideStatus"));
+const MerchantSignup = lazyRoute(() => import("@/pages/MerchantSignup"));
+const MerchantOrders = lazyRoute(() => import("@/pages/MerchantOrders"));
+const MerchantEarnings = lazyRoute(() => import("@/pages/MerchantEarnings"));
+const SupportConsole = lazyRoute(() => import("@/pages/SupportConsole"));
 const TenantAdminActions = lazyRoute(
   () => import("@/pages/TenantAdminActions"),
 );
@@ -764,6 +770,12 @@ export default function App() {
       <Route path="/shop/cart" component={ConsumerCart} />
       <Route path="/shop/checkout" component={ConsumerCheckout} />
       <Route path="/shop/group/:shareCode" component={ConsumerGroupJoin} />
+      <Route path="/ride/:tripId" component={RideStatus} />
+      <Route path="/ride" component={RideHome} />
+      <Route path="/merchant-signup" component={MerchantSignup} />
+      <Route path="/merchant-orders" component={MerchantOrders} />
+      <Route path="/merchant-earnings" component={MerchantEarnings} />
+      <Route path="/operator/support" component={SupportConsole} />
       <Route path="/shop" component={ConsumerMarketplace} />
       <Route path="/account">
         <Redirect to="/account/orders" />

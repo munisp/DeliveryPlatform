@@ -150,6 +150,9 @@ import { driverOnboardingRouter } from "./_core/driverOnboardingRouter";
 import { approveExternalOperator } from "./_core/operatorAuthStore";
 import { consumerRouter } from "./_core/consumerRouter";
 import { consumerCatalogRouter } from "./_core/consumerCatalog";
+import { consumerRideRouter } from "./_core/consumerRide";
+import { merchantSelfServeRouter } from "./_core/merchantSelfServeRouter";
+import { supportAgentRouter } from "./_core/supportAgentRouter";
 import { openrideTelemetryRouter } from "./openride/telemetry";
 import { openrideBundlesRouter, openrideGeoRouter } from "./openride/bundleRegistry";
 import { rentalInsuranceRouter, rentalConditionRouter } from "./rental/conditionInsurance";
@@ -527,7 +530,7 @@ export const appRouter = router({
                     z.object({
                       sku: z.string().trim().min(1).max(128),
                       availableUnits: z.number().min(0),
-                      freshnessHours: z.number().min(0).max(720).optional(),
+                      freshnessHours: z.number().min(0).max(720),
                     }),
                   )
                   .max(50),
@@ -2084,6 +2087,9 @@ export const appRouter = router({
 
   consumer: consumerRouter,
   consumerCatalog: consumerCatalogRouter,
+  consumerRide: consumerRideRouter,
+  merchantSelfServe: merchantSelfServeRouter,
+  supportAgent: supportAgentRouter,
 
   riderVerification: riderVerificationRouter,
 
