@@ -222,6 +222,18 @@ export default function MerchantCommercePortal() {
           </CardContent>
         </Card>
 
+        <Card>
+          <CardHeader>
+            <CardTitle>Self-serve pages</CardTitle>
+            <CardDescription>New here? Sign up as a merchant, then track incoming orders and earnings from the dedicated self-serve pages.</CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-wrap gap-3">
+            <Link href="/merchant-signup" className="inline-flex items-center rounded-full border border-cyan-500/40 bg-cyan-500/10 px-4 py-2 text-sm font-medium text-cyan-100 transition hover:bg-cyan-500/20">Merchant signup</Link>
+            <Link href="/merchant-orders" className="inline-flex items-center rounded-full border border-cyan-500/40 bg-cyan-500/10 px-4 py-2 text-sm font-medium text-cyan-100 transition hover:bg-cyan-500/20">Incoming orders</Link>
+            <Link href="/merchant-earnings" className="inline-flex items-center rounded-full border border-cyan-500/40 bg-cyan-500/10 px-4 py-2 text-sm font-medium text-cyan-100 transition hover:bg-cyan-500/20">Earnings</Link>
+          </CardContent>
+        </Card>
+
         {providerSelected ? (
           checklist.isError ? (
             <QueryErrorState
