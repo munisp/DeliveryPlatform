@@ -5,6 +5,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { HapticTab } from "@/components/haptic-tab";
 import { IconSymbol } from "@/components/ui/icon-symbol";
 import { useColors } from "@/hooks/use-colors";
+import { useActorRoles } from "@/lib/mobile/actor-roles";
 import { useNativeOperatorSession } from "@/lib/mobile/operator-session";
 
 export default function TabLayout() {
@@ -12,6 +13,11 @@ export default function TabLayout() {
   const insets = useSafeAreaInsets();
   const { role, isLoading } = useNativeOperatorSession();
   const isAdministrator = !isLoading && role === "admin";
+  // Courier/merchant gates mirror the admin gate: fail-closed until the
+  // PowerSync replica proves the actor role (see lib/mobile/actor-roles.ts).
+  const actorRoles = useActorRoles();
+  const isCourier = !actorRoles.loading && actorRoles.isCourier;
+  const isMerchant = !actorRoles.loading && actorRoles.isMerchant;
   const bottomPadding =
     Platform.OS === "web" ? 14 : Math.max(insets.bottom, 10);
   const tabBarHeight = 62 + bottomPadding;
@@ -82,6 +88,26 @@ export default function TabLayout() {
           title: "Trust",
           tabBarIcon: ({ color }) => (
             <IconSymbol size={24} name="checkmark.shield.fill" color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="courier"
+        options={{
+          href: isCourier ? undefined : null,
+          title: "Courier",
+          tabBarIcon: ({ color }) => (
+            <IconSymbol size={24} name="paperplane.fill" color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="merchant"
+        options={{
+          href: isMerchant ? undefined : null,
+          title: "Store",
+          tabBarIcon: ({ color }) => (
+            <IconSymbol size={24} name="storefront.fill" color={color} />
           ),
         }}
       />
