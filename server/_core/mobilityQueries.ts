@@ -242,7 +242,7 @@ export async function getRiderAppSummary(limit = 6): Promise<RiderAppSummary> {
            FROM rider_trips
            UNION ALL
            SELECT id, status::text, delivery_address AS address,
-                  CASE WHEN total_amount ~ '^[0-9]+(\\.[0-9]+)?$' THEN total_amount::numeric ELSE 0 END AS amount,
+                  CASE WHEN total_amount ~ '^[0-9]+(\.[0-9]+)?$' THEN total_amount::numeric ELSE 0 END AS amount,
                   'delivery' AS experience_type, created_at
            FROM orders
          ) combined
@@ -253,7 +253,7 @@ export async function getRiderAppSummary(limit = 6): Promise<RiderAppSummary> {
       queryRows(
         `SELECT id, business_name, category, rating
          FROM service_providers
-         ORDER BY CASE WHEN rating ~ '^[0-9]+(\\.[0-9]+)?$' THEN rating::numeric END DESC NULLS LAST,
+         ORDER BY CASE WHEN rating ~ '^[0-9]+(\.[0-9]+)?$' THEN rating::numeric END DESC NULLS LAST,
                   business_name ASC
          LIMIT $1`,
         [limit],
@@ -618,6 +618,10 @@ export type HealthcareTransportSummary = {
   compliance_packs: string[];
 };
 
+// Fallback labels ONLY: healthcare compliance packs are served from
+// public.vertical_compliance_packs (0076) — WS-COMPLIANCE bridge. This const
+// is used exclusively when that table read returns zero rows (or the table is
+// unavailable), so the summary never throws on an empty pack set.
 const HEALTHCARE_COMPLIANCE_PACKS = [
   "Patient identity verification",
   "HIPAA-sensitive notes",
@@ -625,10 +629,58 @@ const HEALTHCARE_COMPLIANCE_PACKS = [
   "Prescription handoff validation",
 ];
 
+function descriptorLabels(value: unknown, into: Set<string>): void {
+  let items: unknown[] = [];
+  if (Array.isArray(value)) {
+    items = value;
+  } else if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value);
+      items = Array.isArray(parsed) ? parsed : [];
+    } catch {
+      items = [];
+    }
+  }
+  for (const item of items) {
+    const label =
+      item && typeof (item as { label?: unknown }).label === "string"
+        ? String((item as { label?: unknown }).label).trim()
+        : "";
+    if (label.length > 0) into.add(label);
+  }
+}
+
+/**
+ * Read healthcare pack labels from vertical_compliance_packs (0076). Returns
+ * null when the table read yields ZERO ROWS (or fails — table absent in this
+ * environment) so the caller falls back to the const above; a non-null array
+ * (even empty) means the table is authoritative. Never throws on empty.
+ */
+async function listHealthcareCompliancePackLabels(): Promise<string[] | null> {
+  try {
+    const rows = await queryRows(
+      `SELECT required_documents, handling_requirements
+       FROM public.vertical_compliance_packs
+       WHERE vertical_slug = 'healthcare' AND active
+       ORDER BY jurisdiction ASC`,
+    );
+    if (rows.length === 0) return null;
+    const labels = new Set<string>();
+    for (const row of rows) {
+      descriptorLabels(row.required_documents, labels);
+      descriptorLabels(row.handling_requirements, labels);
+    }
+    return [...labels];
+  } catch {
+    // Table absent/unreadable in this environment: tolerate, never crash.
+    return null;
+  }
+}
+
 export async function getHealthcareTransportSummary(
   limit = 8,
 ): Promise<HealthcareTransportSummary> {
-  const [carePrograms, scheduledTrips, compliantProviders, programRows, caseRows] =
+  const [carePrograms, scheduledTrips, compliantProviders, programRows, caseRows, tablePackLabels] =
     await Promise.all([
       countOf(
         `SELECT COUNT(DISTINCT program)::int AS c FROM healthcare_transport_bookings`,
@@ -664,14 +716,20 @@ export async function getHealthcareTransportSummary(
          LIMIT $1`,
         [limit],
       ),
+      listHealthcareCompliancePackLabels(),
     ]);
+
+  // Table-backed (0076) when rows exist; the hardcoded const is the fallback
+  // ONLY for a zero-row/unavailable table read (null from the helper).
+  const healthcareCompliancePacks =
+    tablePackLabels ?? HEALTHCARE_COMPLIANCE_PACKS;
 
   return {
     summary: {
       care_programs: carePrograms,
       scheduled_trips: scheduledTrips,
       compliant_providers: compliantProviders,
-      compliance_packs: HEALTHCARE_COMPLIANCE_PACKS.length,
+      compliance_packs: healthcareCompliancePacks.length,
       recommended_action:
         "Use scheduled pickups, patient eligibility checks, and chain-of-custody controls for care transportation and regulated delivery.",
     },
@@ -691,6 +749,6 @@ export async function getHealthcareTransportSummary(
           : toCount(row.eta_minutes),
       created_at: row.created_at,
     })),
-    compliance_packs: HEALTHCARE_COMPLIANCE_PACKS,
+    compliance_packs: healthcareCompliancePacks,
   };
 }
