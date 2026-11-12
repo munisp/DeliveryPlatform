@@ -14,6 +14,36 @@ import type { AddressInfo } from "net";
 import type { Server } from "http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+// P2: browse now reads the REAL consumer catalog layer (P2-A). Mock it so
+// the webhook skeleton test stays hermetic (no database).
+vi.mock("./_core/consumerCatalog", () => ({
+  listConsumerVerticals: async () => [
+    { id: 1, name: "Food", slug: "food", description: null, icon: null },
+  ],
+  listConsumerProviders: async () => [
+    {
+      id: 7,
+      verticalId: 1,
+      name: "Mama Put",
+      businessName: "Mama Put Kitchen",
+      address: "12 Yaba Rd",
+      rating: "4.50",
+      status: "active",
+    },
+  ],
+  listConsumerCatalog: async () => [
+    {
+      id: 11,
+      providerId: 7,
+      sku: "JOLLOF",
+      itemName: "Jollof rice bowl",
+      description: null,
+      priceMajor: "1500.00",
+      currency: "NGN",
+    },
+  ],
+}));
+
 const TEST_VERIFY_TOKEN = "test-verify-token";
 const TEST_APP_SECRET = "test-app-secret";
 
@@ -256,20 +286,36 @@ describe("post-ack processing: dedupe + session state machine", () => {
     let session = await modules.session.getWhatsAppSession(phone);
     expect(session?.state).toBe("main_menu");
 
+    // 1 = Browse products → vertical list (mocked catalog layer).
     const browseResult = await modules.webhook.processWhatsAppPayload(
       inboundTextPayload("wamid.flow.2", phone, "1"),
     );
-    expect(browseResult.replies[0].reply).toContain("selection");
+    expect(browseResult.replies[0].reply).toContain("Food");
     session = await modules.session.getWhatsAppSession(phone);
     expect(session?.state).toBe("browse");
 
-    const cartResult = await modules.webhook.processWhatsAppPayload(
+    // 1 = first vertical → providers; 1 = first provider → items.
+    await modules.webhook.processWhatsAppPayload(
       inboundTextPayload("wamid.flow.3", phone, "1"),
+    );
+    const itemsResult = await modules.webhook.processWhatsAppPayload(
+      inboundTextPayload("wamid.flow.4", phone, "1"),
+    );
+    expect(itemsResult.replies[0].reply).toContain("Jollof rice bowl");
+    expect(itemsResult.replies[0].reply).toContain("₦1500.00");
+
+    // 1 = add first item to the cart.
+    const cartResult = await modules.webhook.processWhatsAppPayload(
+      inboundTextPayload("wamid.flow.5", phone, "1"),
     );
     expect(cartResult.replies[0].reply).toContain("Added");
     session = await modules.session.getWhatsAppSession(phone);
-    expect(session?.state).toBe("cart");
     expect(session?.cart).toHaveLength(1);
+    expect(session?.cart[0]).toMatchObject({
+      catalogItemId: 11,
+      unitPriceMinor: 150000,
+      quantity: 1,
+    });
   });
 });
 
