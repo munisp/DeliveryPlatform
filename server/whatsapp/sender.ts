@@ -1,3 +1,18 @@
+/**
+ * sender.ts — WhatsApp Cloud API sender for the consumer channel.
+ *
+ * Delivers platform-computed conversational replies over the Meta Graph API
+ * (v21.0), adapted from the whatsappCommerce waSender service to
+ * DeliveryPlatform conventions:
+ *   - credentials come from ENV only (WHATSAPP_ACCESS_TOKEN +
+ *     WHATSAPP_PHONE_NUMBER_ID), never from tenant settings;
+ *   - delivery goes through the shared resilientFetch client (per-host
+ *     circuit breaker + per-attempt timeout);
+ *   - FAIL CLOSED when unconfigured: the send is refused, logged, and
+ *     reported as { sent: false } — it never throws and never touches the
+ *     network without credentials.
+ */
+
 import { ENV } from "../_core/env";
 import { resilientFetch } from "../_core/resilientFetch";
 import { isWhatsAppSuppressed } from "./suppression";
@@ -16,46 +31,52 @@ export interface WhatsAppSendResult {
   suppressed?: boolean;
 }
 
-/** Normalize to digits only, as the Cloud API expects. */
-export function normalizeWhatsAppPhone(raw: string): string {
-  return raw.replace(/[^\d+]/g, "").replace(/^\D+/, "");
-}
-
-/** True when the access token + phone number id are both configured. */
+/** True when both sender credentials are configured. */
 export function isWhatsAppSenderConfigured(): boolean {
   return Boolean(ENV.whatsappAccessToken && ENV.whatsappPhoneNumberId);
 }
 
-/** Split a long body into whitespace-aware chunks (hard-split fallback). */
-export function chunkWhatsAppText(body: string, limit = WA_TEXT_LIMIT): string[] {
+let unconfiguredWarned = false;
+function warnUnconfigured(): void {
+  if (unconfiguredWarned) return;
+  unconfiguredWarned = true;
+  console.warn(
+    "[whatsapp-sender] WHATSAPP_ACCESS_TOKEN / WHATSAPP_PHONE_NUMBER_ID unset — " +
+      "outbound WhatsApp sends are disabled (fail closed, nothing is sent)",
+  );
+}
+
+/** Normalize to the digits-only format the Cloud API expects for `to`. */
+export function normalizeWhatsAppPhone(phone: string): string {
+  return phone.replace(/[^\d]/g, "");
+}
+
+/**
+ * Split a message into chunks of at most `limit` characters, preferring to
+ * break on newlines/spaces so chunks stay readable.
+ */
+export function chunkWhatsAppText(body: string, limit: number = WA_TEXT_LIMIT): string[] {
   if (body.length <= limit) return [body];
   const chunks: string[] = [];
   let remaining = body;
   while (remaining.length > limit) {
-    let cut = remaining.lastIndexOf(" ", limit);
-    if (cut < limit / 2) cut = limit; // no convenient whitespace — hard split
+    let cut = remaining.lastIndexOf("\n", limit);
+    if (cut < limit * 0.5) cut = remaining.lastIndexOf(" ", limit);
+    if (cut < limit * 0.5) cut = limit;
     chunks.push(remaining.slice(0, cut));
-    remaining = remaining.slice(cut).trimStart();
+    remaining = remaining.slice(cut).replace(/^\s+/, "");
   }
-  if (remaining.length > 0) chunks.push(remaining);
+  if (remaining.length) chunks.push(remaining);
   return chunks;
 }
 
-let warnedUnconfigured = false;
-
-function warnUnconfigured(): void {
-  if (warnedUnconfigured) return;
-  warnedUnconfigured = true;
-  console.error(
-    "[whatsapp-sender] WHATSAPP_ACCESS_TOKEN/WHATSAPP_PHONE_NUMBER_ID unset; outbound suppressed (fail closed)",
-  );
-}
-
 /**
- * Send a WhatsApp text message. NEVER throws: fail-closed returns
- * { sent: false } and logs, so webhook processing must not 5xx because a
- * reply could not be delivered. Numbers that replied STOP are refused
- * before any network call (suppression.ts; checked on every send).
+ * Send a free-text WhatsApp message. Never throws: a missing configuration
+ * or a failed Graph API call is logged and reported in the result so the
+ * post-ack webhook path can continue (Meta was already acked).
+ *
+ * P2: numbers that replied STOP are refused BEFORE any network call
+ * (suppression.ts) — checked on every send, per the opt-out contract.
  */
 export async function sendWhatsAppText(
   toPhone: string,
@@ -72,45 +93,48 @@ export async function sendWhatsAppText(
 
   if (!isWhatsAppSenderConfigured()) {
     warnUnconfigured();
-    return { sent: false, simulated: true, wamid: null, chunks: chunks.length };
+    return { sent: false, simulated: false, wamid: null, chunks: chunks.length };
+  }
+  if (!to || !body.trim()) {
+    console.warn("[whatsapp-sender] empty recipient or body — send refused");
+    return { sent: false, simulated: false, wamid: null, chunks: chunks.length };
   }
 
-  let wamid: string | null = null;
-  try {
-    for (let i = 0; i < chunks.length; i += 1) {
-      const response = await resilientFetch(
-        `${GRAPH_MESSAGES_BASE}/${ENV.whatsappPhoneNumberId}/messages`,
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${ENV.whatsappAccessToken}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            messaging_product: "whatsapp",
-            recipient_type: "individual",
-            to,
-            type: "text",
-            text: { preview_url: false, body: chunks[i] },
-          }),
-          timeoutMs: 10_000,
+  let lastWamid: string | null = null;
+  for (const chunk of chunks) {
+    const url = `${GRAPH_MESSAGES_BASE}/${ENV.whatsappPhoneNumberId}/messages`;
+    try {
+      const res = await resilientFetch(url, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${ENV.whatsappAccessToken}`,
+          "Content-Type": "application/json",
         },
-      );
-      if (!response.ok) {
-        const detail = await response.text().catch(() => "");
-        console.error(
-          `[whatsapp-sender] send failed: HTTP ${response.status} ${detail.slice(0, 200)}`,
-        );
-        return { sent: false, simulated: false, wamid, chunks: i };
+        body: JSON.stringify({
+          messaging_product: "whatsapp",
+          recipient_type: "individual",
+          to,
+          type: "text",
+          text: { preview_url: true, body: chunk },
+        }),
+      });
+      if (!res.ok) {
+        const errBody = await res.text().catch(() => "");
+        console.error(`[whatsapp-sender] Graph API error ${res.status}: ${errBody.slice(0, 500)}`);
+        return { sent: false, simulated: false, wamid: lastWamid, chunks: chunks.length };
       }
-      const json = (await response.json()) as { messages?: Array<{ id?: string }> };
-      if (i === 0) wamid = json.messages?.[0]?.id ?? null;
+      const data = (await res.json().catch(() => ({}))) as {
+        messages?: Array<{ id?: string }>;
+      };
+      lastWamid = data?.messages?.[0]?.id ?? lastWamid;
+    } catch (error) {
+      console.error(
+        "[whatsapp-sender] send failed:",
+        error instanceof Error ? error.message : error,
+      );
+      return { sent: false, simulated: false, wamid: lastWamid, chunks: chunks.length };
     }
-    return { sent: true, simulated: false, wamid, chunks: chunks.length };
-  } catch (error) {
-    console.error(
-      `[whatsapp-sender] send error: ${error instanceof Error ? error.message : String(error)}`,
-    );
-    return { sent: false, simulated: false, wamid, chunks: 0 };
   }
+
+  return { sent: true, simulated: false, wamid: lastWamid, chunks: chunks.length };
 }
