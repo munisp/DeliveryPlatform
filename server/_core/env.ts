@@ -382,6 +382,16 @@ export const ENV = {
   ),
   dispatchOptimizerUrl:
     process.env.DISPATCH_OPTIMIZER_URL ?? "http://127.0.0.1:8090",
+  // P3-R consumer ride-hailing: internal Go matching worker that consumes
+  // POST /matches/attempts (Bearer INTERNAL_SERVICE_TOKEN). Deliberately NO
+  // localhost default: unset means matching is disabled and
+  // rideMatchingClient fails closed (warn-once) instead of silently
+  // attempting to reach a co-located worker.
+  rideMatchingWorkerUrl: process.env.RIDE_MATCHING_WORKER_URL ?? "",
+  rideMatchingTimeoutMs: parseInteger(
+    process.env.RIDE_MATCHING_TIMEOUT_MS,
+    3_000,
+  ),
   notificationDispatcherUrl: getLifecycleNotificationDispatcherUrl(
     selfServiceSignupEnabled,
   ),
