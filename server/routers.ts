@@ -124,9 +124,7 @@ import {
   listDeveloperApiClients,
   listDeveloperApiKeys,
   listDeveloperWebhookEndpoints,
-  revokeDeveloperApiClient,
   revokeDeveloperApiKey,
-  revokeDeveloperWebhookEndpoint,
 } from "./_core/developerApi";
 import {
   assignCommerceFulfillmentDriver,
@@ -412,7 +410,7 @@ export const appRouter = router({
         z.object({
           city: z.string().trim().min(2).max(128),
           planningHorizonHours: z.number().int().min(4).max(720).optional(),
-          triggerReason: z.string().trim().min(2).max(128).optional(),
+          trigger: z.string().trim().min(2).max(128).optional(),
           requestedBy: z.string().trim().min(2).max(255).optional(),
           workflowReason: z.string().trim().min(3).max(500).optional(),
           traceId: z.string().trim().min(3).max(128).optional(),
@@ -424,7 +422,7 @@ export const appRouter = router({
                 category: z.string().trim().max(128).optional(),
                 warehouseId: z.number().int().positive(),
                 warehouseLabel: z.string().trim().min(1).max(255),
-                zoneKey: z.string().trim().min(1).max(128),
+                zoneKey: z.string().trim().max(128).optional(),
                 currentAvailableUnits: z.number().nonnegative(),
                 currentReservedUnits: z.number().nonnegative().optional(),
                 currentInboundUnits: z.number().nonnegative().optional(),
@@ -436,11 +434,11 @@ export const appRouter = router({
                   supplierId: z.string().trim().min(1).max(128),
                   supplierName: z.string().trim().min(1).max(255),
                   leadTimeHours: z.number().nonnegative(),
-                  fillRate: z.number().nonnegative(),
-                  spoilageRisk: z.number().nonnegative(),
+                  fillRate: z.number().min(0).max(1),
+                  spoilageRisk: z.number().min(0).max(1),
                   reliabilityBand: z.string().trim().min(1).max(64),
                 }),
-                targetTransferNodeId: z.string().uuid().optional(),
+                targetTransferNodeId: z.number().int().positive().optional(),
                 targetTransferNodeName: z
                   .string()
                   .trim()
@@ -474,12 +472,13 @@ export const appRouter = router({
           campaignName: z.string().trim().min(2).max(255).optional(),
           campaignType: z.string().trim().min(2).max(128).optional(),
           emailTemplate: z.string().trim().min(3).max(5000).optional(),
-          smsTemplate: z.string().trim().min(3).max(10000).optional(),
+          smsTemplate: z.string().trim().min(3).max(1000).optional(),
           targetAudience: z.string().trim().min(2).max(128).optional(),
           triggerCondition: z.record(z.string(), z.any()).optional(),
           activate: z.boolean().optional(),
           audienceMode: z.enum(["single_user", "full_audience"]).optional(),
           userId: z.number().int().positive().optional(),
+          channel: z.enum(["email", "sms"]).optional(),
           idempotencyKey: z.string().trim().min(3).max(255).optional(),
         }),
       )
@@ -506,7 +505,7 @@ export const appRouter = router({
                 inboundUnits: z.number().min(0).optional(),
                 leadTimeHours: z.number().min(1).max(240).optional(),
                 eventMultiplier: z.number().min(0.5).max(3).optional(),
-                weatherMultiplier: z.number().min(0.5).max(3).optional(),
+                weatherMultiplier: z.number().min(0.5).max(2).optional(),
                 substitutionGroup: z.string().trim().min(1).max(128).optional(),
                 coldChainRequired: z.boolean().optional(),
               }),
@@ -518,9 +517,9 @@ export const appRouter = router({
               z.object({
                 warehouseId: z.number().int().positive(),
                 label: z.string().trim().min(1).max(255),
-                zoneKey: z.string().trim().min(1).max(128),
+                zoneKey: z.string().trim().min(1).max(128).optional(),
                 distanceKm: z.number().min(0).max(200),
-                pickPackMinutes: z.number().min(0).max(240),
+                pickPackMinutes: z.number().min(0).max(240).optional(),
                 coldChainReady: z.boolean().optional(),
                 stockAccuracy: z.number().min(0).max(1).optional(),
                 inventory: z
@@ -528,7 +527,7 @@ export const appRouter = router({
                     z.object({
                       sku: z.string().trim().min(1).max(128),
                       availableUnits: z.number().min(0),
-                      freshnessHours: z.number().min(0).max(720),
+                      freshnessHours: z.number().min(0).max(720).optional(),
                     }),
                   )
                   .max(50),
@@ -602,7 +601,7 @@ export const appRouter = router({
     upsertTechnician: operatorMutationProcedure("operate")
       .input(
         z.object({
-          technicianUserId: z.number().int().positive(),
+          userId: z.number().int().positive(),
           providerId: z.number().int().positive(),
           displayName: z.string().trim().min(2).max(160),
           employeeReference: z.string().trim().min(1).max(128).nullable(),
@@ -766,7 +765,7 @@ export const appRouter = router({
             "pickup_distance_unprofitable",
             "pickup_time_unprofitable",
             "fare_insufficient",
-            "destination_unavailable",
+            "destination_unsuitable",
             "safety_preference",
             "vehicle_constraint",
             "other",
@@ -790,7 +789,7 @@ export const appRouter = router({
           maintenanceCostIndexBp: z.number().int().min(5000).max(30000),
           pickupSubsidyKoboPerKm: z.number().int().min(0).max(10000000),
           maxPickupSubsidyKobo: z.number().int().min(0).max(1000000000),
-          platformVariableCostKoboPerKm: z.number().int().min(0).max(1000000000),
+          platformVariableCostKobo: z.number().int().min(0).max(1000000000),
           platformContributionTargetKobo: z
             .number()
             .int()
@@ -955,7 +954,7 @@ export const appRouter = router({
                 "full name",
                 "date of birth",
                 "document number",
-                "expiration date",
+                "expiry date",
                 "nationality",
               ],
               documentHint: input.evidenceKind,
@@ -1041,7 +1040,10 @@ export const appRouter = router({
         }),
       )
       .mutation(({ ctx, input }) =>
-        recordVerificationProviderCheck({ actorUserId: ctx.user!.id, ...input }),
+        recordVerificationProviderCheck({
+          actorUserId: ctx.user!.id,
+          ...input,
+        }),
       ),
     decideCase: operatorMutationProcedure("operate")
       .input(
@@ -1279,7 +1281,7 @@ export const appRouter = router({
             "roadworthiness",
             "commercial_cover",
             "ownership_authority",
-            "insurance",
+            "inspection",
           ]),
           objectKey: z.string().trim().min(3).max(512),
           sha256Hex: z.string().regex(/^[a-f0-9]{64}$/),
@@ -1357,7 +1359,7 @@ export const appRouter = router({
         }),
       )
       .mutation(({ ctx, input }) =>
-        assignAssetLocation({ actorUserId: ctx.user!.id, ...input }),
+        assignVehicleAssetLocation({ actorUserId: ctx.user!.id, ...input }),
       ),
     createAvailabilityBlock: operatorMutationProcedure("operate")
       .input(
@@ -1403,7 +1405,7 @@ export const appRouter = router({
           addOnCode: z
             .string()
             .trim()
-            .regex(/^[a-z0-9][a-z0-9_-]{1,62}$/),
+            .regex(/^[a-z][a-z0-9_-]{1,62}$/),
           displayName: z.string().trim().min(2).max(120),
           category: z.enum([
             "protection",
@@ -1460,7 +1462,7 @@ export const appRouter = router({
         }),
       )
       .mutation(({ ctx, input }) =>
-        recordTrackerControlConsent({
+        recordVehicleTrackerControlConsent({
           workerUserId: ctx.user!.id,
           ...input,
         }),
@@ -1468,12 +1470,13 @@ export const appRouter = router({
     createTrackerProvider: operatorMutationProcedure("operate")
       .input(
         z.object({
+          fleetProviderId: z.string().uuid(),
           providerKind: z.enum([
             "generic_webhook",
-            "samsara",
-            "geotab",
-            "traccar",
-            "oem",
+            "samsara_webhook",
+            "geotab_feed",
+            "traccar_rest",
+            "oem_gateway",
             "aftermarket_gateway",
           ]),
           integrationKey: z
@@ -1511,7 +1514,7 @@ export const appRouter = router({
     createRentalAssetGeofence: operatorMutationProcedure("operate")
       .input(
         z.object({
-          providerId: z.string().uuid(),
+          assetId: z.string().uuid(),
           geofenceKind: z.enum(["restricted", "return_zone", "service_zone"]),
           code: z
             .string()
@@ -1520,29 +1523,32 @@ export const appRouter = router({
           displayName: z.string().trim().min(2).max(160),
           geojson: z.object({
             type: z.literal("MultiPolygon"),
-            coordinates: z.array(
-              z
-                .array(
-                  z
-                    .array(
-                      z
-                        .array(z.number())
-                        .length(2)
-                        .refine(
-                          ([longitude, latitude]) =>
-                            longitude >= -180 &&
-                            longitude <= 180 &&
-                            latitude >= -90 &&
-                            latitude <= 90,
-                          "invalid longitude or latitude",
-                        ),
-                    )
-                    .min(4)
-                    .max(200),
-                )
-                .min(1)
-                .max(32),
-            ),
+            coordinates: z
+              .array(
+                z
+                  .array(
+                    z
+                      .array(
+                        z
+                          .array(z.number())
+                          .length(2)
+                          .refine(
+                            ([longitude, latitude]) =>
+                              longitude >= -180 &&
+                              longitude <= 180 &&
+                              latitude >= -90 &&
+                              latitude <= 90,
+                            "invalid longitude or latitude",
+                          ),
+                      )
+                      .min(4)
+                      .max(200),
+                  )
+                  .min(1)
+                  .max(32),
+              )
+              .min(1)
+              .max(16),
           }),
           idempotencyKey: z
             .string()
@@ -1573,7 +1579,10 @@ export const appRouter = router({
         }),
       )
       .mutation(({ ctx, input }) =>
-        recordRentalPaymentTrackingSignal({ actorUserId: ctx.user!.id, ...input }),
+        recordVehicleRentalPaymentTrackingSignal({
+          actorUserId: ctx.user!.id,
+          ...input,
+        }),
       ),
     requestPreventNextStart: operatorMutationProcedure("operate")
       .input(
@@ -1604,7 +1613,7 @@ export const appRouter = router({
         }),
       )
       .mutation(({ ctx, input }) =>
-        authorizePreventNextStart({
+        authorizeVehiclePreventNextStart({
           actorUserId: ctx.user!.id,
           ...input,
         }),
@@ -1621,7 +1630,7 @@ export const appRouter = router({
         }),
       )
       .mutation(({ ctx, input }) =>
-        cancelPreventNextStart({ actorUserId: ctx.user!.id, ...input }),
+        cancelVehiclePreventNextStart({ actorUserId: ctx.user!.id, ...input }),
       ),
     operateTransition: operatorMutationProcedure("operate")
       .input(
@@ -1726,7 +1735,7 @@ export const appRouter = router({
         z.object({
           providerId: z.number().int().positive(),
           inventoryItemId: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{2,159}$/),
-          locationId: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{2,159}$/).optional(),
+          locationId: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{2,159}$/),
           inventoryLevelId: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{2,159}$/).optional(),
           stockedQuantity: z.number().int().min(0).max(1_000_000_000),
           incomingQuantity: z.number().int().min(0).max(1_000_000_000),
@@ -1779,18 +1788,18 @@ export const appRouter = router({
           fulfillmentId: z.string().uuid(),
           deliveryOrderId: z.number().int().positive(),
           driverId: z.number().int().positive(),
-          idempotencyKey: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
+          idempotencyKey: z.string().trim().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
         }),
       )
       .mutation(({ ctx, input }) =>
-        assignDriver({ actorUserId: ctx.user!.id, ...input }),
+        assignCommerceFulfillmentDriver({ actorUserId: ctx.user!.id, ...input }),
       ),
     registerExternalPlatform: operatorMutationProcedure("operate")
       .input(
         z.object({
           providerId: z.number().int().positive(),
-          connectionKey: z.string().regex(/^[a-z0-9][a-z0-9-]{2,63}$/),
-          platformName: z.string().min(3).max(120),
+          connectionKey: z.string().trim().regex(/^[a-z][a-z0-9-]{2,63}$/),
+          platformName: z.string().trim().min(3).max(120),
           inboundEnabled: z.boolean(),
           outboundEnabled: z.boolean(),
           inboundSigningSecretRef: z.string().trim().regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]{2,255}$/),
@@ -1861,11 +1870,6 @@ export const appRouter = router({
           ...input,
           expiresAt: input.expiresAt ?? null,
         }),
-      ),
-    revokeClient: operatorMutationProcedure("write_platform")
-      .input(z.object({ apiClientId: z.string().uuid() }))
-      .mutation(({ ctx, input }) =>
-        revokeDeveloperApiClient({ actorUserId: ctx.user!.id, ...input }),
       ),
     revokeKey: operatorMutationProcedure("write_platform")
       .input(z.object({ apiKeyId: z.string().uuid() }))
@@ -2025,7 +2029,7 @@ export const appRouter = router({
           utterance: input.utterance,
           channel: input.channel,
           metadata: input.metadata,
-          dispatchReply: input.dispatchReply ?? false,
+          dispatchReply: input.dispatchReply,
         }),
       ),
     executeAction: operatorMutationProcedure("write_platform")
