@@ -1,11 +1,113 @@
+import { useState } from "react";
 import { Link, useParams } from "wouter";
-import { ArrowLeft, CircleDot } from "lucide-react";
+import { ArrowLeft, CircleDot, Star } from "lucide-react";
 
 import { ConsumerLayout } from "@/components/ConsumerLayout";
 import { EmptyState, QueryErrorState } from "@/components/QueryState";
 import { trpc } from "@/lib/trpc";
+import { normalizeTrackingEvents } from "@/lib/consumerWire";
 
 import { formatMoney, OrderStatusBadge } from "./ConsumerOrders";
+
+/**
+ * Rating prompt for delivered orders (P2-A). One review per order — the
+ * server enforces UNIQUE(order_id) on driver_reviews and raises
+ * order_already_rated on a repeat, which is rendered as a friendly
+ * confirmation instead of an error. rateOrder requires all five rating
+ * dimensions; the single star selection is applied to each.
+ */
+function OrderRatingPanel({ orderId }: { orderId: number }) {
+  const [stars, setStars] = useState(0);
+  const [feedback, setFeedback] = useState("");
+  const [alreadyRated, setAlreadyRated] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  const rate = trpc.consumer.rateOrder.useMutation({
+    onSuccess: () => {
+      setSubmitted(true);
+      setErrorMessage(null);
+    },
+    onError: (error) => {
+      if (error.message.includes("order_already_rated")) {
+        setAlreadyRated(true);
+        setErrorMessage(null);
+      } else {
+        setErrorMessage(error.message);
+      }
+    },
+  });
+
+  if (submitted || alreadyRated) {
+    return (
+      <p className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+        {alreadyRated
+          ? "You have already rated this order — thank you."
+          : "Thanks for rating your courier."}
+      </p>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-1" role="radiogroup" aria-label="Rating">
+        {[1, 2, 3, 4, 5].map((value) => (
+          <button
+            key={value}
+            type="button"
+            role="radio"
+            aria-checked={stars === value}
+            aria-label={`${value} star${value === 1 ? "" : "s"}`}
+            onClick={() => setStars(value)}
+            className="rounded-full p-1 transition hover:bg-amber-50"
+          >
+            <Star
+              className={`h-6 w-6 ${
+                value <= stars
+                  ? "fill-amber-400 text-amber-500"
+                  : "text-stone-300"
+              }`}
+            />
+          </button>
+        ))}
+      </div>
+      <textarea
+        rows={2}
+        maxLength={2000}
+        value={feedback}
+        onChange={(event) => setFeedback(event.target.value)}
+        placeholder="Optional feedback about the delivery"
+        className="w-full rounded-xl border border-stone-200 bg-white px-4 py-3 text-sm text-stone-900 outline-none transition focus:border-amber-500"
+      />
+      {errorMessage ? (
+        <p
+          className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700"
+          role="alert"
+        >
+          {errorMessage}
+        </p>
+      ) : null}
+      <button
+        type="button"
+        disabled={rate.isPending || stars === 0}
+        onClick={() =>
+          rate.mutate({
+            orderId,
+            overallRating: stars,
+            punctualityRating: stars,
+            professionalismRating: stars,
+            vehicleConditionRating: stars,
+            communicationRating: stars,
+            feedback: feedback.trim() === "" ? undefined : feedback.trim(),
+          })
+        }
+        className="rounded-full bg-amber-700 px-4 py-2 text-sm font-medium text-white transition hover:bg-amber-800 disabled:cursor-not-allowed disabled:opacity-60"
+      >
+        {rate.isPending ? "Submitting…" : "Submit rating"}
+      </button>
+    </div>
+  );
+}
 
 export default function ConsumerOrderDetail() {
   const params = useParams<{ orderId: string }>();
@@ -16,6 +118,15 @@ export default function ConsumerOrderDetail() {
     { orderId },
     { enabled: validId },
   );
+
+  // Read-only delivery tracking feed (order_tracking_events), scoped
+  // server-side to the caller's own orders. When no tracking events exist,
+  // the synthesized Timeline section below remains the fallback render.
+  const tracking = trpc.consumerCatalog.consumerOrderTracking.useQuery(
+    { orderId },
+    { enabled: validId },
+  );
+  const trackingEvents = normalizeTrackingEvents(tracking.data);
 
   return (
     <ConsumerLayout
@@ -109,6 +220,48 @@ export default function ConsumerOrderDetail() {
               ) : null}
             </dl>
           </section>
+
+          {trackingEvents.length > 0 ? (
+            <section className="rounded-2xl border border-stone-200 bg-white p-6">
+              <h2 className="mb-4 text-base font-semibold text-stone-900">
+                Delivery tracking
+              </h2>
+              <ol className="relative space-y-5 border-l border-stone-200 pl-6">
+                {trackingEvents.map((event) => (
+                  <li key={event.id}>
+                    <span className="absolute -left-[7px] mt-1 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-amber-100">
+                      <CircleDot className="h-3 w-3 text-amber-700" />
+                    </span>
+                    <p className="text-sm font-medium text-stone-900">
+                      {event.statusLabel}
+                    </p>
+                    <p className="text-xs text-stone-400">
+                      {event.eventTime
+                        ? new Date(event.eventTime).toLocaleString()
+                        : ""}
+                      {event.etaMinutes !== null
+                        ? ` · ETA ${event.etaMinutes} min`
+                        : ""}
+                    </p>
+                    {event.eventType ? (
+                      <p className="mt-0.5 text-xs text-stone-400">
+                        {event.eventType.replace(/_/g, " ")}
+                      </p>
+                    ) : null}
+                  </li>
+                ))}
+              </ol>
+            </section>
+          ) : null}
+
+          {detail.data.order.status === "delivered" ? (
+            <section className="rounded-2xl border border-stone-200 bg-white p-6">
+              <h2 className="mb-4 text-base font-semibold text-stone-900">
+                Rate this delivery
+              </h2>
+              <OrderRatingPanel orderId={detail.data.order.id} />
+            </section>
+          ) : null}
 
           <section className="rounded-2xl border border-stone-200 bg-white p-6">
             <h2 className="mb-4 text-base font-semibold text-stone-900">
