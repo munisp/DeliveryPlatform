@@ -781,6 +781,11 @@ function OffersTab() {
   const decline = trpc.selfserve.declineOffer.useMutation({
     onSuccess: () => utils.selfserve.myFairnessOffers.invalidate(),
   });
+  // P3-R: driver accepts a transparent dispatch offer through the
+  // consumerRide router (mobility.accept_driver_offer, verified-driver gated).
+  const accept = trpc.consumerRide.acceptRideOffer.useMutation({
+    onSuccess: () => utils.selfserve.myFairnessOffers.invalidate(),
+  });
   const [reasonByOffer, setReasonByOffer] = useState<Record<string, string>>(
     {},
   );
@@ -872,6 +877,19 @@ function OffersTab() {
                   </div>
                 </div>
                 <div className="flex flex-wrap items-center gap-3">
+                  <button
+                    type="button"
+                    disabled={accept.isPending}
+                    onClick={() =>
+                      accept.mutate({
+                        offerId: offer.offerId,
+                        idempotencyKey: `courier-accept-${offer.offerId.slice(0, 8)}-${Date.now()}`,
+                      })
+                    }
+                    className="rounded-md border border-emerald-500/40 px-4 py-2 text-sm text-emerald-200 hover:bg-emerald-500/10 disabled:opacity-40"
+                  >
+                    Accept trip
+                  </button>
                   <select
                     value={reasonByOffer[offer.offerId] ?? ""}
                     onChange={(event) =>
@@ -912,6 +930,7 @@ function OffersTab() {
             ))
           )}
           {decline.error && <ErrorState message={decline.error.message} />}
+          {accept.error && <ErrorState message={accept.error.message} />}
         </CardContent>
       </Card>
     </div>
