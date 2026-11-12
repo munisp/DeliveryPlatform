@@ -242,7 +242,7 @@ export async function getRiderAppSummary(limit = 6): Promise<RiderAppSummary> {
            FROM rider_trips
            UNION ALL
            SELECT id, status::text, delivery_address AS address,
-                  CASE WHEN total_amount ~ '^[0-9]+(\.[0-9]+)?$' THEN total_amount::numeric ELSE 0 END AS amount,
+                  CASE WHEN total_amount ~ '^[0-9]+(\\.[0-9]+)?$' THEN total_amount::numeric ELSE 0 END AS amount,
                   'delivery' AS experience_type, created_at
            FROM orders
          ) combined
@@ -253,7 +253,7 @@ export async function getRiderAppSummary(limit = 6): Promise<RiderAppSummary> {
       queryRows(
         `SELECT id, business_name, category, rating
          FROM service_providers
-         ORDER BY CASE WHEN rating ~ '^[0-9]+(\.[0-9]+)?$' THEN rating::numeric END DESC NULLS LAST,
+         ORDER BY CASE WHEN rating ~ '^[0-9]+(\\.[0-9]+)?$' THEN rating::numeric END DESC NULLS LAST,
                   business_name ASC
          LIMIT $1`,
         [limit],
