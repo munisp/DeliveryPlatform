@@ -119,6 +119,9 @@ const MerchantSignup = lazyRoute(() => import("@/pages/MerchantSignup"));
 const MerchantOrders = lazyRoute(() => import("@/pages/MerchantOrders"));
 const MerchantEarnings = lazyRoute(() => import("@/pages/MerchantEarnings"));
 const SupportConsole = lazyRoute(() => import("@/pages/SupportConsole"));
+const ConsumerReferrals = lazyRoute(
+  () => import("@/pages/ConsumerReferrals"),
+);
 const TenantAdminActions = lazyRoute(
   () => import("@/pages/TenantAdminActions"),
 );
@@ -776,6 +779,7 @@ export default function App() {
       <Route path="/merchant-orders" component={MerchantOrders} />
       <Route path="/merchant-earnings" component={MerchantEarnings} />
       <Route path="/operator/support" component={SupportConsole} />
+      <Route path="/account/referrals" component={ConsumerReferrals} />
       <Route path="/shop" component={ConsumerMarketplace} />
       <Route path="/account">
         <Redirect to="/account/orders" />
