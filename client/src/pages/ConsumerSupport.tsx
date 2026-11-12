@@ -30,6 +30,12 @@ export default function ConsumerSupport() {
 
   const cases = trpc.consumer.mySupportCases.useQuery({ limit: 50 });
   const orders = trpc.consumer.myOrders.useQuery({ limit: 50 });
+  // P3-S: support lifecycle notifications (public.notifications now has a
+  // writer on the agent surface; read-only, fail-open render).
+  const notifications = trpc.supportAgent.mySupportNotifications.useQuery(
+    { limit: 20 },
+    { retry: false },
+  );
   const utils = trpc.useUtils();
 
   const [orderId, setOrderId] = useState<number | null>(preselectedOrderId);
@@ -49,6 +55,7 @@ export default function ConsumerSupport() {
       setIdempotencyKey(newIdempotencyKey());
       utils.consumer.mySupportCases.invalidate();
       utils.consumer.myOrders.invalidate();
+      utils.supportAgent.mySupportNotifications.invalidate();
     },
     onError: (error) => {
       setFormError(error.message);
@@ -180,6 +187,44 @@ export default function ConsumerSupport() {
               {openCase.isPending ? "Opening case…" : "Submit case"}
             </button>
           </form>
+        </section>
+
+        <section>
+          <h2 className="mb-4 text-base font-semibold text-stone-900">
+            Notifications
+          </h2>
+          {notifications.isLoading ? (
+            <p className="text-sm text-stone-500">Loading notifications…</p>
+          ) : notifications.isError ||
+            !notifications.data ||
+            notifications.data.length === 0 ? (
+            <p className="text-sm text-stone-500">
+              No support notifications yet — updates on your cases will appear
+              here.
+            </p>
+          ) : (
+            <ul className="space-y-2">
+              {notifications.data.map((n) => (
+                <li
+                  key={n.id}
+                  className="rounded-xl border border-stone-200 bg-white px-4 py-3"
+                >
+                  <p className="text-sm font-medium text-stone-900">
+                    {n.title}
+                    {n.ticketNumber ? (
+                      <span className="text-stone-400"> · {n.ticketNumber}</span>
+                    ) : null}
+                  </p>
+                  <p className="mt-0.5 text-sm leading-5 text-stone-600">
+                    {n.message}
+                  </p>
+                  <p className="mt-1 text-xs text-stone-400">
+                    {new Date(n.createdAt).toLocaleString()}
+                  </p>
+                </li>
+              ))}
+            </ul>
+          )}
         </section>
 
         <section>
