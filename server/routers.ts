@@ -530,7 +530,7 @@ export const appRouter = router({
                     z.object({
                       sku: z.string().trim().min(1).max(128),
                       availableUnits: z.number().min(0),
-                      freshnessHours: z.number().min(0).max(720),
+                      freshnessHours: z.number().min(0).max(720).optional(),
                     }),
                   )
                   .max(50),
