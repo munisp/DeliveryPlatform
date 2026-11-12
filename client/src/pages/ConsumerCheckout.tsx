@@ -1,9 +1,16 @@
 import { FormEvent, useMemo, useState } from "react";
 import { Link } from "wouter";
-import { ArrowLeft, CheckCircle2, MapPin, XCircle } from "lucide-react";
+import { ArrowLeft, CheckCircle2, CloudOff, MapPin, XCircle } from "lucide-react";
 
 import { ConsumerLayout } from "@/components/ConsumerLayout";
 import { EmptyState, QueryErrorState } from "@/components/QueryState";
+import {
+  enqueueConsumerCheckoutDraft,
+  isOfflineMutationError,
+  registerConsumerOutboxSync,
+  useConsumerOutbox,
+} from "@/lib/consumerOfflineQueue";
+import { useSessionProfile } from "@/lib/sessionProfile";
 import { trpc } from "@/lib/trpc";
 import {
   cartSubtotalMinor,
@@ -48,6 +55,32 @@ export default function ConsumerCheckout() {
   const [checkoutResult, setCheckoutResult] = useState<ReturnType<
     typeof normalizeCheckoutResult
   > | null>(null);
+  const [queuedOffline, setQueuedOffline] = useState(false);
+
+  // Offline outbox (P5-OFFLINE): an offline checkout failure queues the
+  // draft with the SAME per-cart-version idempotency key, so the replayed
+  // mutation hits the server's idempotent session replay — never a double
+  // charge. Money math and the success path are untouched.
+  const utils = trpc.useUtils();
+  const sessionProfile = useSessionProfile();
+  const accountId = sessionProfile.data ? String(sessionProfile.data.id) : null;
+  const replayCheckout = trpc.consumer.checkout.useMutation({
+    onSuccess: () => {
+      void utils.consumer.myCart.invalidate();
+      void utils.consumer.myCheckoutSession.invalidate();
+    },
+  });
+  const outbox = useConsumerOutbox(accountId, {
+    checkout: (draft) =>
+      replayCheckout.mutateAsync({
+        cartId: draft.cartId,
+        idempotencyKey: draft.idempotencyKey,
+        deliveryAddress: draft.deliveryAddress,
+        deliveryLat: draft.deliveryLat,
+        deliveryLng: draft.deliveryLng,
+        notes: draft.notes,
+      }),
+  });
 
   const checkout = trpc.consumer.checkout.useMutation({
     onSuccess: (result) => {
@@ -55,8 +88,29 @@ export default function ConsumerCheckout() {
       setCheckoutResult(normalized);
       setSessionId(normalized?.checkoutSessionId ?? null);
       setFormError(null);
+      setQueuedOffline(false);
     },
-    onError: (error) => setFormError(error.message),
+    onError: (error, variables) => {
+      if (accountId && variables && isOfflineMutationError(error)) {
+        const input = variables;
+        void (async () => {
+          const result = await enqueueConsumerCheckoutDraft(accountId, {
+            cartId: input.cartId,
+            idempotencyKey: input.idempotencyKey,
+            deliveryAddress: input.deliveryAddress,
+            deliveryLat: input.deliveryLat,
+            deliveryLng: input.deliveryLng,
+            notes: input.notes,
+          });
+          if (result === "enqueued") void registerConsumerOutboxSync();
+          await outbox.refresh();
+        })();
+        setQueuedOffline(true);
+        setFormError(null);
+        return;
+      }
+      setFormError(error.message);
+    },
   });
 
   const sessionQuery = trpc.consumer.myCheckoutSession.useQuery(
@@ -355,6 +409,17 @@ export default function ConsumerCheckout() {
                 />
               </div>
             </div>
+            {queuedOffline ? (
+              <p
+                className="mt-4 inline-flex items-center gap-1.5 rounded-full bg-amber-100 px-2.5 py-1 text-xs font-medium text-amber-800"
+                role="status"
+                aria-live="polite"
+              >
+                <CloudOff className="h-3.5 w-3.5" />
+                Offline — your order is queued on this device and will be
+                placed automatically when you are back online.
+              </p>
+            ) : null}
             {formError ? (
               <p
                 className="mt-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700"

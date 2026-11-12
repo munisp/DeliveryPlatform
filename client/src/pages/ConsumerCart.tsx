@@ -1,9 +1,16 @@
 import { useState } from "react";
 import { Link, useLocation } from "wouter";
-import { ArrowLeft, Minus, Plus, Trash2 } from "lucide-react";
+import { ArrowLeft, CloudOff, Minus, Plus, Trash2 } from "lucide-react";
 
 import { ConsumerLayout } from "@/components/ConsumerLayout";
 import { EmptyState, QueryErrorState } from "@/components/QueryState";
+import {
+  enqueueConsumerCartDraft,
+  isOfflineMutationError,
+  registerConsumerOutboxSync,
+  useConsumerOutbox,
+} from "@/lib/consumerOfflineQueue";
+import { useSessionProfile } from "@/lib/sessionProfile";
 import { trpc } from "@/lib/trpc";
 import {
   cartSubtotalMinor,
@@ -55,13 +62,62 @@ export default function ConsumerCart() {
   const cart = payload && payload.cart.status === "active" ? payload.cart : null;
   const items = cart ? payload!.items : [];
 
+  // Offline outbox (P5-OFFLINE): a stepper/remove that fails because the
+  // device is offline is queued (latest edit per line wins) and replayed
+  // via the same tRPC mutations when connectivity returns. Success paths
+  // and money math are untouched.
+  const sessionProfile = useSessionProfile();
+  const accountId = sessionProfile.data ? String(sessionProfile.data.id) : null;
+  const replayUpdate = trpc.consumer.updateCartItem.useMutation({
+    onSuccess: () => utils.consumer.myCart.invalidate(),
+  });
+  const replayRemove = trpc.consumer.removeCartItem.useMutation({
+    onSuccess: () => utils.consumer.myCart.invalidate(),
+  });
+  const outbox = useConsumerOutbox(accountId, {
+    updateCartItem: (input) => replayUpdate.mutateAsync(input),
+    removeCartItem: (input) => replayRemove.mutateAsync(input),
+  });
+
+  const queueCartDraft = (draft: Parameters<typeof enqueueConsumerCartDraft>[1]) => {
+    if (!accountId) return;
+    void (async () => {
+      const result = await enqueueConsumerCartDraft(accountId, draft);
+      if (result === "enqueued") void registerConsumerOutboxSync();
+      await outbox.refresh();
+    })();
+  };
+
   const updateItem = trpc.consumer.updateCartItem.useMutation({
     onSuccess: () => utils.consumer.myCart.invalidate(),
-    onError: (error) => setActionError(error.message),
+    onError: (error, variables) => {
+      if (accountId && variables && isOfflineMutationError(error)) {
+        queueCartDraft({
+          kind: "updateCartItem",
+          cartId: variables.cartId,
+          itemId: variables.itemId,
+          quantity: variables.quantity,
+        });
+        setActionError(null);
+        return;
+      }
+      setActionError(error.message);
+    },
   });
   const removeItem = trpc.consumer.removeCartItem.useMutation({
     onSuccess: () => utils.consumer.myCart.invalidate(),
-    onError: (error) => setActionError(error.message),
+    onError: (error, variables) => {
+      if (accountId && variables && isOfflineMutationError(error)) {
+        queueCartDraft({
+          kind: "removeCartItem",
+          cartId: variables.cartId,
+          itemId: variables.itemId,
+        });
+        setActionError(null);
+        return;
+      }
+      setActionError(error.message);
+    },
   });
   const busy = updateItem.isPending || removeItem.isPending;
 
@@ -106,6 +162,20 @@ export default function ConsumerCart() {
           </span>
         </Link>
       </div>
+
+      {outbox.queuedCount > 0 ? (
+        <p
+          className="mb-6 inline-flex items-center gap-1.5 rounded-full bg-amber-100 px-2.5 py-1 text-xs font-medium text-amber-800"
+          role="status"
+          aria-live="polite"
+          title="You are offline. Changes are stored on this device and will sync when you are back online."
+        >
+          <CloudOff className="h-3.5 w-3.5" />
+          Offline — {outbox.queuedCount} cart change
+          {outbox.queuedCount === 1 ? "" : "s"} queued; they will sync when
+          you are back online.
+        </p>
+      ) : null}
 
       {actionError ? (
         <p
