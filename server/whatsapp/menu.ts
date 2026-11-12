@@ -4,10 +4,14 @@
  * Channel-agnostic, pure functions: build the ordered entries, render them
  * as a numbered text menu, and resolve a numeric reply back to an entry.
  * Adapted from the whatsappCommerce waMenu engine (numbered text fallback
- * path only — no interactive buttons/lists in this skeleton).
+ * path only — no interactive buttons/lists).
  *
- * The catalog items below are a STUB for the channel skeleton: real product
- * data is wired to the consumer marketplace read models in a later wave.
+ * P2: the P1 stub catalog is gone — browse/cart rendering now formats REAL
+ * catalog/provider/cart data (flows.ts). Money rule (P1 contract): all
+ * amounts are MINOR units (kobo) rendered as ₦ major units with integer
+ * math only (BigInt divide/mod), never floats. Catalog prices arrive as
+ * TEXT major units and are parsed with parsePriceMajorToMinor (string
+ * math, never float).
  */
 
 /** State ids a main-menu selection can move the session into. */
@@ -45,43 +49,7 @@ export function renderMainMenu(): string {
     ...lines,
     "",
     "Reply with a number to choose an option.",
-  ].join("\n");
-}
-
-/**
- * STUB catalog for the browse state. Real items come from the consumer
- * marketplace catalog in a later wave; the numbered-selection flow is what
- * this skeleton exercises.
- */
-export const STUB_CATALOG_ITEMS: ReadonlyArray<{ id: string; label: string }> = [
-  { id: "stub-jollof-bowl", label: "Jollof rice bowl" },
-  { id: "stub-suya-wrap", label: "Chicken suya wrap" },
-  { id: "stub-cold-brew", label: "Cold brew coffee" },
-];
-
-/** Numbered stub catalog + add-to-cart hint. */
-export function renderBrowseMenu(): string {
-  const lines = STUB_CATALOG_ITEMS.map((item, index) => `${index + 1}. ${item.label}`);
-  return [
-    "Our current selection:",
-    ...lines,
-    "",
-    "Reply with a number to add it to your cart, or 0 to go back.",
-  ].join("\n");
-}
-
-/** Cart contents + numbered cart actions. */
-export function renderCart(cart: readonly string[]): string {
-  const items =
-    cart.length === 0
-      ? ["Your cart is empty."]
-      : ["Your cart:", ...cart.map((item, index) => `${index + 1}. ${item}`)];
-  return [
-    ...items,
-    "",
-    cart.length === 0
-      ? "Reply 0 to go back to the menu."
-      : "Reply 1 to checkout, or 0 to go back to the menu.",
+    "Tips: 'link <accountId>' links this number for checkout; 'stop' opts out.",
   ].join("\n");
 }
 
@@ -98,4 +66,112 @@ const MENU_KEYWORDS = new Set(["menu", "hi", "hello", "start", "restart", "help"
 
 export function isMenuKeyword(text: string): boolean {
   return MENU_KEYWORDS.has(text.trim().toLowerCase());
+}
+
+/** Hard cap for outbound replies (rate safety, P2 spec). */
+export const WA_REPLY_CHAR_CAP = 990;
+
+/** Shared trailing hint so flow replies end with a menu escape hatch. */
+export const MENU_HINT = "Reply with a number, or 'menu' for the main menu.";
+
+/** Cap a reply at WA_REPLY_CHAR_CAP so lists can never blow up the send. */
+export function capReply(text: string): string {
+  return text.length > WA_REPLY_CHAR_CAP
+    ? `${text.slice(0, WA_REPLY_CHAR_CAP - 3)}...`
+    : text;
+}
+
+// ---------------------------------------------------------------------------
+// Money (minor units in, exact ₦ string out; integer math only)
+// ---------------------------------------------------------------------------
+
+/** 50000 -> "₦500.00". Negative inputs are clamped to ₦0.00 (display only). */
+export function formatNairaMinor(minor: number | bigint): string {
+  let value = BigInt(minor);
+  if (value < 0n) value = 0n;
+  return `₦${value / 100n}.${String(value % 100n).padStart(2, "0")}`;
+}
+
+/**
+ * Parse a TEXT major-unit catalog price ("1500.00", "1500", "0.05", with
+ * optional thousand separators) into minor units using string math only.
+ * Returns null when the text is not a plain non-negative decimal.
+ */
+export function parsePriceMajorToMinor(text: string): number | null {
+  const cleaned = text.trim().replace(/[,₦\s]/g, "");
+  const match = /^(\d+)(?:\.(\d{1,2}))?$/.exec(cleaned);
+  if (!match) return null;
+  const whole = BigInt(match[1]);
+  const fracText = (match[2] ?? "").padEnd(2, "0") || "00";
+  const minor = whole * 100n + BigInt(fracText);
+  if (minor > BigInt(Number.MAX_SAFE_INTEGER)) return null;
+  return Number(minor);
+}
+
+// ---------------------------------------------------------------------------
+// List renderers (browse flow). Inputs are plain rows; no schema imports.
+// ---------------------------------------------------------------------------
+
+export function renderVerticalList(verticals: Array<{ name: string }>): string {
+  const lines = verticals.map((v, i) => `${i + 1}. ${v.name}`).join("\n");
+  return capReply(`What are you looking for?\n${lines}\n\n${MENU_HINT}`);
+}
+
+export function renderProviderPage(input: {
+  verticalName: string;
+  providers: Array<{
+    businessName: string;
+    name: string;
+    address: string | null;
+    rating: string;
+  }>;
+  page: number;
+  hasMore: boolean;
+}): string {
+  const lines = input.providers
+    .map((p, i) => {
+      const label = p.businessName || p.name;
+      const address = p.address ? ` — ${p.address}` : "";
+      return `${i + 1}. ${label}${address} (${p.rating}★)`;
+    })
+    .join("\n");
+  const nav = [
+    `Reply 1-${input.providers.length} to view a menu`,
+    input.hasMore ? "'next'" : null,
+    input.page > 0 ? "'prev'" : null,
+    "0 back",
+  ]
+    .filter(Boolean)
+    .join(", ");
+  return capReply(
+    `${input.verticalName} providers (page ${input.page + 1}):\n${lines}\n\n${nav}.`,
+  );
+}
+
+export function renderCatalogPage(input: {
+  providerName: string;
+  items: Array<{ itemName: string; priceMinor: number | null }>;
+  page: number;
+  hasMore: boolean;
+}): string {
+  const lines = input.items
+    .map((item, i) => {
+      const price =
+        item.priceMinor === null
+          ? "price unavailable"
+          : formatNairaMinor(item.priceMinor);
+      return `${i + 1}. ${item.itemName} — ${price}`;
+    })
+    .join("\n");
+  const nav = [
+    `Reply 1-${input.items.length} to add to cart`,
+    input.hasMore ? "'next'" : null,
+    input.page > 0 ? "'prev'" : null,
+    "0 back",
+  ]
+    .filter(Boolean)
+    .join(", ");
+  return capReply(
+    `${input.providerName} menu (page ${input.page + 1}):\n${lines}\n\n${nav}.`,
+  );
 }
