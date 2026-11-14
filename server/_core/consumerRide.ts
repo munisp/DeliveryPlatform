@@ -6,6 +6,11 @@ import { z } from "zod";
 import { getPool } from "../db";
 import { consumerIdempotencyKeySchema } from "./consumerCommerce";
 import { getVerifiedDriverAccess } from "./driverOnboarding";
+import {
+  normalizePricingModelRow,
+  type PlatformFeePayer,
+  type PricingModel,
+} from "./economicsPolicy";
 import { ENV } from "./env";
 import { resolvePublicUser } from "./publicUsers";
 import { requestRideMatchAttempt } from "./rideMatchingClient";
@@ -49,6 +54,17 @@ import { authenticatedProcedure, router } from "./trpc";
  *
  * Money is integer kobo end-to-end (bigint columns). The rider NEVER sees
  * float arithmetic: all quote math below is integer floor division.
+ *
+ * P7 flexible pricing modes (drizzle/0106): the zone's live
+ * fare_rule_version carries a pricing block (pricing_model /
+ * platform_fee_flat_kobo / platform_fee_payer, normalized via
+ * economicsPolicy.normalizePricingModelRow). A flat_fee model adds a
+ * platform_fee_kobo line to the quote — RIDER-PAID fees are inside
+ * total_kobo (rider pays fare + fee), DRIVER-PAID fees are recorded on the
+ * quote but sit OUTSIDE total_kobo (they come out of the driver share at
+ * settlement). The quote payload exposes platformFeeKobo / feePayer /
+ * pricingModel for the RideStatus fare breakdown. Legacy rows resolve to
+ * the commission default and quote exactly as before.
  */
 
 export const rideTripStateSchema = z.enum([
@@ -174,21 +190,42 @@ export type RideQuoteAmounts = {
   timeKobo: bigint;
   demandKobo: bigint;
   taxesAndFeesKobo: bigint;
+  platformFeeKobo: bigint;
+  feePayer: PlatformFeePayer;
+  pricingModel: PricingModel;
   totalKobo: bigint;
+};
+
+/** P7 pricing block applied to a quote (normalized from the fare rule). */
+export type RideQuotePricing = {
+  model: PricingModel;
+  flatFeeKobo: bigint;
+  feePayer: PlatformFeePayer;
+};
+
+/** Pre-P7 behaviour: commission model, no platform fee. */
+export const DEFAULT_RIDE_QUOTE_PRICING: RideQuotePricing = {
+  model: "commission",
+  flatFeeKobo: 0n,
+  feePayer: "rider",
 };
 
 /**
  * Integer-kobo quote. demandBasisPoints is clamped to the zone's
  * demand_cap_basis_points (DDL guarantees >= 10000, i.e. no negative demand
  * is possible). Any shortfall to the zone minimum fare is itemised into
- * taxes_and_fees_kobo so the fare_quote CHECK
- * (total = base + distance + time + demand + taxes) always holds.
+ * taxes_and_fees_kobo. The fare_quote total identity (REPLACED by
+ * drizzle/0106) holds both ways: total = base + distance + time + demand +
+ * taxes + (platform fee when rider-paid) — a rider-paid flat fee is inside
+ * the total, a driver-paid flat fee is recorded on the row but leaves the
+ * total unchanged.
  */
 export function computeRideQuoteAmounts(
   rule: RideFareRule,
   distanceMeters: number,
   durationSeconds: number,
   demandBasisPoints = 0,
+  pricing: RideQuotePricing = DEFAULT_RIDE_QUOTE_PRICING,
 ): RideQuoteAmounts {
   const baseKobo = rule.baseKobo;
   const distanceKobo =
@@ -206,13 +243,22 @@ export function computeRideQuoteAmounts(
   const preTax = subtotal + demandKobo;
   const taxesAndFeesKobo =
     rule.minimumKobo > preTax ? rule.minimumKobo - preTax : 0n;
+  const platformFeeKobo =
+    pricing.model === "flat_fee" && pricing.flatFeeKobo > 0n
+      ? pricing.flatFeeKobo
+      : 0n;
+  const riderPaidFee =
+    pricing.feePayer === "rider" ? platformFeeKobo : 0n;
   return {
     baseKobo,
     distanceKobo,
     timeKobo,
     demandKobo,
     taxesAndFeesKobo,
-    totalKobo: preTax + taxesAndFeesKobo,
+    platformFeeKobo,
+    feePayer: pricing.feePayer,
+    pricingModel: pricing.model,
+    totalKobo: preTax + taxesAndFeesKobo + riderPaidFee,
   };
 }
 
@@ -249,6 +295,10 @@ type ZoneRuleRow = {
   minimum_kobo: string | number;
   cancellation_kobo: string | number;
   demand_cap_basis_points: number;
+  // P7 pricing block (drizzle/0106 columns on fare_rule_version).
+  pricing_model: string | null;
+  platform_fee_flat_kobo: string | number | null;
+  platform_fee_payer: string | null;
 };
 
 type RideTripRow = {
@@ -327,18 +377,25 @@ export async function getMyRideTrip(input: {
       time_kobo: string | number;
       demand_kobo: string | number;
       taxes_and_fees_kobo: string | number;
+      platform_fee_kobo: string | number;
       total_kobo: string | number;
       quoted_distance_m: number;
       quoted_duration_s: number;
       route_provider: string;
       expires_at: string;
       created_at: string;
+      pricing_model: string | null;
+      platform_fee_payer: string | null;
     }>(
-      `SELECT id, base_kobo, distance_kobo, time_kobo, demand_kobo,
-              taxes_and_fees_kobo, total_kobo, quoted_distance_m,
-              quoted_duration_s, route_provider, expires_at, created_at
-         FROM mobility.fare_quote
-        WHERE id = $1`,
+      `SELECT fq.id, fq.base_kobo, fq.distance_kobo, fq.time_kobo,
+              fq.demand_kobo, fq.taxes_and_fees_kobo,
+              fq.platform_fee_kobo, fq.total_kobo,
+              fq.quoted_distance_m, fq.quoted_duration_s, fq.route_provider,
+              fq.expires_at, fq.created_at,
+              frv.pricing_model, frv.platform_fee_payer
+         FROM mobility.fare_quote fq
+         JOIN mobility.fare_rule_version frv ON frv.id = fq.fare_rule_id
+        WHERE fq.id = $1`,
       [trip.fare_quote_id],
     ),
     pool.query<{
@@ -367,6 +424,13 @@ export async function getMyRideTrip(input: {
   ]);
 
   const quote = quoteResult.rows[0];
+  const quotePricing = quote
+    ? normalizePricingModelRow({
+        pricing_model: quote.pricing_model,
+        platform_fee_flat_kobo: null,
+        platform_fee_payer: quote.platform_fee_payer,
+      })
+    : null;
   return {
     trip: serializeTrip(trip),
     quote: quote
@@ -377,6 +441,9 @@ export async function getMyRideTrip(input: {
           timeKobo: quote.time_kobo.toString(),
           demandKobo: quote.demand_kobo.toString(),
           taxesAndFeesKobo: quote.taxes_and_fees_kobo.toString(),
+          platformFeeKobo: quote.platform_fee_kobo.toString(),
+          feePayer: quotePricing?.feePayer ?? "rider",
+          pricingModel: quotePricing?.model ?? "commission",
           totalKobo: quote.total_kobo.toString(),
           quotedDistanceM: quote.quoted_distance_m,
           quotedDurationS: quote.quoted_duration_s,
@@ -435,6 +502,10 @@ export type RequestRideResult = {
   currency: "NGN";
   replayed: boolean;
   matchingDispatched: boolean;
+  /** P7 pricing disclosure (populated on the fresh-request path). */
+  platformFeeKobo?: string;
+  feePayer?: PlatformFeePayer;
+  pricingModel?: PricingModel;
 };
 
 export async function requestRide(
@@ -484,7 +555,9 @@ export async function requestRide(
     `SELECT sz.id AS zone_id, sz.zone_code, sz.display_name,
             frv.id AS fare_rule_id, frv.base_kobo, frv.per_km_kobo,
             frv.per_minute_kobo, frv.minimum_kobo, frv.cancellation_kobo,
-            frv.demand_cap_basis_points
+            frv.demand_cap_basis_points,
+            frv.pricing_model, frv.platform_fee_flat_kobo,
+            frv.platform_fee_payer
        FROM mobility.service_zone sz
        JOIN mobility.fare_rule_version frv
          ON frv.zone_id = sz.id
@@ -518,6 +591,14 @@ export async function requestRide(
     input.destinationLng,
   );
   const durationSeconds = estimateRideDurationSeconds(distanceMeters);
+  // P7: resolve the zone pricing block (via economicsPolicy normalization)
+  // from the fare rule columns already fetched above — no extra query.
+  const zonePricing = normalizePricingModelRow(zone);
+  const pricing: RideQuotePricing = {
+    model: zonePricing.model,
+    flatFeeKobo: BigInt(zonePricing.flatFeeKobo),
+    feePayer: zonePricing.feePayer,
+  };
   const amounts = computeRideQuoteAmounts(
     {
       fareRuleId: zone.fare_rule_id,
@@ -530,6 +611,8 @@ export async function requestRide(
     },
     distanceMeters,
     durationSeconds,
+    0,
+    pricing,
   );
 
   const client = await pool.connect();
@@ -543,15 +626,15 @@ export async function requestRide(
          route_provider, route_provider_version,
          quoted_distance_m, quoted_duration_s,
          base_kobo, distance_kobo, time_kobo, demand_kobo,
-         taxes_and_fees_kobo, total_kobo,
+         taxes_and_fees_kobo, platform_fee_kobo, total_kobo,
          disclosure_version, calculation, expires_at
        ) VALUES (
          $1, $2, $3,
          $4, $5,
          $6, $7,
          $8, $9, $10, $11,
-         $12, $13,
-         $14, $15, now() + ($16 || ' minutes')::interval
+         $12, $13, $14,
+         $15, $16, now() + ($17 || ' minutes')::interval
        ) RETURNING id`,
       [
         input.consumerUserId,
@@ -566,6 +649,7 @@ export async function requestRide(
         amounts.timeKobo.toString(),
         amounts.demandKobo.toString(),
         amounts.taxesAndFeesKobo.toString(),
+        amounts.platformFeeKobo.toString(),
         amounts.totalKobo.toString(),
         "consumer-ride/1",
         JSON.stringify({
@@ -575,6 +659,9 @@ export async function requestRide(
           durationSeconds,
           demandBasisPoints: 0,
           minimumFareUpliftKobo: amounts.taxesAndFeesKobo.toString(),
+          pricingModel: amounts.pricingModel,
+          feePayer: amounts.feePayer,
+          platformFeeKobo: amounts.platformFeeKobo.toString(),
         }),
         QUOTE_TTL_MINUTES,
       ],
@@ -702,6 +789,9 @@ export async function requestRide(
     currency: "NGN",
     replayed: false,
     matchingDispatched,
+    platformFeeKobo: amounts.platformFeeKobo.toString(),
+    feePayer: amounts.feePayer,
+    pricingModel: amounts.pricingModel,
   };
 }
 
