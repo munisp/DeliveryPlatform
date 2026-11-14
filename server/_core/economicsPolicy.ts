@@ -17,6 +17,15 @@ import { assertConsultationEligible, postConsultation } from "./workerCouncil";
  * Take-rate changes are worker-affecting economics and are gated through the
  * worker council: publishTakeRate requires an activation-eligible
  * consultation object of kind 'commission' (see workerCouncil).
+ *
+ * P7 flexible pricing modes: mobility.fare_rule_version carries a pricing
+ * block (pricing_model / platform_fee_flat_kobo / platform_fee_payer,
+ * drizzle/0106) supporting four models — 'commission' (percentage take
+ * rate), 'flat_fee' (0% commission + a flat per-trip platform fee paid by
+ * rider or driver), 'zero_commission' (0%, no fee) and 'subsidized'
+ * (negative take rate down to -2000 bps = a bounded driver bonus funded by
+ * the platform). Pricing-model publishes ride the SAME worker-council
+ * consultation gate (kind 'commission') as take-rate changes.
  */
 
 export type CostIndex = {
@@ -52,6 +61,10 @@ export type TakeRateRow = {
 
 export const INDEX_BASE_BP = 10_000;
 
+/** drizzle/0106: take_rate_registry rate_bps BETWEEN -2000 AND 5000. */
+export const MIN_TAKE_RATE_BPS = -2000;
+export const MAX_TAKE_RATE_BPS = 5000;
+
 /**
  * Hot-read cache (perf wave W2, audit finding 9): the fare floor and latest
  * take rate are single indexed SELECTs read on every fare check / economics
@@ -68,6 +81,11 @@ const fareFloorPolicyCache = createHotCache<
 const takeRateCache = createHotCache<TakeRateRow | null>({
   ttlMs: ECONOMICS_POLICY_CACHE_TTL_MS,
 });
+// P7: zone-scoped pricing block (fare_rule_version pricing columns), same
+// hot-cache pattern as the take rate. Keyed `pricing:${zoneId}`.
+const pricingModelCache = createHotCache<PricingPolicyBlock | null>({
+  ttlMs: ECONOMICS_POLICY_CACHE_TTL_MS,
+});
 
 /**
  * Invalidate cached economics policy reads. Called by every mutation below;
@@ -77,10 +95,23 @@ export function invalidateEconomicsPolicyCache(marketId?: string): void {
   if (marketId === undefined) {
     fareFloorPolicyCache.clear();
     takeRateCache.clear();
+    pricingModelCache.clear();
     return;
   }
   fareFloorPolicyCache.invalidate(`floor:${marketId}`);
   takeRateCache.invalidate(`take:${marketId}`);
+}
+
+/**
+ * Invalidate the cached pricing block for one zone (called by
+ * publishPricingModel) or every zone (tests / full reset).
+ */
+export function invalidatePricingModelCache(zoneId?: string): void {
+  if (zoneId === undefined) {
+    pricingModelCache.clear();
+    return;
+  }
+  pricingModelCache.invalidate(`pricing:${zoneId}`);
 }
 
 function parseCostIndex(raw: unknown): CostIndex | null {
@@ -438,4 +469,402 @@ export async function generateMarketEconomicsReport(
       createdAt: null,
     };
   }
+}
+
+// ---------------------------------------------------------------------------
+// Flexible pricing modes (P7)
+// ---------------------------------------------------------------------------
+
+export type PricingModel =
+  | "commission"
+  | "flat_fee"
+  | "zero_commission"
+  | "subsidized";
+
+export type PlatformFeePayer = "rider" | "driver";
+
+export const PRICING_MODELS: readonly PricingModel[] = [
+  "commission",
+  "flat_fee",
+  "zero_commission",
+  "subsidized",
+];
+
+/**
+ * Zone-scoped pricing block resolved from the live mobility
+ * .fare_rule_version row (drizzle/0106 columns). flatFeeKobo is 0 unless the
+ * model is 'flat_fee' (the fee-required invariant is enforced by the
+ * fare_rule_version_flat_fee_required_check CHECK and again TS-side in
+ * publishPricingModel).
+ */
+export type PricingPolicyBlock = {
+  fareRuleId: string;
+  zoneId: string;
+  model: PricingModel;
+  flatFeeKobo: number;
+  feePayer: PlatformFeePayer;
+};
+
+/** Raw pricing columns as read from mobility.fare_rule_version. */
+export type PricingModelRow = {
+  pricing_model?: string | null;
+  platform_fee_flat_kobo?: string | number | null;
+  platform_fee_payer?: string | null;
+};
+
+/**
+ * Normalize the pricing columns of a fare_rule_version row into the pricing
+ * triple. Legacy rows (or a database without drizzle/0106 applied) read as
+ * the pre-P7 behaviour: commission model, no flat fee, rider payer. Unknown
+ * model/payer values fall back to the same safe defaults.
+ */
+export function normalizePricingModelRow(row: PricingModelRow): {
+  model: PricingModel;
+  flatFeeKobo: number;
+  feePayer: PlatformFeePayer;
+} {
+  const model = PRICING_MODELS.includes(row.pricing_model as PricingModel)
+    ? (row.pricing_model as PricingModel)
+    : "commission";
+  const rawFee = Number(row.platform_fee_flat_kobo);
+  const flatFeeKobo =
+    model === "flat_fee" && Number.isFinite(rawFee) && rawFee > 0
+      ? Math.trunc(rawFee)
+      : 0;
+  const feePayer: PlatformFeePayer =
+    row.platform_fee_payer === "driver" ? "driver" : "rider";
+  return { model, flatFeeKobo, feePayer };
+}
+
+/**
+ * Resolve the active pricing block for a service zone: the live
+ * fare_rule_version pricing columns (hot-cached per zone like the take
+ * rate) plus the published take rate for the market (which may be negative
+ * down to -2000 bps — a bounded subsidy). The take rate is resolved per call
+ * through getLatestTakeRate's own cache so publishTakeRate invalidation
+ * stays authoritative even though the pricing cache is keyed by zone.
+ * Returns null when the zone has no live fare rule version.
+ */
+export async function resolvePricingModel(
+  zoneId: string,
+  marketId?: string,
+): Promise<(PricingPolicyBlock & { takeRateBps: number }) | null> {
+  const cacheKey = `pricing:${zoneId}`;
+  let block = pricingModelCache.get(cacheKey);
+  if (block === undefined) {
+    const pool = await getPool();
+    const result = await pool.query<
+      PricingModelRow & { fare_rule_id: string }
+    >(
+      `SELECT id AS fare_rule_id, pricing_model, platform_fee_flat_kobo,
+              platform_fee_payer
+         FROM mobility.fare_rule_version
+        WHERE zone_id = $1
+          AND effective_from <= now()
+          AND (effective_to IS NULL OR effective_to > now())
+        ORDER BY effective_from DESC
+        LIMIT 1`,
+      [zoneId],
+    );
+    const row = result.rows[0];
+    block = row
+      ? { fareRuleId: row.fare_rule_id, zoneId, ...normalizePricingModelRow(row) }
+      : null;
+    pricingModelCache.set(cacheKey, block);
+  }
+  if (!block) return null;
+  const takeRate = marketId ? await getLatestTakeRate(marketId) : null;
+  return { ...block, takeRateBps: takeRate ? Number(takeRate.rate_bps) : 0 };
+}
+
+export type SettlementSplit = {
+  /** Driver take-home. commission negative => includes the driver bonus. */
+  driverEarningsKobo: bigint;
+  /** Platform commission; negative under 'subsidized' (a driver bonus). */
+  commissionKobo: bigint;
+  /** Flat per-trip platform fee (0 unless the model is 'flat_fee'). */
+  platformFeeKobo: bigint;
+  feePayer: PlatformFeePayer;
+};
+
+/**
+ * Pure settlement split for one trip, integer kobo exact (BigInt; the bps
+ * multiply truncates toward zero, so a subsidy bonus is never rounded up).
+ * `grossKobo` is the SETTLEMENT gross (the fare portion; a rider-paid flat
+ * fee sits outside it — see drizzle/0106 header). Honours all four models:
+ *
+ * - commission:     commission = gross x rateBps / 10000
+ * - zero_commission / flat_fee: commission = 0 (flat fee replaces the take)
+ * - subsidized:     commission = gross x rateBps / 10000 with rateBps < 0,
+ *                   i.e. a driver bonus; clamped to >= -gross (the 0106 CHECK
+ *                   bounds the published rate at -2000 bps, well inside).
+ *
+ * Identity (matches trip_settlement_identity_check):
+ *   gross = driverEarnings + commission + tax + (platformFee when driver-paid)
+ * A rider-paid fee is OUTSIDE the identity (collected on top of gross).
+ */
+export function computeSettlementSplit(input: {
+  grossKobo: number | bigint;
+  taxKobo?: number | bigint;
+  pricing: {
+    model: PricingModel;
+    takeRateBps?: number;
+    flatFeeKobo?: number | bigint | null;
+    feePayer?: PlatformFeePayer;
+  };
+}): SettlementSplit {
+  const gross = BigInt(input.grossKobo);
+  const tax = BigInt(input.taxKobo ?? 0);
+  const rateBps = Math.trunc(Number(input.pricing.takeRateBps ?? 0));
+  let commissionKobo: bigint;
+  if (
+    input.pricing.model === "commission" ||
+    input.pricing.model === "subsidized"
+  ) {
+    commissionKobo = (gross * BigInt(rateBps)) / 10_000n;
+    if (commissionKobo < -gross) commissionKobo = -gross;
+  } else {
+    commissionKobo = 0n;
+  }
+  const feePayer: PlatformFeePayer =
+    input.pricing.feePayer === "driver" ? "driver" : "rider";
+  const rawFee = BigInt(
+    input.pricing.model === "flat_fee" ? (input.pricing.flatFeeKobo ?? 0) : 0,
+  );
+  const platformFeeKobo = rawFee > 0n ? rawFee : 0n;
+  const driverEarningsKobo =
+    gross - tax - commissionKobo - (feePayer === "driver" ? platformFeeKobo : 0n);
+  return { driverEarningsKobo, commissionKobo, platformFeeKobo, feePayer };
+}
+
+/** Validate the pricing-model invariants TS-side (they back the 0106 CHECKs). */
+export function assertValidPricingModelInput(input: {
+  model: PricingModel;
+  flatFeeKobo?: number | null;
+}): void {
+  if (!PRICING_MODELS.includes(input.model)) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "pricing_model_invalid",
+    });
+  }
+  const fee = input.flatFeeKobo;
+  if (input.model === "flat_fee") {
+    if (fee === null || fee === undefined || !Number.isInteger(fee) || fee < 0) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: "platform_fee_required_for_flat_fee",
+      });
+    }
+  } else if (fee !== null && fee !== undefined && fee !== 0) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "platform_fee_only_for_flat_fee",
+    });
+  }
+}
+
+function nextPricingVersion(current: string): string {
+  if (/^\d+$/.test(current)) return String(Number(current) + 1);
+  return `${current}+pricing.${Date.now()}`;
+}
+
+export type PublishPricingModelResult = {
+  fareRuleId: string;
+  zoneId: string;
+  version: string;
+  model: PricingModel;
+  flatFeeKobo: number;
+  feePayer: PlatformFeePayer;
+  effectiveFrom: string;
+};
+
+/**
+ * Publish a new pricing model for a zone (P7). Versioned: the live
+ * fare_rule_version row is closed (effective_to = now) and a successor row
+ * is inserted with identical fare parameters and the new pricing block, so
+ * fare history is preserved and the one-live-row partial unique index holds.
+ * Worker-council gated through the SAME 'commission' consultation kind as
+ * take-rate changes (P7_SPEC deliverable 2: the consultation gate extends to
+ * pricing-model changes).
+ */
+export async function publishPricingModel(
+  actorUserId: number,
+  input: {
+    zoneId: string;
+    model: PricingModel;
+    flatFeeKobo?: number | null;
+    feePayer: PlatformFeePayer;
+    consultationId: string;
+    version?: string;
+  },
+): Promise<PublishPricingModelResult> {
+  assertValidPricingModelInput(input);
+  await assertConsultationEligible(input.consultationId, "commission");
+  const pool = await getPool();
+  const client = await pool.connect();
+  let inserted: { id: string; effective_from: string | Date } | undefined;
+  let version = "";
+  try {
+    await client.query("BEGIN");
+    const live = await client.query<
+      {
+        id: string;
+        zone_id: string;
+        version: string;
+        currency: string;
+        base_kobo: string | number;
+        per_km_kobo: string | number;
+        per_minute_kobo: string | number;
+        minimum_kobo: string | number;
+        cancellation_kobo: string | number;
+        demand_cap_basis_points: number;
+      }
+    >(
+      `SELECT id, zone_id, version, currency, base_kobo, per_km_kobo,
+              per_minute_kobo, minimum_kobo, cancellation_kobo,
+              demand_cap_basis_points
+         FROM mobility.fare_rule_version
+        WHERE zone_id = $1
+          AND effective_from <= now()
+          AND (effective_to IS NULL OR effective_to > now())
+        ORDER BY effective_from DESC
+        LIMIT 1
+        FOR UPDATE`,
+      [input.zoneId],
+    );
+    const current = live.rows[0];
+    if (!current) {
+      throw new TRPCError({
+        code: "NOT_FOUND",
+        message: "fare_rule_version_not_found",
+      });
+    }
+    await client.query(
+      `UPDATE mobility.fare_rule_version SET effective_to = now() WHERE id = $1`,
+      [current.id],
+    );
+    version = input.version ?? nextPricingVersion(current.version);
+    const result = await client.query<{ id: string; effective_from: string }>(
+      `INSERT INTO mobility.fare_rule_version (
+         zone_id, version, currency, base_kobo, per_km_kobo, per_minute_kobo,
+         minimum_kobo, cancellation_kobo, demand_cap_basis_points,
+         effective_from, effective_to, approved_by,
+         pricing_model, platform_fee_flat_kobo, platform_fee_payer
+       ) VALUES (
+         $1, $2, $3, $4, $5, $6,
+         $7, $8, $9,
+         now(), NULL, $10,
+         $11, $12, $13
+       ) RETURNING id, effective_from`,
+      [
+        current.zone_id,
+        version,
+        current.currency,
+        current.base_kobo,
+        current.per_km_kobo,
+        current.per_minute_kobo,
+        current.minimum_kobo,
+        current.cancellation_kobo,
+        current.demand_cap_basis_points,
+        actorUserId,
+        input.model,
+        input.model === "flat_fee" ? input.flatFeeKobo ?? null : null,
+        input.feePayer,
+      ],
+    );
+    inserted = result.rows[0];
+    if (!inserted) {
+      throw new TRPCError({
+        code: "INTERNAL_SERVER_ERROR",
+        message: "pricing_model_publish_failed",
+      });
+    }
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
+  invalidatePricingModelCache(input.zoneId);
+  return {
+    fareRuleId: inserted.id,
+    zoneId: input.zoneId,
+    version,
+    model: input.model,
+    flatFeeKobo: input.model === "flat_fee" ? Number(input.flatFeeKobo) : 0,
+    feePayer: input.feePayer,
+    effectiveFrom: new Date(inserted.effective_from).toISOString(),
+  };
+}
+
+/** Example fare levels (kobo) for previewPricingImpact: ₦1,500 / ₦4,000 / ₦9,000. */
+export const PREVIEW_FARE_LEVELS_KOBO = [150_000, 400_000, 900_000];
+
+export type PricingImpactPreview = {
+  model: PricingModel;
+  feePayer: PlatformFeePayer;
+  flatFeeKobo: number;
+  takeRateBps: number;
+  examples: Array<{
+    grossKobo: number;
+    riderTotalKobo: number;
+    driverEarningsKobo: number;
+    commissionKobo: number;
+    platformFeeKobo: number;
+  }>;
+};
+
+/**
+ * Pure what-if preview for operators (no writes, no DB): run the settlement
+ * split for a candidate pricing block at three fare levels. Tax is zero in
+ * the preview so the pricing effect is isolated.
+ */
+export function previewPricingImpact(input: {
+  model: PricingModel;
+  feePayer: PlatformFeePayer;
+  flatFeeKobo?: number | null;
+  takeRateBps?: number;
+  fareLevelsKobo?: number[];
+}): PricingImpactPreview {
+  assertValidPricingModelInput(input);
+  const takeRateBps = Math.trunc(Number(input.takeRateBps ?? 0));
+  if (takeRateBps < MIN_TAKE_RATE_BPS || takeRateBps > MAX_TAKE_RATE_BPS) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "take_rate_out_of_bounds",
+    });
+  }
+  const levels =
+    input.fareLevelsKobo && input.fareLevelsKobo.length > 0
+      ? input.fareLevelsKobo
+      : PREVIEW_FARE_LEVELS_KOBO;
+  return {
+    model: input.model,
+    feePayer: input.feePayer,
+    flatFeeKobo: input.model === "flat_fee" ? Number(input.flatFeeKobo) : 0,
+    takeRateBps,
+    examples: levels.map((gross) => {
+      const split = computeSettlementSplit({
+        grossKobo: gross,
+        taxKobo: 0,
+        pricing: {
+          model: input.model,
+          takeRateBps,
+          flatFeeKobo: input.flatFeeKobo ?? 0,
+          feePayer: input.feePayer,
+        },
+      });
+      return {
+        grossKobo: gross,
+        riderTotalKobo:
+          gross +
+          (split.feePayer === "rider" ? Number(split.platformFeeKobo) : 0),
+        driverEarningsKobo: Number(split.driverEarningsKobo),
+        commissionKobo: Number(split.commissionKobo),
+        platformFeeKobo: Number(split.platformFeeKobo),
+      };
+    }),
+  };
 }
