@@ -8,6 +8,7 @@ import {
   Scale,
   ShieldCheck,
   TriangleAlert,
+  Wallet,
 } from "lucide-react";
 
 import DashboardLayout from "@/components/DashboardLayout";
@@ -15,13 +16,16 @@ import { formatMinor } from "@/components/FareBreakdown";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useSessionProfile } from "@/lib/sessionProfile";
 import {
+  useActivePricingModel,
   useCheckFareAgainstFloor,
   useEconomicsSafetyInvalidation,
   useFareFloor,
+  usePublishPricingModel,
   usePublishTakeRate,
   useRecordFloorOverride,
   useTakeRate,
   useUpdateCostIndex,
+  type PricingModelOption,
 } from "@/lib/trpcEconomicsSafety";
 
 const operationsRoles = new Set([
@@ -511,8 +515,229 @@ function FloorCheckCard({ marketId }: { marketId: string }) {
   );
 }
 
-export default function MarketEconomics() {
-  const sessionProfile = useSessionProfile();
+const PRICING_MODELS = [
+  "commission",
+  "flat_fee",
+  "zero_commission",
+  "subsidized",
+] as const;
+
+const pricingModelLabel: Record<PricingModelOption, string> = {
+  commission: "Commission (percentage take rate)",
+  flat_fee: "Flat fee (0% commission + flat per-trip fee)",
+  zero_commission: "Zero commission (0%, no fee)",
+  subsidized: "Subsidized (negative take rate = driver bonus)",
+};
+
+/**
+ * P7 pricing-model panel (per zone). Reads the zone's active fare-rule
+ * pricing block via useActivePricingModel and publishes a new versioned
+ * pricing model via usePublishPricingModel (both bridge wrappers over the
+ * P7 economics procedures). Publishes are worker-council gated: the form
+ * requires an activated 'commission' consultation ID and surfaces the gate
+ * status from server errors.
+ */
+function PricingModelCard({ marketId }: { marketId: string }) {
+  const invalidation = useEconomicsSafetyInvalidation();
+  const [zoneId, setZoneId] = useState("");
+  const active = useActivePricingModel(zoneId, marketId || undefined);
+  const publish = usePublishPricingModel();
+  const [form, setForm] = useState<{
+    model: PricingModelOption;
+    flatFeeKobo: string;
+    feePayer: "rider" | "driver";
+    consultationId: string;
+  }>({
+    model: "flat_fee",
+    flatFeeKobo: "",
+    feePayer: "rider",
+    consultationId: "",
+  });
+
+  const submit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    publish.mutate(
+      {
+        zoneId,
+        model: form.model,
+        flatFeeKobo:
+          form.model === "flat_fee" && form.flatFeeKobo !== ""
+            ? Number(form.flatFeeKobo)
+            : null,
+        feePayer: form.feePayer,
+        consultationId: form.consultationId,
+      },
+      { onSuccess: () => invalidation.economics() },
+    );
+  };
+
+  const selectClass = inputClass;
+
+  return (
+    <Card className="border-slate-800 bg-slate-950/60">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base text-slate-100">
+          <Wallet className="h-5 w-5 text-cyan-300" />
+          Pricing model (per zone)
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="flex flex-wrap items-center gap-3">
+          <input
+            value={zoneId}
+            onChange={(event) => setZoneId(event.target.value)}
+            placeholder="Service zone ID (uuid)"
+            className={`${inputClass} w-full max-w-md`}
+          />
+        </div>
+
+        {!zoneId ? (
+          <p className="text-sm text-slate-500">
+            Enter a service zone ID to load its active pricing model.
+          </p>
+        ) : active.isLoading ? (
+          <p className="text-sm text-slate-400">Loading pricing model…</p>
+        ) : active.isError ? (
+          <p className="text-sm text-amber-200">
+            Pricing model unavailable — {active.error?.message ?? "try again"}.
+          </p>
+        ) : active.data === null || active.data === undefined ? (
+          <p className="text-sm text-slate-500">
+            No live fare rule version for this zone.
+          </p>
+        ) : (
+          <div className="grid gap-4 md:grid-cols-4">
+            <div>
+              <p className="text-xs uppercase tracking-wide text-slate-500">
+                Current model
+              </p>
+              <p className="mt-1 text-lg font-semibold text-slate-100">
+                {active.data.model}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs uppercase tracking-wide text-slate-500">
+                Take rate
+              </p>
+              <p className="mt-1 text-lg font-semibold text-slate-100">
+                {(active.data.takeRateBps / 100).toFixed(2)}%
+              </p>
+            </div>
+            <div>
+              <p className="text-xs uppercase tracking-wide text-slate-500">
+                Flat fee
+              </p>
+              <p className="mt-1 text-lg font-semibold text-slate-100">
+                {active.data.model === "flat_fee"
+                  ? formatMinor(active.data.flatFeeKobo)
+                  : "—"}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs uppercase tracking-wide text-slate-500">
+                Fee payer
+              </p>
+              <p className="mt-1 text-lg font-semibold text-slate-100">
+                {active.data.feePayer}
+              </p>
+            </div>
+          </div>
+        )}
+
+        <form
+          onSubmit={submit}
+          className="grid gap-3 border-t border-slate-800 pt-4 md:grid-cols-2"
+        >
+          <p className="text-sm font-medium text-slate-200 md:col-span-2">
+            Publish new pricing model
+          </p>
+          <p className="flex gap-2 text-xs leading-5 text-slate-400 md:col-span-2">
+            <Landmark className="mt-0.5 h-4 w-4 shrink-0 text-cyan-300" />
+            Publishing requires the ID of an activated &quot;commission&quot;
+            worker-council consultation — pricing-model changes are
+            co-governed under the same gate as take-rate changes.
+          </p>
+          <select
+            value={form.model}
+            onChange={(event) =>
+              setForm({
+                ...form,
+                model: event.target.value as PricingModelOption,
+              })
+            }
+            className={selectClass}
+            disabled={!zoneId}
+          >
+            {PRICING_MODELS.map((model) => (
+              <option key={model} value={model}>
+                {pricingModelLabel[model]}
+              </option>
+            ))}
+          </select>
+          <select
+            value={form.feePayer}
+            onChange={(event) =>
+              setForm({
+                ...form,
+                feePayer: event.target.value as "rider" | "driver",
+              })
+            }
+            className={selectClass}
+            disabled={!zoneId || form.model !== "flat_fee"}
+          >
+            <option value="rider">Fee paid by rider</option>
+            <option value="driver">Fee paid by driver</option>
+          </select>
+          <input
+            inputMode="numeric"
+            value={form.flatFeeKobo}
+            onChange={(event) =>
+              setForm({ ...form, flatFeeKobo: event.target.value })
+            }
+            placeholder="Flat fee in kobo (required for flat fee)"
+            className={inputClass}
+            required={form.model === "flat_fee"}
+            disabled={!zoneId || form.model !== "flat_fee"}
+          />
+          <input
+            value={form.consultationId}
+            onChange={(event) =>
+              setForm({ ...form, consultationId: event.target.value })
+            }
+            placeholder="Activated commission consultation ID"
+            className={inputClass}
+            required
+            disabled={!zoneId}
+          />
+          <button
+            type="submit"
+            disabled={!zoneId || publish.isPending}
+            className="rounded-md bg-cyan-500 px-4 py-2 text-sm font-medium text-slate-950 hover:bg-cyan-400 disabled:opacity-50 md:col-span-2 md:w-fit"
+          >
+            {publish.isPending ? "Publishing…" : "Publish pricing model"}
+          </button>
+          {publish.isError ? (
+            <p className="text-sm text-rose-200 md:col-span-2">
+              {publish.error?.message?.includes("consultation_gate_unmet")
+                ? "Consultation gate unmet: the consultation must be activated (or its response SLA elapsed) before publishing."
+                : publish.error?.message?.includes("consultation_not_found")
+                  ? "Consultation not found — check the consultation ID."
+                  : publish.error?.message ?? "Pricing-model publish failed."}
+            </p>
+          ) : null}
+          {publish.isSuccess ? (
+            <p className="flex items-center gap-2 text-sm text-emerald-200 md:col-span-2">
+              <ShieldCheck className="h-4 w-4" /> Pricing model published as
+              fare rule v{publish.data?.version}.
+            </p>
+          ) : null}
+        </form>
+      </CardContent>
+    </Card>
+  );
+}
+
+export default function MarketEconomics() {  const sessionProfile = useSessionProfile();
   const isOperator = Boolean(
     sessionProfile.data?.role && operationsRoles.has(sessionProfile.data.role),
   );
@@ -554,6 +779,7 @@ export default function MarketEconomics() {
             </div>
             <FareFloorCard marketId={marketId} />
             <TakeRateCard marketId={marketId} />
+            <PricingModelCard marketId={marketId} />
             <FloorCheckCard marketId={marketId} />
           </>
         ) : (

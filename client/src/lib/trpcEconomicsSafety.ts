@@ -240,6 +240,60 @@ export function usePublishTakeRate() {
   );
 }
 
+// ---------- P7 flexible pricing modes ----------
+// getActivePricingModel / publishPricingModel are P7 procedures that return
+// camelCase DTOs server-side by design (economicsRouter.ts), so the bridge
+// passes them through with `identity` (no wire normalization needed).
+
+export type PricingModelOption =
+  | "commission"
+  | "flat_fee"
+  | "zero_commission"
+  | "subsidized";
+
+export interface ActivePricingModel {
+  fareRuleId: string;
+  zoneId: string;
+  model: PricingModelOption;
+  flatFeeKobo: number;
+  feePayer: "rider" | "driver";
+  takeRateBps: number;
+}
+
+export interface PublishPricingModelResult {
+  fareRuleId: string;
+  zoneId: string;
+  version: string;
+  model: PricingModelOption;
+  flatFeeKobo: number;
+  feePayer: "rider" | "driver";
+  effectiveFrom: string;
+}
+
+export function useActivePricingModel(zoneId: string, marketId?: string) {
+  return asQuery(
+    economicsRouter.getActivePricingModel.useQuery(
+      { zoneId, marketId: marketId || undefined },
+      { enabled: Boolean(zoneId) },
+    ),
+    identity,
+  );
+}
+
+export function usePublishPricingModel() {
+  return asMutation<
+    {
+      zoneId: string;
+      model: PricingModelOption;
+      flatFeeKobo?: number | null;
+      feePayer: "rider" | "driver";
+      consultationId: string;
+      version?: string;
+    },
+    PublishPricingModelResult
+  >(economicsRouter.publishPricingModel.useMutation());
+}
+
 export function useCheckFareAgainstFloor() {
   // `checkFareAgainstFloor` is registered as a query procedure server-side
   // (server/_core/economicsRouter.ts), so
@@ -365,6 +419,7 @@ export function useEconomicsSafetyInvalidation() {
     economics: () => {
       void economicsUtils.getFareFloor.invalidate();
       void economicsUtils.getTakeRate.invalidate();
+      void economicsUtils.getActivePricingModel.invalidate();
     },
     pricingTransparency: () => {
       void utils.pricingTransparency.getOfferBreakdown.invalidate();

@@ -312,6 +312,39 @@ export default function RideStatus() {
                     {formatRideFare(ride.quote.taxesAndFeesKobo)}
                   </dd>
                 </div>
+                {/* P7 flexible pricing modes: flat-fee / zero-commission
+                    disclosure and subsidized driver-bonus badge. Additive
+                    display only — money math is server-side. */}
+                {ride.quote.pricingModel === "flat_fee" ||
+                ride.quote.pricingModel === "zero_commission" ? (
+                  <div className="flex justify-between gap-3">
+                    <dt className="text-stone-500">Platform fee</dt>
+                    <dd className="text-right font-medium text-stone-900">
+                      {ride.quote.platformFeeKobo !== "0" ? (
+                        <>
+                          {formatRideFare(ride.quote.platformFeeKobo)}
+                          <span className="block text-xs font-normal text-emerald-700">
+                            {ride.quote.feePayer === "driver"
+                              ? "Paid by your driver — 0% commission"
+                              : "Your driver keeps 100% of the fare"}
+                          </span>
+                        </>
+                      ) : (
+                        <span className="text-xs font-normal text-emerald-700">
+                          Zero commission — your driver keeps 100% of the fare
+                        </span>
+                      )}
+                    </dd>
+                  </div>
+                ) : null}
+                {ride.quote.pricingModel === "subsidized" ? (
+                  <div className="flex justify-between">
+                    <dt className="text-emerald-700">Driver bonus active</dt>
+                    <dd className="text-xs font-medium text-emerald-700">
+                      Subsidized fare
+                    </dd>
+                  </div>
+                ) : null}
                 <div className="flex justify-between border-t border-stone-100 pt-2">
                   <dt className="font-semibold text-stone-900">Total</dt>
                   <dd className="font-semibold text-stone-900">

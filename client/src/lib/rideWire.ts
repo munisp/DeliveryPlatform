@@ -113,6 +113,10 @@ export type RideQuote = {
   demandKobo: string;
   taxesAndFeesKobo: string;
   totalKobo: string;
+  /** P7 flexible pricing modes: flat-fee platform fee ("0" on legacy quotes). */
+  platformFeeKobo: string;
+  feePayer: "rider" | "driver" | null;
+  pricingModel: string | null;
   quotedDistanceM: number;
   quotedDurationS: number;
 };
@@ -150,6 +154,7 @@ export function normalizeRideQuote(raw: unknown): RideQuote | null {
     return text;
   };
   try {
+    const feePayerRaw = asString(pick(row, "fee_payer", "feePayer"));
     return {
       quoteId,
       baseKobo: minor(pick(row, "base_kobo", "baseKobo")),
@@ -160,6 +165,14 @@ export function normalizeRideQuote(raw: unknown): RideQuote | null {
         pick(row, "taxes_and_fees_kobo", "taxesAndFeesKobo"),
       ),
       totalKobo: minor(total),
+      platformFeeKobo: minor(
+        pick(row, "platform_fee_kobo", "platformFeeKobo") ?? "0",
+      ),
+      feePayer:
+        feePayerRaw === "rider" || feePayerRaw === "driver"
+          ? feePayerRaw
+          : null,
+      pricingModel: asString(pick(row, "pricing_model", "pricingModel")),
       quotedDistanceM: Number(pick(row, "quoted_distance_m", "quotedDistanceM") ?? 0),
       quotedDurationS: Number(pick(row, "quoted_duration_s", "quotedDurationS") ?? 0),
     };
